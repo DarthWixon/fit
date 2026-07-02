@@ -33,18 +33,6 @@ Add the Garmin Connect sync dependency only if you use `fit garmin-sync`:
 uv pip install -e '.[garmin]'
 ```
 
-To run `fit` without the `.venv/bin/` prefix, activate the venv
-(`source .venv/bin/activate`) or add an alias.
-
-### Do not copy `.venv` between machines
-
-A virtualenv hard-codes the absolute path and interpreter of the machine it was
-created on, and macOS quarantines executables that arrive by file copy, so a
-copied `.venv` fails in confusing ways (silent kills, Gatekeeper popups).
-When moving to a new machine, bring only the code (via git) and your data
-folder (`~/.fit/`, which is plain JSON and portable), then recreate the venv
-with the steps above. `.venv/` is gitignored for this reason.
-
 ## Running
 
 ```bash
