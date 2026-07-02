@@ -1,0 +1,13 @@
+{
+  "id": "2026-04-20T12:30:20",
+  "type": "run",
+  "date": "2026-04-20",
+  "distance_km": 8.31,
+  "duration_seconds": 2860,
+  "avg_heart_rate": 151,
+  "max_heart_rate": 173,
+  "source": "garmin",
+  "splits": {
+    "5k_seconds": 1684.2
+  }
+}

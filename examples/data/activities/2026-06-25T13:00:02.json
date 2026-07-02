@@ -1,0 +1,10 @@
+{
+  "id": "2026-06-25T13:00:02",
+  "type": "squash",
+  "date": "2026-06-25",
+  "distance_km": 0.09,
+  "duration_seconds": 3600,
+  "avg_heart_rate": 148,
+  "max_heart_rate": 167,
+  "source": "garmin"
+}

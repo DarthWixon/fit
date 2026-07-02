@@ -1,0 +1,15 @@
+{
+  "id": "2026-02-10T13:10:22",
+  "type": "cycle",
+  "date": "2026-02-10",
+  "distance_km": 39.82,
+  "duration_seconds": 4964,
+  "elevation_gain_m": 240,
+  "avg_heart_rate": 134,
+  "max_heart_rate": 154,
+  "avg_power": 216,
+  "source": "garmin",
+  "splits": {
+    "25k_seconds": 2998.5
+  }
+}

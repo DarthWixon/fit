@@ -1,0 +1,341 @@
+"""Renders compute.py outputs (and raw activity lists) as Rich terminal output.
+No file I/O. Any math needed to build a composite view (e.g. weekly volumes for
+the dashboard) is delegated to compute.py, never done inline here.
+"""
+
+from rich.console import Console
+from rich.table import Table
+
+from fit import compute
+
+console = Console()
+
+_SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+
+def render_warnings(messages: list[str]) -> None:
+    for message in messages:
+        console.print(f"warning: {message}")
+
+
+def render_usage() -> None:
+    console.print(
+        "fit dashboard [--sport S] [--timerange 3m]   summary, sparkline, PBs, fitness\n"
+        "fit pbs [--months N]                         personal bests table\n"
+        "fit stats [--week|--month|--year]            totals + breakdown by type\n"
+        "fit fitness                                  current fitness index + trend\n"
+        "fit fitness-reset                            re-anchor fitness baseline to today\n"
+        "fit import <path>                            import GPX/TCX/FIT file/folder or Strava export\n"
+        "fit garmin-sync [--days N]                   pull recent activities from Garmin Connect\n"
+        "fit history [N]                              last N activities (default 10)\n"
+        "fit trend <metric>                           sparkline for one metric over time\n"
+        "fit usage                                    this screen\n"
+        "\n"
+        "Data dir: ~/.fit  (override: FIT_DATA_DIR=path fit ...)\n"
+        "Config:   ~/.fit/config  (hand-editable, see comments in the file)"
+    )
+
+
+def render_sparkline(data: list[float], label: str) -> None:
+    if not data:
+        console.print(f"{label}: [dim](no data)[/dim]")
+        return
+
+    lo, hi = min(data), max(data)
+    if hi == lo:
+        indices = [len(_SPARK_CHARS) // 2] * len(data)
+    else:
+        indices = [round((v - lo) / (hi - lo) * (len(_SPARK_CHARS) - 1)) for v in data]
+    spark = "".join(_SPARK_CHARS[i] for i in indices)
+
+    console.print(f"[cyan]{label}[/cyan]: {spark}  ({lo:.1f}–{hi:.1f})")
+
+
+def _format_effort(activity: dict) -> str:
+    """Average power for cycle activities that have it, else pace."""
+    if activity.get("type") == "cycle" and activity.get("avg_power") is not None:
+        return f"{round(activity['avg_power'])}W avg"
+    distance_km = activity.get("distance_km", 0) or 0
+    duration_seconds = activity.get("duration_seconds", 0) or 0
+    return compute.calc_pace(distance_km, duration_seconds, activity.get("type", ""))
+
+
+def _format_distance(activity: dict) -> str:
+    if activity.get("type") in compute.NO_DISTANCE_TYPES:
+        return "—"
+    distance_km = activity.get("distance_km", 0) or 0
+    return f"{distance_km:.2f}km"
+
+
+def _format_hr(value) -> str:
+    return f"{round(value)}bpm" if value is not None else "—"
+
+
+def render_history_table(activities: list[dict], n: int) -> None:
+    recent = sorted(activities, key=lambda a: a.get("date", ""), reverse=True)[:n]
+
+    table = Table(title=f"Last {n} activities")
+    table.add_column("Date")
+    table.add_column("Type")
+    table.add_column("Distance", justify="right")
+    table.add_column("Duration", justify="right")
+    table.add_column("Pace", justify="right")
+    table.add_column("Avg HR", justify="right")
+    table.add_column("Max HR", justify="right")
+
+    for activity in recent:
+        duration_seconds = activity.get("duration_seconds", 0) or 0
+        table.add_row(
+            activity.get("date", ""),
+            activity.get("type", ""),
+            _format_distance(activity),
+            _format_duration(duration_seconds),
+            _format_effort(activity),
+            _format_hr(activity.get("avg_heart_rate")),
+            _format_hr(activity.get("max_heart_rate")),
+        )
+    console.print(table)
+
+
+def render_pbs_table(
+    pbs: dict,
+    sports: list[str] | None = None,
+    window_months: int = 0,
+    window_label: str | None = None,
+) -> None:
+    if window_label:
+        title = f"Personal bests ({window_label})"
+    elif window_months:
+        title = f"Personal bests (last {window_months} months)"
+    else:
+        title = "Personal bests"
+    table = Table(title=title)
+    table.add_column("Type")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_column("Date")
+
+    for activity_type, type_pbs in pbs.items():
+        if activity_type == "computed_from":
+            continue
+        if sports and activity_type not in sports:
+            continue
+        for key, value in type_pbs.items():
+            if key.endswith("_date"):
+                continue
+            date = type_pbs.get(_date_key_for(key), "")
+            label, formatted = _format_pb_metric(key, value)
+            table.add_row(activity_type, label, formatted, date)
+
+    console.print(table)
+
+
+def _render_type_summary_table(activities: list[dict], title: str) -> None:
+    table = Table(title=title)
+    table.add_column("Type")
+    table.add_column("Count", justify="right")
+    table.add_column("Distance", justify="right")
+    for row in compute.summarize_by_type(activities):
+        table.add_row(row["type"], str(row["count"]), f"{row['distance_km']:.1f}km")
+    console.print(table)
+
+
+def render_sports_summary(activities: list[dict]) -> None:
+    """Dashboard block: always covers every activity type present in the given
+    activities — callers must not pre-filter by sport (pre-filtering by date
+    is fine)."""
+    _render_type_summary_table(activities, title="Sports summary")
+
+
+def render_fitness_index(
+    current_index: float | None,
+    baseline_date: str | None,
+    weekly_series: list[dict],
+    window_label: str | None = None,
+) -> None:
+    """Headline + trend sparkline for the fitness index (see "Fitness index" in
+    CLAUDE.md). current_index/baseline_date always reflect full history as of
+    today — callers must not pre-filter by sport or time range. weekly_series
+    ([{"week": ..., "index": ...}, ...] from compute.weekly_fitness_index) may
+    be windowed by the caller (e.g. for --timerange) since only the trend
+    line, not the headline, is meant to narrow."""
+    if current_index is None:
+        console.print("[dim]Fitness index: not enough data yet.[/dim]")
+        return
+
+    console.print(
+        f"[cyan]Fitness index[/cyan]: {current_index:.0f}  "
+        f"[dim](baseline 100 set {baseline_date})[/dim]"
+    )
+    label = f"Fitness trend ({window_label})" if window_label else "Fitness trend"
+    render_sparkline([w["index"] for w in weekly_series], label)
+
+
+def render_fitness_reset(old_baseline: dict, new_baseline: dict) -> None:
+    if old_baseline:
+        console.print(
+            f"Baseline re-anchored: {old_baseline['baseline_value']:.2f} "
+            f"(set {old_baseline['baseline_date']}) -> "
+            f"{new_baseline['baseline_value']:.2f} (set {new_baseline['baseline_date']})"
+        )
+    else:
+        console.print(
+            f"Baseline set: {new_baseline['baseline_value']:.2f} "
+            f"(set {new_baseline['baseline_date']})"
+        )
+
+
+def render_stats(activities: list[dict]) -> None:
+    if not activities:
+        console.print("[dim]No activities yet.[/dim]")
+        return
+
+    total_distance = sum(a.get("distance_km", 0) or 0 for a in activities)
+    total_duration = sum(a.get("duration_seconds", 0) or 0 for a in activities)
+
+    console.print(
+        f"[bold]{len(activities)}[/bold] activities, "
+        f"[bold]{total_distance:.1f}km[/bold] total, "
+        f"[bold]{_format_duration(total_duration)}[/bold] total time"
+    )
+
+    _render_type_summary_table(activities, title="By type")
+
+    weekly = compute.weekly_volumes(activities)
+    render_sparkline([w["distance_km"] for w in weekly], "Weekly volume")
+
+
+def render_trend(activities: list[dict], metric: str) -> None:
+    values = compute.rolling_average(activities, metric, window=1)
+    if not values:
+        console.print(f"[dim]No data for metric '{metric}'.[/dim]")
+        return
+
+    render_sparkline(values, metric)
+    console.print(f"latest: {values[-1]:.1f}  min: {min(values):.1f}  max: {max(values):.1f}")
+
+
+def render_dashboard(
+    activities: list[dict],
+    pbs: dict,
+    config: dict,
+    fitness: dict,
+    sports: list[str] | None = None,
+    window_months: int = 0,
+    window_label: str | None = None,
+) -> None:
+    """config is the storage.read_config() dict (history_count + show_* toggles).
+    fitness is cli's snapshot dict {"current", "baseline_date", "weekly"} —
+    always full-history/as-of-today, never narrowed by sports or window (see
+    "Fitness index" in CLAUDE.md)."""
+    if config["show_fitness_index"]:
+        render_fitness_index(
+            fitness["current"], fitness["baseline_date"],
+            fitness["weekly"], window_label=window_label,
+        )
+
+    if not activities:
+        if window_label:
+            console.print(f"[dim]No activities in {window_label}.[/dim]")
+        else:
+            console.print("[dim]No activities logged yet. Use `fit import <path>` to add one.[/dim]")
+        return
+
+    if window_label:
+        console.print(f"[dim]Time range: {window_label}[/dim]")
+
+    if config["show_sports_summary"]:
+        render_sports_summary(activities)
+
+    filtered = compute.filter_by_types(activities, sports) if sports else activities
+    if not filtered:
+        console.print("[dim]No activities match the configured sport filter.[/dim]")
+        return
+
+    render_history_table(filtered, config["history_count"])
+
+    if config["show_sparkline"]:
+        weekly = compute.weekly_volumes(filtered)
+        render_sparkline([w["distance_km"] for w in weekly], "Weekly volume (km)")
+
+    if config["show_pbs"]:
+        render_pbs_table(pbs, sports=sports, window_months=window_months, window_label=window_label)
+
+
+def _format_duration(total_seconds: int) -> str:
+    minutes, seconds = divmod(round(total_seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m{seconds:02d}s"
+
+
+def _format_seconds_colon(total_seconds) -> str:
+    """mm:ss / h:mm:ss style used only for "New PB" messages, distinct from
+    _format_duration's "1h02m"/"5m30s" style used in tables."""
+    minutes, seconds = divmod(round(total_seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def _parse_pb_key(key: str) -> dict:
+    """Single source of truth for the pbs.json key-naming convention:
+    fastest_{label}_seconds / fastest_{label}_split_seconds / longest_distance_km
+    / most_elevation_gain_m. Returns {"category", "label", "date_key"}."""
+    date_key = None
+    for suffix in ("_seconds", "_km", "_m"):
+        if key.endswith(suffix):
+            date_key = key[: -len(suffix)] + "_date"
+            break
+
+    if key.startswith("fastest_") and key.endswith("_seconds"):
+        label = key[len("fastest_"):-len("_seconds")]
+        if label.endswith("_split"):
+            category, label = "split", label[: -len("_split")]
+        else:
+            category = "milestone"
+    elif key == "longest_distance_km":
+        category, label = "longest_distance", None
+    elif key == "most_elevation_gain_m":
+        category, label = "elevation", None
+    else:
+        category, label = "unknown", None
+
+    return {"category": category, "label": label, "date_key": date_key}
+
+
+def _date_key_for(key: str) -> str | None:
+    return _parse_pb_key(key)["date_key"]
+
+
+def _format_pb_metric(key: str, value) -> tuple[str, str]:
+    parsed = _parse_pb_key(key)
+    if parsed["category"] == "split":
+        return f"Fastest {parsed['label']} (split)", _format_duration(value)
+    if parsed["category"] == "milestone":
+        return f"Fastest {parsed['label']} (dedicated)", _format_duration(value)
+    if parsed["category"] == "longest_distance":
+        return "Longest distance", f"{value:.1f}km"
+    if parsed["category"] == "elevation":
+        return "Most elevation gain", f"{value:.0f}m"
+    return key, str(value)
+
+
+def render_new_pb_messages(new_pbs: list[dict]) -> None:
+    """new_pbs: [{"key": ..., "value": ...}, ...] as returned by
+    compute.detect_new_pbs. Message text/format must stay byte-identical to the
+    prior inline f-strings — this is display.py's only formatting concern for
+    "New PB" announcements, kept distinct from the table's duration style."""
+    for pb in new_pbs:
+        parsed = _parse_pb_key(pb["key"])
+        value = pb["value"]
+        if parsed["category"] == "longest_distance":
+            console.print(f"New longest distance: {value:.1f}km")
+        elif parsed["category"] == "milestone":
+            console.print(f"New fastest {parsed['label']}: {_format_seconds_colon(value)}")
+        elif parsed["category"] == "split":
+            console.print(f"New fastest {parsed['label']} split: {_format_seconds_colon(value)}")
+        elif parsed["category"] == "elevation":
+            console.print(f"New most elevation gain: {value:.0f}m")

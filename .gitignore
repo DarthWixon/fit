@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+test-data/
+.fit-test/
+
+# examples/data/ is a demo FIT_DATA_DIR; running fit against it generates these
+examples/data/config
+examples/data/pbs.json
+examples/data/fitness.json
+examples/data/gpx/

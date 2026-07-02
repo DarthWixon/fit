@@ -1,0 +1,9 @@
+{
+  "id": "2026-01-31T08:10:09",
+  "type": "hike",
+  "date": "2026-01-31",
+  "distance_km": 15.84,
+  "duration_seconds": 14911,
+  "elevation_gain_m": 604,
+  "source": "gpx"
+}

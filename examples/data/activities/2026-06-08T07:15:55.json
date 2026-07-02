@@ -1,0 +1,14 @@
+{
+  "id": "2026-06-08T07:15:55",
+  "type": "swim",
+  "date": "2026-06-08",
+  "distance_km": 1.0,
+  "duration_seconds": 1152,
+  "avg_heart_rate": 138,
+  "max_heart_rate": 152,
+  "source": "garmin",
+  "splits": {
+    "500m_seconds": 553.1,
+    "1k_seconds": 1099.6
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "id": "2026-04-26T12:45:41",
+  "type": "hike",
+  "date": "2026-04-26",
+  "distance_km": 15.54,
+  "duration_seconds": 14189,
+  "elevation_gain_m": 726,
+  "source": "gpx",
+  "avg_heart_rate": 124,
+  "max_heart_rate": 154
+}
