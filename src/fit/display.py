@@ -120,10 +120,11 @@ def render_pbs_table(
             continue
         if sports and activity_type not in sports:
             continue
-        for key, value in type_pbs.items():
+        collapsed = compute.best_pb_per_label(type_pbs)
+        for key, value in collapsed.items():
             if key.endswith("_date"):
                 continue
-            date = type_pbs.get(_date_key_for(key), "")
+            date = collapsed.get(_date_key_for(key), "")
             label, formatted = _format_pb_metric(key, value)
             table.add_row(activity_type, label, formatted, date)
 
@@ -347,10 +348,8 @@ def _date_key_for(key: str) -> str | None:
 
 def _format_pb_metric(key: str, value) -> tuple[str, str]:
     parsed = _parse_pb_key(key)
-    if parsed["category"] == "split":
-        return f"Fastest {parsed['label']} (split)", _format_duration(value)
     if parsed["category"] == "milestone":
-        return f"Fastest {parsed['label']} (dedicated)", _format_duration(value)
+        return f"Fastest {parsed['label']}", _format_duration(value)
     if parsed["category"] == "longest_distance":
         return "Longest distance", f"{value:.1f}km"
     if parsed["category"] == "elevation":

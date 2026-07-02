@@ -356,6 +356,48 @@ def _candidate_pbs(activities: list[dict], activity_type: str) -> dict:
     return result
 
 
+def best_pb_per_label(type_pbs: dict) -> dict:
+    """Collapses dedicated (fastest_{label}_seconds) and split
+    (fastest_{label}_split_seconds) PBs sharing the same distance label down
+    to whichever is faster, for display purposes only -- pbs.json keeps both
+    stored independently (see "Split PBs" in CLAUDE.md) so detect_new_pbs can
+    still track each category. Non-time keys (longest_distance_km,
+    most_elevation_gain_m) pass through unchanged."""
+    labels: dict[str, dict] = {}
+    passthrough: dict = {}
+
+    for key, value in type_pbs.items():
+        if key.endswith("_date"):
+            continue
+        if key.startswith("fastest_") and key.endswith("_split_seconds"):
+            label = key[len("fastest_") : -len("_split_seconds")]
+            date_key = f"fastest_{label}_split_date"
+            labels.setdefault(label, {})["split"] = (value, type_pbs.get(date_key))
+        elif key.startswith("fastest_") and key.endswith("_seconds"):
+            label = key[len("fastest_") : -len("_seconds")]
+            date_key = f"fastest_{label}_date"
+            labels.setdefault(label, {})["milestone"] = (value, type_pbs.get(date_key))
+        else:
+            date_key = _date_key_for_passthrough(key)
+            passthrough[key] = value
+            if date_key and date_key in type_pbs:
+                passthrough[date_key] = type_pbs[date_key]
+
+    result = dict(passthrough)
+    for label, candidates in labels.items():
+        value, date = min(candidates.values(), key=lambda vd: vd[0])
+        result[f"fastest_{label}_seconds"] = value
+        result[f"fastest_{label}_date"] = date
+    return result
+
+
+def _date_key_for_passthrough(key: str) -> str | None:
+    for suffix in ("_km", "_m"):
+        if key.endswith(suffix):
+            return key[: -len(suffix)] + "_date"
+    return None
+
+
 def all_personal_bests(activities: list[dict]) -> dict:
     by_type: dict[str, list[dict]] = {}
     for activity in activities:

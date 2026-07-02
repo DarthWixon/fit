@@ -91,6 +91,46 @@ def test_all_personal_bests_milestone_split_and_longest():
     assert pbs["most_elevation_gain_m"] == 120
 
 
+def test_best_pb_per_label_prefers_faster_split():
+    pbs = compute.all_personal_bests(RUNS)["run"]
+    collapsed = compute.best_pb_per_label(pbs)
+    assert collapsed["fastest_5k_seconds"] == 1400   # split (1400) beat dedicated (1500)
+    assert collapsed["fastest_5k_date"] == "2024-02-01"
+    assert "fastest_5k_split_seconds" not in collapsed
+    assert "fastest_5k_split_date" not in collapsed
+
+
+def test_best_pb_per_label_prefers_faster_dedicated():
+    type_pbs = {
+        "fastest_5k_seconds": 1300,
+        "fastest_5k_date": "2024-01-01",
+        "fastest_5k_split_seconds": 1400,
+        "fastest_5k_split_date": "2024-02-01",
+    }
+    collapsed = compute.best_pb_per_label(type_pbs)
+    assert collapsed == {"fastest_5k_seconds": 1300, "fastest_5k_date": "2024-01-01"}
+
+
+def test_best_pb_per_label_only_one_present():
+    milestone_only = {"fastest_10k_seconds": 2900, "fastest_10k_date": "2024-03-01"}
+    assert compute.best_pb_per_label(milestone_only) == milestone_only
+
+    split_only = {"fastest_10k_split_seconds": 2800, "fastest_10k_split_date": "2024-04-01"}
+    assert compute.best_pb_per_label(split_only) == {
+        "fastest_10k_seconds": 2800,
+        "fastest_10k_date": "2024-04-01",
+    }
+
+
+def test_best_pb_per_label_passes_through_non_time_keys():
+    pbs = compute.all_personal_bests(RUNS)["run"]
+    collapsed = compute.best_pb_per_label(pbs)
+    assert collapsed["longest_distance_km"] == 10.5
+    assert collapsed["longest_distance_date"] == "2024-02-01"
+    assert collapsed["most_elevation_gain_m"] == 120
+    assert collapsed["most_elevation_gain_date"] == "2024-02-01"
+
+
 def test_all_personal_bests_no_distance_type_skips_longest():
     squash = [{"type": "squash", "date": "2024-01-01", "distance_km": 0.07,
                "duration_seconds": 3600}]
