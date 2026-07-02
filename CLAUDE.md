@@ -254,17 +254,22 @@ Key functions:
   `cli._fitness_snapshot()`'s dict
   (`current`/`baseline_date`/`weekly`), passed through whole rather than
   unpacked into separate parameters.
-  When `window_label` is set (from `--timerange`), prints a "Time range: ..."
-  banner and threads the label into `render_pbs_table`'s title instead of the
-  int-months wording. The sports-summary block renders *before* the `--sport`
-  filter is applied, so it always shows every type present (never restricted by
-  `--sport`/config `sports`) even when the sport filter itself matches nothing.
-  The fitness-index block renders *first*, before even the empty-activities
-  early return, so the headline (always full-history/as-of-today) never
-  disappears just because `--sport`/`--timerange` matches nothing elsewhere on
-  the page — see "Fitness index". Both the weekly-volume and fitness-trend
-  sparklines are capped to the last `config["dashboard_weeks"]` weeks (0 = all)
-  so long history doesn't wrap over multiple lines; the cap is skipped when
+  Block order: fitness index -> weekly volume sparkline -> time range banner
+  -> history table -> personal bests -> sports summary. When `window_label`
+  is set (from `--timerange`), prints a "Time range: ..." banner and threads
+  the label into `render_pbs_table`'s title instead of the int-months
+  wording. The sports-summary block always renders *last*, over the
+  unfiltered `activities` list, so it always shows every type present (never
+  restricted by `--sport`/config `sports`) even when the sport filter itself
+  matches nothing — in that case the sparkline/history/pbs blocks are
+  replaced by a single "no activities match" message, but sports-summary
+  still renders afterward. The fitness-index block renders *first*, before
+  even the empty-activities early return, so the headline (always
+  full-history/as-of-today) never disappears just because
+  `--sport`/`--timerange` matches nothing elsewhere on the page — see
+  "Fitness index". Both the weekly-volume and fitness-trend sparklines are
+  capped to the last `config["dashboard_weeks"]` weeks (0 = all) so long
+  history doesn't wrap over multiple lines; the cap is skipped when
   `--timerange` (a truthy `window_label`) is already driving the window.
 - `render_history_table(activities: list[dict], n: int) -> None` — "Pace" column
   uses `_format_effort()`, which shows `avg_power` ("187W avg") for cycle

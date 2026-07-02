@@ -212,7 +212,9 @@ def render_trend(activities: list[dict], metric: str) -> None:
         return
 
     render_sparkline(values, metric)
-    console.print(f"latest: {values[-1]:.1f}  min: {min(values):.1f}  max: {max(values):.1f}")
+    console.print(
+        f"latest: {values[-1]:.1f}  min: {min(values):.1f}  max: {max(values):.1f}"
+    )
 
 
 def render_dashboard(
@@ -229,7 +231,13 @@ def render_dashboard(
     "weekly"} — always full-history/as-of-today, never narrowed by sports or
     window (see "Fitness index" in CLAUDE.md). The volume and fitness-trend
     sparklines are capped to the last config["dashboard_weeks"] weeks (0 = all),
-    unless --timerange is already driving the window."""
+    unless --timerange is already driving the window.
+
+    Block order: fitness index -> weekly volume sparkline -> time range banner
+    -> history table -> personal bests -> sports summary. Sports summary
+    always renders last and is never restricted by --sport/config sports —
+    even when the sport filter matches nothing elsewhere on the page, it
+    still shows every type present."""
     # Cap the volume/fitness sparklines to a recent window, unless --timerange
     # is already driving the window (a truthy window_label), in which case the
     # explicit flag wins and nothing is further truncated.
@@ -242,40 +250,51 @@ def render_dashboard(
             trend_series = trend_series[-weeks_cap:]
             trend_label = f"last {weeks_cap} wks"
         render_fitness_index(
-            fitness["current"], fitness["baseline_date"],
-            trend_series, window_label=trend_label,
+            fitness["current"],
+            fitness["baseline_date"],
+            trend_series,
+            window_label=trend_label,
         )
+        console.print()
 
     if not activities:
         if window_label:
             console.print(f"[dim]No activities in {window_label}.[/dim]")
         else:
-            console.print("[dim]No activities logged yet. Use `fit import <path>` to add one.[/dim]")
+            console.print(
+                "[dim]No activities logged yet. Use `fit import <path>` to add one.[/dim]"
+            )
         return
-
-    if window_label:
-        console.print(f"[dim]Time range: {window_label}[/dim]")
-
-    if config["show_sports_summary"]:
-        render_sports_summary(activities)
 
     filtered = compute.filter_by_types(activities, sports) if sports else activities
     if not filtered:
         console.print("[dim]No activities match the configured sport filter.[/dim]")
-        return
+        console.print()
+    else:
+        if config["show_sparkline"]:
+            weekly = compute.weekly_volumes(filtered)
+            volume_label = "Weekly volume (km)"
+            if weeks_cap:
+                weekly = weekly[-weeks_cap:]
+                volume_label += f" (last {weeks_cap} wks)"
+            render_sparkline([w["distance_km"] for w in weekly], volume_label)
+            console.print()
 
-    render_history_table(filtered, config["history_count"])
+        if window_label:
+            console.print(f"[dim]Time range: {window_label}[/dim]")
+            console.print()
 
-    if config["show_sparkline"]:
-        weekly = compute.weekly_volumes(filtered)
-        volume_label = "Weekly volume (km)"
-        if weeks_cap:
-            weekly = weekly[-weeks_cap:]
-            volume_label += f" (last {weeks_cap} wks)"
-        render_sparkline([w["distance_km"] for w in weekly], volume_label)
+        render_history_table(filtered, config["history_count"])
+        console.print()
 
-    if config["show_pbs"]:
-        render_pbs_table(pbs, sports=sports, window_months=window_months, window_label=window_label)
+        if config["show_pbs"]:
+            render_pbs_table(
+                pbs, sports=sports, window_months=window_months, window_label=window_label
+            )
+            console.print()
+
+    if config["show_sports_summary"]:
+        render_sports_summary(activities)
 
 
 def _format_duration(total_seconds: int) -> str:
@@ -307,7 +326,7 @@ def _parse_pb_key(key: str) -> dict:
             break
 
     if key.startswith("fastest_") and key.endswith("_seconds"):
-        label = key[len("fastest_"):-len("_seconds")]
+        label = key[len("fastest_") : -len("_seconds")]
         if label.endswith("_split"):
             category, label = "split", label[: -len("_split")]
         else:
@@ -350,8 +369,12 @@ def render_new_pb_messages(new_pbs: list[dict]) -> None:
         if parsed["category"] == "longest_distance":
             console.print(f"New longest distance: {value:.1f}km")
         elif parsed["category"] == "milestone":
-            console.print(f"New fastest {parsed['label']}: {_format_seconds_colon(value)}")
+            console.print(
+                f"New fastest {parsed['label']}: {_format_seconds_colon(value)}"
+            )
         elif parsed["category"] == "split":
-            console.print(f"New fastest {parsed['label']} split: {_format_seconds_colon(value)}")
+            console.print(
+                f"New fastest {parsed['label']} split: {_format_seconds_colon(value)}"
+            )
         elif parsed["category"] == "elevation":
             console.print(f"New most elevation gain: {value:.0f}m")
