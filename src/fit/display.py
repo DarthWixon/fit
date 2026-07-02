@@ -20,7 +20,7 @@ def render_warnings(messages: list[str]) -> None:
 
 def render_usage() -> None:
     console.print(
-        "fit dashboard [--sport S] [--timerange 3m]   summary, sparkline, PBs, fitness\n"
+        "fit dashboard [--sport S] [--timerange 3m] [--minimal]   summary, sparkline, PBs, fitness\n"
         "fit pbs [--months N]                         personal bests table\n"
         "fit stats [--week|--month|--year]            totals + breakdown by type\n"
         "fit fitness                                  current fitness index + trend\n"

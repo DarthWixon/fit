@@ -128,9 +128,14 @@ def dashboard(
         "--timerange",
         help="Rolling window ending today, e.g. 10d, 2w, 3m, 1y (overrides pbs_window_months for this run)",
     ),
+    minimal: bool = typer.Option(
+        False, "--minimal", help="Show only the sparklines and recent activities for this run"
+    ),
 ) -> None:
     all_activities = _load_activities()
     config = storage.read_config()
+    if minimal:
+        config = {**config, "show_pbs": False, "show_sports_summary": False}
 
     today = date_cls.today()
     try:
