@@ -311,9 +311,11 @@ Key functions:
 - `import_gpx(path: str) -> dict`
 - `import_tcx(path: str) -> dict`
 - `import_fit(path: str) -> dict`
-- `import_strava_csv(path: str) -> list[dict]` — a single bare Strava `activities.csv`
-- `import_strava_export(export_dir: str) -> list[dict]` — a full Strava bulk-export
-  archive (`activities.csv` + linked, possibly gzipped, GPX/TCX/FIT files)
+- `import_strava_csv(path: str) -> tuple[list[dict], list[str]]` — a single bare
+  Strava `activities.csv`; second element is warning strings (see below)
+- `import_strava_export(export_dir: str) -> tuple[list[dict], list[str]]` — a full
+  Strava bulk-export archive (`activities.csv` + linked, possibly gzipped,
+  GPX/TCX/FIT files); second element is warning strings (see below)
 - `import_by_extension(path: str, suffix: str) -> dict` — dispatches to
   `import_gpx`/`import_tcx`/`import_fit` by suffix, raising `ValueError` for anything
   else; the single source of truth for extension dispatch, used by both `cli.py`'s
@@ -324,6 +326,16 @@ Importers never check for duplicates themselves — they always return every act
 they parse. `cli.py`'s `import_activity` is the single place that calls
 `activity_exists()` per activity to decide what to skip; this keeps `importers.py`
 fully decoupled from `storage.py`'s on-disk state (it doesn't import `storage` at all).
+
+Both Strava importers drop rows they can't import — a row whose `Activity Type`
+isn't in `STRAVA_TYPE_MAP`, or with no date — but never *silently*: they tally the
+drops (`_parse_strava_row` returns `(None, skip_label)` naming the reason, keyed by
+raw type or `"(no date)"`) and return a per-type summary line via
+`_strava_skip_warnings` (e.g. `"skipped 100 Strava rows fit can't import: Workout
+x99, Surfing x1"`) in their second return value. `cli.py` passes these through
+`display.render_warnings` alongside any linked-file warnings, so dropped activities
+are always surfaced. This is the single reason `import_strava_csv`/
+`import_strava_export` return `(activities, warnings)` tuples rather than bare lists.
 
 `import_gpx`/`import_tcx`/`import_fit` each also build a transient (elapsed_seconds,
 distance_km) point stream while parsing, purely in memory, and use it to compute

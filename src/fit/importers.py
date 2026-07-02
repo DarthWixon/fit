@@ -11,6 +11,7 @@ import math
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -56,10 +57,12 @@ FIT_SPORT_CODE_MAP = {
 
 # Deliberately no "squash" entry: no Strava CSV/bulk-export fixture exists to
 # confirm the exact raw_type string Strava uses for squash (if any), and
-# guessing risks silently mismapping real data. An unmapped raw_type already
-# fails safely -- _parse_strava_row returns None and the row is dropped in
-# import_strava_csv/import_strava_export -- the same behavior any other
-# currently-unmapped Strava activity type gets today, not squash-specific.
+# guessing risks silently mismapping real data. An unmapped raw_type is
+# dropped -- _parse_strava_row returns (None, raw_type) and the row is skipped
+# in import_strava_csv/import_strava_export -- but the drop is now reported: a
+# per-type skipped-row summary is surfaced via warnings, not silent. Any other
+# currently-unmapped Strava activity type gets the same treatment, not
+# squash-specific.
 STRAVA_TYPE_MAP = {
     "run": "run",
     "ride": "cycle",
@@ -571,35 +574,50 @@ def _parse_strava_date(text: str) -> datetime:
     raise ValueError(f"unrecognized Strava date format: {text!r}")
 
 
-def _parse_strava_row(row: dict) -> dict | None:
+def _parse_strava_row(row: dict) -> tuple[dict | None, str | None]:
     """Base activity fields from one Strava CSV row (id/type/date/distance_km/
-    duration_seconds/source), or None if the type is unrecognized or the
-    date is missing. Shared by import_strava_csv and import_strava_export —
-    does not resolve any linked file."""
+    duration_seconds/source) paired with None, or (None, skip_label) if the
+    row can't be imported — where skip_label names why, for the per-type
+    skipped-row summary: the raw type string for an unmapped type, or
+    "(no date)" for a missing date. Exactly one side is populated. Shared by
+    import_strava_csv and import_strava_export — does not resolve any linked
+    file."""
     raw_type = _get_first(row, TYPE_COLUMNS)
     activity_type = STRAVA_TYPE_MAP.get((raw_type or "").lower())
     if activity_type is None:
-        return None
+        return None, raw_type or "(no type)"
 
     raw_date = _get_first(row, DATE_COLUMNS)
     if not raw_date:
-        return None
+        return None, "(no date)"
     start_time = _parse_strava_date(raw_date)
 
     distance_m = float(_get_first(row, DISTANCE_COLUMNS) or 0)
     duration_s = float(_get_first(row, DURATION_COLUMNS) or 0)
 
-    return _base_activity(start_time, activity_type, distance_m / 1000, duration_s, "strava")
+    return _base_activity(start_time, activity_type, distance_m / 1000, duration_s, "strava"), None
 
 
-def import_strava_csv(path: str) -> list[dict]:
-    activities = []
+def _strava_skip_warnings(skipped: Counter) -> list[str]:
+    """One summary line naming each skipped Strava row category and its count,
+    e.g. 'skipped 100 Strava rows fit can't import: Workout x99, Surfing x1'.
+    Empty list when nothing was skipped."""
+    if not skipped:
+        return []
+    parts = ", ".join(f"{label} x{n}" for label, n in skipped.most_common())
+    return [f"skipped {sum(skipped.values())} Strava rows fit can't import: {parts}"]
+
+
+def import_strava_csv(path: str) -> tuple[list[dict], list[str]]:
+    activities, skipped = [], Counter()
     with open(path, newline="", encoding="utf-8-sig") as f:
         for row in csv.DictReader(f):
-            parsed = _parse_strava_row(row)
-            if parsed is not None:
-                activities.append(parsed)
-    return activities
+            parsed, skip_label = _parse_strava_row(row)
+            if parsed is None:
+                skipped[skip_label] += 1
+                continue
+            activities.append(parsed)
+    return activities, _strava_skip_warnings(skipped)
 
 
 def import_by_extension(path: str, suffix: str) -> dict:
@@ -652,10 +670,12 @@ def import_strava_export(export_dir: str) -> tuple[list[dict], list[str]]:
 
     activities = []
     warnings: list[str] = []
+    skipped: Counter = Counter()
     with open(csv_path, newline="", encoding="utf-8-sig") as f:
         for row in csv.DictReader(f):
-            base = _parse_strava_row(row)
+            base, skip_label = _parse_strava_row(row)
             if base is None:
+                skipped[skip_label] += 1
                 continue
 
             filename = _get_first(row, FILENAME_COLUMNS)
@@ -674,4 +694,5 @@ def import_strava_export(export_dir: str) -> tuple[list[dict], list[str]]:
 
             activities.append(activity)
 
+    warnings.extend(_strava_skip_warnings(skipped))
     return activities, warnings

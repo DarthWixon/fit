@@ -171,7 +171,7 @@ def test_import_fit_generated_fixture():
 def test_import_strava_csv_maps_and_drops_types(tmp_path):
     path = tmp_path / "activities.csv"
     path.write_text(STRAVA_CSV_FIXTURE)
-    activities = importers.import_strava_csv(str(path))
+    activities, warnings = importers.import_strava_csv(str(path))
 
     assert len(activities) == 1                      # Workout row dropped
     assert activities[0] == {
@@ -182,3 +182,7 @@ def test_import_strava_csv_maps_and_drops_types(tmp_path):
         "duration_seconds": 3120,
         "source": "strava",
     }
+
+    # The dropped Workout row is reported, not silent.
+    assert len(warnings) == 1
+    assert "Workout" in warnings[0]

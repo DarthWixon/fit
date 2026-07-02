@@ -255,7 +255,7 @@ def import_activity(path: str) -> None:
     else:
         suffix = source.suffix.lower()
         if suffix == ".csv":
-            new_activities = importers.import_strava_csv(str(source))
+            new_activities, import_warnings = importers.import_strava_csv(str(source))
         elif suffix in (".gpx", ".tcx", ".fit"):
             new_activities = [importers.import_by_extension(str(source), suffix)]
         else:
