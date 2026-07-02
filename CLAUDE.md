@@ -249,8 +249,9 @@ no computation.
 
 Key functions:
 - `render_dashboard(activities: list[dict], pbs: dict, config: dict, fitness: dict, sports: list[str] | None = None, window_months: int = 0, window_label: str | None = None) -> None` —
-  `config` is the `storage.read_config()` dict (supplies `history_count` and the
-  four `show_*` toggles); `fitness` is `cli._fitness_snapshot()`'s dict
+  `config` is the `storage.read_config()` dict (supplies `history_count`,
+  `dashboard_weeks`, and the four `show_*` toggles); `fitness` is
+  `cli._fitness_snapshot()`'s dict
   (`current`/`baseline_date`/`weekly`), passed through whole rather than
   unpacked into separate parameters.
   When `window_label` is set (from `--timerange`), prints a "Time range: ..."
@@ -261,7 +262,10 @@ Key functions:
   The fitness-index block renders *first*, before even the empty-activities
   early return, so the headline (always full-history/as-of-today) never
   disappears just because `--sport`/`--timerange` matches nothing elsewhere on
-  the page — see "Fitness index"
+  the page — see "Fitness index". Both the weekly-volume and fitness-trend
+  sparklines are capped to the last `config["dashboard_weeks"]` weeks (0 = all)
+  so long history doesn't wrap over multiple lines; the cap is skipped when
+  `--timerange` (a truthy `window_label`) is already driving the window.
 - `render_history_table(activities: list[dict], n: int) -> None` — "Pace" column
   uses `_format_effort()`, which shows `avg_power` ("187W avg") for cycle
   activities that have it, falling back to `compute.calc_pace()` otherwise.
@@ -533,6 +537,7 @@ DEFAULTS = {
     "sports": [],               # empty = all types shown
     "pbs_window_months": 0,     # 0 = all-time PBs
     "history_count": 5,         # rows in the dashboard's embedded history table
+    "dashboard_weeks": 12,      # weeks shown in dashboard volume/fitness sparklines (0 = all)
     "show_sparkline": True,     # weekly volume sparkline block
     "show_pbs": True,           # personal bests block
     "show_sports_summary": True,  # sports summary block (all types, count + distance)
@@ -570,6 +575,13 @@ Consumers:
 - `history_count` — row count for the dashboard's embedded recent-activity table
   (the standalone `fit history N` command keeps its own explicit `N` argument,
   unaffected by this key).
+- `dashboard_weeks` — how many recent weeks the dashboard's weekly-volume and
+  fitness-trend sparklines show (0 = all weeks). Applied as a final display-time
+  slice of the (already sorted) weekly series in `display.render_dashboard` only
+  — the standalone `fit fitness`/`fit trend` deep-dive views stay full-history.
+  There is deliberately no CLI flag for this. `--timerange` takes priority: when
+  it's driving the dashboard window, this cap is skipped so the explicit flag's
+  range wins (same precedence as `pbs_window_months`).
 - `show_sparkline` / `show_pbs` — toggle those two dashboard blocks off entirely.
 - `show_sports_summary` — toggles the dashboard's sports-summary block
   (`display.render_sports_summary`). Unlike `sports`, this block is never

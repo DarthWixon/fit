@@ -224,14 +224,26 @@ def render_dashboard(
     window_months: int = 0,
     window_label: str | None = None,
 ) -> None:
-    """config is the storage.read_config() dict (history_count + show_* toggles).
-    fitness is cli's snapshot dict {"current", "baseline_date", "weekly"} —
-    always full-history/as-of-today, never narrowed by sports or window (see
-    "Fitness index" in CLAUDE.md)."""
+    """config is the storage.read_config() dict (history_count, dashboard_weeks,
+    show_* toggles). fitness is cli's snapshot dict {"current", "baseline_date",
+    "weekly"} — always full-history/as-of-today, never narrowed by sports or
+    window (see "Fitness index" in CLAUDE.md). The volume and fitness-trend
+    sparklines are capped to the last config["dashboard_weeks"] weeks (0 = all),
+    unless --timerange is already driving the window."""
+    # Cap the volume/fitness sparklines to a recent window, unless --timerange
+    # is already driving the window (a truthy window_label), in which case the
+    # explicit flag wins and nothing is further truncated.
+    weeks_cap = 0 if window_label else config["dashboard_weeks"]
+
     if config["show_fitness_index"]:
+        trend_series = fitness["weekly"]
+        trend_label = window_label
+        if weeks_cap:
+            trend_series = trend_series[-weeks_cap:]
+            trend_label = f"last {weeks_cap} wks"
         render_fitness_index(
             fitness["current"], fitness["baseline_date"],
-            fitness["weekly"], window_label=window_label,
+            trend_series, window_label=trend_label,
         )
 
     if not activities:
@@ -256,7 +268,11 @@ def render_dashboard(
 
     if config["show_sparkline"]:
         weekly = compute.weekly_volumes(filtered)
-        render_sparkline([w["distance_km"] for w in weekly], "Weekly volume (km)")
+        volume_label = "Weekly volume (km)"
+        if weeks_cap:
+            weekly = weekly[-weeks_cap:]
+            volume_label += f" (last {weeks_cap} wks)"
+        render_sparkline([w["distance_km"] for w in weekly], volume_label)
 
     if config["show_pbs"]:
         render_pbs_table(pbs, sports=sports, window_months=window_months, window_label=window_label)
