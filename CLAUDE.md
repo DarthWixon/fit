@@ -59,6 +59,7 @@ fit import ./run.gpx         # parse and store a GPX or TCX file
 fit garmin-sync --days 14    # pull recent activities from Garmin Connect (see "Garmin integration")
 fit plan --sport run --type intervals  # generate a workout interactively, push to the watch (see "Workout planner")
 fit history 10               # last N activities as a table (default 10)
+fit calendar                 # active days in the last 2 calendar months, marked on a text calendar
 fit trend pace                # ASCII sparkline for a given metric over time
 fit usage                    # short command cheat sheet (man-page substitute)
 ```
@@ -201,6 +202,12 @@ Key functions:
   `display.render_stats`'s "By type" table and the dashboard's sports-summary block
   (`display.render_sports_summary`) — the single source of truth for "by type"
   aggregation
+- `activity_calendar(activities: list[dict], reference: date, months: int = 2) -> list[dict]` —
+  month grids for the `months` calendar months ending with `reference`'s, oldest
+  first: `[{"label": "June 2026", "weeks": [[0, 1, ...], ...], "active_days":
+  [3, 5, 12]}, ...]`. `weeks` comes from stdlib `calendar.monthcalendar`
+  (Monday-first rows, 0 = padding cell); grid layout lives here so
+  `display.render_calendar` stays computation-free. Powers `fit calendar`
 - `rolling_average(activities: list[dict], metric: str, window: int) -> list[float]`
 - `fastest_split(points: list[dict], target_distance_km: float) -> dict | None` — best
   continuous segment of a given distance within one activity's (elapsed_seconds,
@@ -302,6 +309,9 @@ Key functions:
 - `render_fitness_reset(old_baseline: dict, new_baseline: dict) -> None` — prints
   old→new baseline values; `old_baseline == {}` (never initialized) gets a
   simpler "baseline set" message
+- `render_calendar(months: list[dict]) -> None` — `fit calendar`'s output: one
+  month grid per `compute.activity_calendar` dict, active days in bold green,
+  padding cells blank
 - `render_stats(activities: list[dict]) -> None`
 - `render_sparkline(data: list[float], label: str) -> None`
 - `render_trend(activities: list[dict], metric: str) -> None`

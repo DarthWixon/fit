@@ -51,6 +51,28 @@ def test_parse_timerange_rejects_bad_input():
         compute.parse_timerange("0d", date(2026, 7, 2))
 
 
+def test_activity_calendar_marks_days_and_spans_year_boundary():
+    activities = [
+        {"date": "2025-12-31", "type": "run"},
+        {"date": "2026-01-05", "type": "cycle"},
+        {"date": "2026-01-05", "type": "run"},  # same day, deduped
+        {"date": "2025-11-30", "type": "run"},  # outside the 2-month window
+    ]
+    months = compute.activity_calendar(activities, date(2026, 1, 15))
+    assert [m["label"] for m in months] == ["December 2025", "January 2026"]
+    assert months[0]["active_days"] == [31]
+    assert months[1]["active_days"] == [5]
+
+
+def test_activity_calendar_weeks_are_monday_first_with_padding():
+    months = compute.activity_calendar([], date(2026, 7, 3), months=1)
+    weeks = months[0]["weeks"]
+    # July 2026 starts on a Wednesday: two Monday/Tuesday padding cells.
+    assert weeks[0] == [0, 0, 1, 2, 3, 4, 5]
+    assert all(len(week) == 7 for week in weeks)
+    assert months[0]["active_days"] == []
+
+
 # --- fastest_split -------------------------------------------------------------
 
 

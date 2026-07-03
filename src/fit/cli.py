@@ -420,6 +420,12 @@ def history(n: int = typer.Argument(10)) -> None:
 
 
 @app.command()
+def calendar() -> None:
+    activities = _load_activities()
+    display.render_calendar(compute.activity_calendar(activities, date_cls.today()))
+
+
+@app.command()
 def usage() -> None:
     display.render_usage()
 

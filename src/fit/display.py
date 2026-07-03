@@ -29,6 +29,7 @@ def render_usage() -> None:
         "fit garmin-sync [--days N]                   pull recent activities from Garmin Connect\n"
         "fit plan --sport S --type T [--no-push]      generate a workout, save to ~/.fit/plans, push to Garmin\n"
         "fit history [N]                              last N activities (default 10)\n"
+        "fit calendar                                 active days in the last 2 calendar months\n"
         "fit trend <metric>                           sparkline for one metric over time\n"
         "fit usage                                    this screen\n"
         "\n"
@@ -147,6 +148,29 @@ def render_sports_summary(activities: list[dict]) -> None:
     activities — callers must not pre-filter by sport (pre-filtering by date
     is fine)."""
     _render_type_summary_table(activities, title="Sports summary")
+
+
+def render_calendar(months: list[dict]) -> None:
+    """months: compute.activity_calendar's output — one grid dict per month,
+    oldest first. Active days render bold green; padding cells (0) blank."""
+    for i, month in enumerate(months):
+        if i:
+            console.print()
+        console.print(f"[bold]{month['label']}[/bold]")
+        console.print("[dim]Mo Tu We Th Fr Sa Su[/dim]")
+        active = set(month["active_days"])
+        for week in month["weeks"]:
+            cells = []
+            for day in week:
+                if not day:
+                    cells.append("  ")
+                elif day in active:
+                    cells.append(f"[bold green]{day:2d}[/bold green]")
+                else:
+                    cells.append(f"{day:2d}")
+            # highlight=False: Rich's default number highlighter would paint
+            # every inactive day cyan, drowning out the active-day green.
+            console.print(" ".join(cells), highlight=False)
 
 
 def render_fitness_index(

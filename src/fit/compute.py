@@ -245,6 +245,38 @@ def summarize_by_type(activities: list[dict]) -> list[dict]:
     return summary
 
 
+def activity_calendar(
+    activities: list[dict], reference: date, months: int = 2
+) -> list[dict]:
+    """Month grids for the `months` calendar months ending with reference's,
+    oldest first. Returns [{"label": "June 2026", "weeks": [[0, 1, ...], ...],
+    "active_days": [3, 5, 12]}, ...] — weeks are Monday-first rows from
+    calendar.monthdayscalendar (0 = padding cell outside the month), and
+    active_days lists the days-of-month with at least one activity. Grid
+    layout lives here so display.py stays computation-free."""
+    active_by_month: dict[tuple[int, int], set[int]] = {}
+    for activity in activities:
+        activity_date = activity.get("date")
+        if not activity_date:
+            continue
+        parsed = date.fromisoformat(activity_date)
+        active_by_month.setdefault((parsed.year, parsed.month), set()).add(parsed.day)
+
+    grids = []
+    total_months = reference.year * 12 + (reference.month - 1)
+    for offset in range(months - 1, -1, -1):
+        year, month = divmod(total_months - offset, 12)
+        month += 1
+        grids.append(
+            {
+                "label": f"{calendar.month_name[month]} {year}",
+                "weeks": calendar.monthcalendar(year, month),
+                "active_days": sorted(active_by_month.get((year, month), set())),
+            }
+        )
+    return grids
+
+
 def rolling_average(activities: list[dict], metric: str, window: int) -> list[float]:
     sorted_activities = sorted(activities, key=lambda a: a.get("date", ""))
     values = [a.get(metric) for a in sorted_activities if a.get(metric) is not None]
