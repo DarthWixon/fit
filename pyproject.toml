@@ -15,13 +15,22 @@ dependencies = [
 
 [project.optional-dependencies]
 garmin = ["garminconnect>=0.2,<1.0"]
-dev = ["pytest>=8.0,<9.0"]
+dev = [
+    "pytest>=8.0,<9.0",
+    "black>=25.0,<26.0",
+    "isort>=6.0,<7.0",
+]
 
 [project.scripts]
 fit = "fit.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fit"]
+
+# black needs no [tool.black] section — its defaults (88-column lines, target
+# versions inferred from requires-python) are exactly what the codebase uses.
+[tool.isort]
+profile = "black"
 
 [tool.pytest.ini_options]
 # fitparse (pinned <2.0) uses deprecated datetime APIs internally; not ours to fix.
