@@ -61,3 +61,16 @@ def test_read_activities_warns_on_corrupt_file(tmp_path, monkeypatch):
     activities, warnings = storage.read_activities_with_warnings()
     assert activities == []
     assert len(warnings) == 1 and "bad.json" in warnings[0]
+
+
+def test_plan_write_read_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIT_DATA_DIR", str(tmp_path))
+    storage.ensure_data_dir()
+    assert storage.plans_dir().is_dir()
+
+    plan = {"id": "2026-07-03T09:00:00", "sport": "run", "workout_type": "intervals",
+            "params": {"reps": 6}, "workout_name": "Run intervals", "payload": {}}
+    storage.write_plan(plan)
+    (storage.plans_dir() / "bad.json").write_text("{not json")
+
+    assert storage.read_plans() == [plan]

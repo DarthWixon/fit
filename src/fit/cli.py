@@ -4,12 +4,13 @@ compute -> call display. Nothing else.
 
 import tempfile
 from datetime import date as date_cls
+from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
 import typer
 
-from fit import compute, display, garmin, importers, storage
+from fit import compute, display, garmin, importers, planner, storage
 
 app = typer.Typer()
 
@@ -304,6 +305,69 @@ def garmin_sync(
     finally:
         for tmp_path in tmp_paths:
             Path(tmp_path).unlink(missing_ok=True)
+
+
+def _prompt_params(specs: list[dict]) -> dict:
+    """typer.prompt each planner spec (Enter accepts the shown default),
+    re-prompting on a ValueError from the spec's parser. A spec with a
+    "derive" callable (see planner.recommend_defaults) gets its default
+    computed at prompt time from the answers collected so far."""
+    params = {}
+    for spec in specs:
+        default = spec["derive"](params) if "derive" in spec else spec["default"]
+        while True:
+            raw = typer.prompt(spec["label"], default=str(default))
+            try:
+                params[spec["key"]] = spec["parse"](str(raw))
+                break
+            except ValueError as exc:
+                typer.echo(f"invalid value: {exc}", err=True)
+    return params
+
+
+@app.command()
+def plan(
+    sport: str = typer.Option(..., "--sport", help="run | swim | cycle"),
+    type: str = typer.Option(
+        ..., "--type", help="intervals | tempo | hills | baseline (availability varies by sport)"
+    ),
+    push: bool = typer.Option(
+        True, "--push/--no-push", help="Push to Garmin Connect after saving locally"
+    ),
+) -> None:
+    try:
+        specs = planner.workout_params(sport, type)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    activities = _load_activities()
+    recs = planner.recommend_defaults(sport, type, activities, storage.read_plans(), date_cls.today())
+    for spec in specs:
+        rec = recs.get(spec["key"])
+        if rec and "derive" in rec:
+            spec["derive"] = rec["derive"]
+        elif rec:
+            spec["default"] = rec["default"]
+    display.render_plan_recommendations(recs)
+
+    params = _prompt_params(specs)
+    created = datetime.now().isoformat(timespec="seconds")
+    plan_dict = planner.build_plan(sport, type, params, created)
+    storage.write_plan(plan_dict)
+    display.render_plan_saved(plan_dict, planner.describe_plan(plan_dict))
+
+    if not push:
+        return
+    try:
+        client = garmin.login()
+    except garmin.GarminAuthError as exc:
+        typer.echo(f"{exc}\nThe plan is saved locally — re-run with --no-push to skip Garmin.", err=True)
+        raise typer.Exit(code=1)
+    response = garmin.push_workout(client, plan_dict["payload"])
+    plan_dict["garmin_workout_id"] = response.get("workoutId")
+    storage.write_plan(plan_dict)
+    display.render_plan_pushed(plan_dict)
 
 
 @app.command()

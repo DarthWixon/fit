@@ -66,6 +66,13 @@ def login():
     return client
 
 
+def push_workout(client, workout_payload: dict) -> dict:
+    """Upload one workout-service payload to Garmin Connect. Returns the raw
+    response dict (contains "workoutId"). The payload is built by planner.py
+    — this module never shapes workout dicts itself."""
+    return client.upload_workout(workout_payload)
+
+
 def list_recent_activities(client, start_date: date, end_date: date) -> list[dict]:
     """Raw Garmin Connect activity summaries (activityId, activityType,
     startTimeLocal, ...) in [start_date, end_date] - NOT yet in fit's

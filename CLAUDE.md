@@ -56,6 +56,8 @@ fit stats                    # breakdown, accepts --week / --month / --year
 fit fitness                  # current fitness index (baseline 100) + trend sparkline
 fit fitness-reset            # re-anchor the fitness index baseline to today
 fit import ./run.gpx         # parse and store a GPX or TCX file
+fit garmin-sync --days 14    # pull recent activities from Garmin Connect (see "Garmin integration")
+fit plan --sport run --type intervals  # generate a workout interactively, push to the watch (see "Workout planner")
 fit history 10               # last N activities as a table (default 10)
 fit trend pace                # ASCII sparkline for a given metric over time
 fit usage                    # short command cheat sheet (man-page substitute)
@@ -78,13 +80,11 @@ display in sequence. No business logic lives in `cli.py`.
 │   └── ...
 ├── config                   ← plain-text key=value, hand-editable (see "Config defaults")
 ├── pbs.json                 ← cached personal bests (recomputed when stale)
+├── plans/                   ← generated workouts (fit plan), one JSON file each (see "Workout planner")
+│   └── 2026-07-03T09:15:02.json
 └── gpx/                     ← original imported GPX/TCX files kept for reference
     └── 2024-01-17T07:15:00.gpx
 ```
-
-(A `plans/` folder for generated workout plans will be added with the planner
-stretch feature — see "Stretch features". It does not exist yet, and neither do
-its storage helpers.)
 
 ### One file per activity
 
@@ -137,7 +137,7 @@ The **only** module that touches the filesystem. Pure I/O, no logic.
 Key functions:
 - `resolve_data_dir() -> Path`
 - `ensure_data_dir() -> None` — creates folder structure on first run
-- `activities_dir() -> Path`, `config_path() -> Path`, `pbs_path() -> Path`, `fitness_path() -> Path`, `gpx_dir() -> Path`
+- `activities_dir() -> Path`, `config_path() -> Path`, `pbs_path() -> Path`, `fitness_path() -> Path`, `gpx_dir() -> Path`, `plans_dir() -> Path`
 - `read_activities_with_warnings() -> tuple[list[dict], list[str]]` — reads all
   activity files, skipping any that fail to parse, and returns one warning string
   per skipped file instead of printing; `cli.py` passes these to
@@ -152,10 +152,15 @@ Key functions:
 - `read_fitness_baseline() -> dict` — `{}` if never initialized; see "Fitness index"
 - `write_fitness_baseline(baseline: dict) -> None`
 - `save_gpx_file(source_path: str, activity_id: str) -> Path`
+- `write_plan(plan: dict) -> None` — writes single plan file atomically, named by
+  the plan's `id` (mirrors `write_activity`)
+- `read_plans() -> list[dict]` — all saved plans, silently skipping unparseable
+  files (unlike `read_activities_with_warnings`, no warnings: a corrupt plan just
+  drops out of the rep-progression defaults, the only reason plans are read back)
 
 Storage functions are added when a caller needs them, not speculatively — an
 earlier draft carried read/edit/delete/plan helpers with no callers, and they
-were removed. When the planner or an edit command lands, add its helpers then.
+were removed. When an edit command lands, add its helpers then.
 
 Rule: if there is a conditional or any arithmetic in `storage.py`, it belongs in
 `compute.py` instead.
@@ -308,6 +313,14 @@ Key functions:
   warning strings (e.g. corrupt activity files) as plain `warning: ...` lines
 - `render_usage() -> None` — static one-screen command cheat sheet for `fit
   usage`; no computation, no file I/O
+- `render_plan_recommendations(recs: dict) -> None` — dim "Recommended from your
+  history" lines from `planner.recommend_defaults`' `why` strings; prints nothing
+  when `recs` is empty
+- `render_plan_saved(plan: dict, step_lines: list[str]) -> None` — workout name +
+  `planner.describe_plan`'s step lines + saved-file path (pace/power formatting
+  happens in planner, not here)
+- `render_plan_pushed(plan: dict) -> None` — one-line Garmin push confirmation
+  with the workout id
 
 ### `importers.py`
 Parses external formats and returns a correctly-shaped activity dict. Uses stdlib
@@ -365,6 +378,40 @@ unrecognized *string* sport already gets via `FIT_SPORT_MAP`. Extend
 `FIT_SPORT_CODE_MAP` if a future fixture surfaces another undecoded code
 worth naming.
 
+### `planner.py`
+Pure functions building Garmin Connect workout-service payloads as plain dicts.
+No file I/O, no network, no garminconnect import, no typer — cli.py wires
+prompts, storage, and the push around it. May import `compute` (pure → pure).
+See "Workout planner" for the feature-level design and payload schema notes.
+
+Key functions:
+- `parse_pace(text: str) -> int` — `"4:30"` → 270 seconds (per km or per 100m,
+  caller's unit); strict m:ss, raises `ValueError` otherwise
+- `parse_duration(text: str) -> int` — `"90"` → 90, `"2:00"` → 120; raises `ValueError`
+- `pace_zone_mps(seconds_per_km, tolerance_s) -> tuple[float, float]` /
+  `swim_pace_zone_mps(seconds_per_100m, tolerance_s)` — (low, high) m/s bounds for
+  a pace ± tolerance band
+- `workout_params(sport: str, workout_type: str) -> list[dict]` — prompt specs
+  (`{"key", "label", "default", "parse"}`) for one sport/type combo; raises
+  `ValueError` listing valid combos — the single validation point for `--sport`/`--type`
+- `recommend_defaults(sport, workout_type, activities, previous_plans, reference: date) -> dict` —
+  `{key: {"default": ..., "why": ...}}` history-derived prompt defaults (see
+  "Workout planner"); keys with nothing to derive from are absent. Run intervals'
+  target_pace carries a `"derive"` callable instead of `"default"` (its value
+  depends on the not-yet-prompted rep distance)
+- `build_plan(sport, workout_type, params, created: str) -> dict` — the saved-plan
+  dict: `{"id", "sport", "workout_type", "params", "workout_name", "payload"}`,
+  where `payload` is the complete workout-service dict for `garmin.push_workout`
+- `describe_plan(plan: dict) -> list[str]` — human step lines ("6 x 800m @
+  4:20–4:40/km, 2:00 recovery") so `display.render_plan_saved` stays
+  computation-free (same split as `detect_new_pbs` → `render_new_pb_messages`)
+
+Key constants: `SPORT_TYPES` / `WORKOUT_TYPES` (valid combos), the target-band
+tolerances (`PACE_TOLERANCE_S_PER_KM = 10`, `SWIM_PACE_TOLERANCE_S_PER_100M = 5`,
+`POWER_TOLERANCE_W = 10`), and the recommendation knobs (`RECENT_MONTHS = 6`,
+`TEMPO_FACTOR = 1.07`, `REPS_CAP = 10`, `SHORT_REP_MAX_M = 1000` /
+`SHORT_REP_FACTOR = 0.97` — see "Workout planner" for the short-rep pace discount).
+
 ### `cli.py`
 Typer app. One function per subcommand. Each function: call storage → call compute → call
 display. Nothing else.
@@ -379,6 +426,12 @@ functions, never each other):
 - `_fitness_snapshot(activities, today, baseline, window=None) -> dict` — the
   `{"current", "baseline_date", "weekly"}` dict `render_dashboard`/`render_fitness_index`
   consume; callers fetch `baseline` via `_get_or_init_fitness_baseline` first
+- `_prompt_params(specs: list[dict]) -> dict` — `typer.prompt`s each
+  `planner.workout_params` spec (Enter accepts the shown default), re-prompting
+  on `ValueError` from the spec's parser; a spec carrying a `"derive"` callable
+  (see `planner.recommend_defaults`) gets its default computed at prompt time
+  from the answers so far. The only interactive prompting in `cli.py` (the other
+  is `garmin.login`'s credential flow)
 
 ---
 
@@ -618,11 +671,14 @@ Consumers:
 
 ## Stretch features (not yet implemented)
 
-- `planner.py` — structured workout generation (intervals, tempo runs, long rides)
-  following a periodised plan. Rule-based initially, adaptive later.
+- Multi-week periodised training plans built on top of `fit plan` — adaptive
+  progressions across sessions, calendar scheduling (`client.schedule_workout`
+  exists in the garminconnect library, unused so far).
+- USB workout delivery — encode a workout .FIT file (needs a FIT *encoder*
+  dependency, e.g. `fit-tool`; fitparse only reads) and copy it to a mounted
+  watch's `GARMIN/NEWFILES/`, for pushing without a Garmin Connect login.
 
-Do not design current modules around these features. They will be added as separate
-modules when the MVP is stable.
+Do not design current modules around these features.
 
 ---
 
@@ -652,12 +708,103 @@ Key functions:
   Garmin Connect activity summaries in range, not yet in fit's activity shape.
 - `download_activity_fit(client, garmin_activity_id) -> bytes` — raw FIT bytes
   for one activity; unwraps Garmin's zip-wrapped "original" export format.
+- `push_workout(client, workout_payload: dict) -> dict` — uploads one
+  workout-service payload (built by `planner.py` — this module never shapes
+  workout dicts itself) and returns the raw response dict (contains
+  `"workoutId"`). The one garmin.py function that *sends* rather than fetches;
+  used by `fit plan` (see "Workout planner").
 
 `fit garmin-sync --days N` (default 14, `cli.py`) logs in, lists recent
 activities, downloads each as FIT bytes to a temp file, imports it via
 `importers.import_fit`, and hands the results to the same `_import_and_report`
 tail every other import path shares (dedupe, write, save original, print new
 PBs, recompute PB cache). Temp files are cleaned up in a `finally` block.
+
+---
+
+## Workout planner
+
+`fit plan --sport run --type intervals [--no-push]` generates a structured
+workout interactively (typer prompts, Enter accepts each default), saves it to
+`~/.fit/plans/<created-timestamp>.json`, and pushes it to Garmin Connect via
+`garmin.push_workout` — the workout appears under Training > Workouts on the
+watch's next sync. Delivery is Connect-only: no route data, no calendar
+scheduling, no USB path (all deliberately deferred — see "Stretch features").
+
+**Sport/type matrix** (`planner.WORKOUT_TYPES`): run has `intervals` (N × distance
+reps at a pace target with timed recoveries), `tempo` (sustained block at pace),
+`hills` (N × timed uphill efforts — deliberately *no* pace target, since gradient
+makes pace meaningless), and `baseline` (Runna-style benchmark: best-effort fixed
+distance, open target, used to re-measure current pace). swim has `intervals`
+(distance reps with timed rest steps, optional pace-per-100m target). cycle has
+`intervals` (timed blocks at a power target, 2:1 work:rest defaults), `hills`, and
+`baseline` (FTP-test shape: sustained best effort, open target). Every workout is
+warmup → main → cooldown.
+
+**History-derived defaults**: `planner.recommend_defaults` derives prompt defaults
+from the last `RECENT_MONTHS` (6) of activities where possible, each with a `why`
+provenance string the CLI prints before prompting. The derivations (standard
+public-training-plan practice — Daniels/McMillan paces from a recent race, swim
+CSS, bike FTP):
+- run interval pace = 5k race pace, from the best recent 5k —
+  `min(fastest_5k_seconds, fastest_5k_split_seconds)` over the windowed
+  activities via `compute.all_personal_bests`; falls back to the fastest average
+  pace of any recent ≥3 km run. Reps of `SHORT_REP_MAX_M` (1000) or less get a
+  `SHORT_REP_FACTOR` (0.97, ~3% faster) discount: the reference is a *training*
+  best, not a race result, so it understates race ability, and the discount puts
+  short reps back inside Daniels' I-pace bracket (3k–5k race pace) instead of
+  below its slow end. Because the rep distance isn't known until mid-prompt, this
+  rec uses `"derive"` (a callable taking the params answered so far, returning
+  the default string) instead of a static `"default"` — `cli._prompt_params`
+  resolves it at prompt time, and `render_plan_recommendations` prints just its
+  `why` line (the concrete value appears in the prompt once rep distance is known)
+- run tempo pace = 5k pace × `TEMPO_FACTOR` (1.07 — Daniels "T" ≈ 7–8% slower
+  than "I"/5k pace), rounded to 5 s
+- swim interval pace = CSS per 100m: two-point critical-speed model
+  `(T_1k − T_500m) / 5` over the best recent 500m/1k times (same math as the
+  classic 400/200 CSS test, using the split distances fit already stores); falls
+  back to best recent 1k pace, then median recent swim pace
+- cycle interval watts = max `avg_power` among recent ≥20-min rides (coarse FTP
+  proxy — only session averages are stored; "coarse, not perfect", like the
+  fitness index), rounded to 5 W
+- reps = one more than the last saved plan of the same sport+type (capped at
+  `REPS_CAP` = 10) — the standard build-by-one progression; this is the only
+  consumer of `storage.read_plans()`
+
+**Payload schema**: `planner.py` builds the Garmin Connect workout-service JSON
+as plain dicts, replicating the schema of the reference models in garminconnect
+0.3.6's `workout.py` rather than importing that module (it needs the optional
+pydantic extra, which fit deliberately doesn't carry — "no Pydantic models"
+convention). Sport ids: running=1/cycling=2/swimming=4; step types
+warmup=1/cooldown=2/interval=3/recovery=4/rest=5/repeat=6; end conditions
+time=2 (seconds)/distance=3 (meters)/iterations=7; targets no.target=1/
+power.zone=2 (watts)/pace.zone=6 (m/s, low bound first as
+`targetValueOne`/`targetValueTwo`). Repeats are `RepeatGroupDTO` steps with
+nested `workoutSteps`; absent fields are omitted, not null. **Not yet verified
+against a live upload** — the target-value field names and step numbering follow
+community-consensus workout-service JSON, not the installed models (which never
+set target values). After the first real push, diff `client.get_workout_by_id()`
+against a generated payload and update the note in `planner.py`'s docstring.
+
+**Save-before-push is deliberate**: the plan file is written before `garmin.login`
+is attempted, so a failed push (no `garminconnect` installed, bad credentials,
+network down) never loses the generated workout. On success the Garmin
+`workoutId` is written back into the plan file as `garmin_workout_id`.
+
+Plan file shape (`plans/<id>.json`):
+
+```python
+{
+    "id": "2026-07-03T09:15:02",       # creation timestamp, filename key
+    "sport": "run",
+    "workout_type": "intervals",
+    "params": {"warmup_minutes": 10, "reps": 6, "rep_distance_m": 800,
+                "target_pace": 268, "recovery": 120, "cooldown_minutes": 10},
+    "workout_name": "Run intervals 6x800m @ 4:28/km",
+    "payload": {...},                   # full Garmin workout-service dict
+    "garmin_workout_id": 123456789      # present only after a successful push
+}
+```
 
 ---
 
@@ -671,9 +818,9 @@ PBs, recompute PB cache). Temp files are cleaned up in a `finally` block.
 - Atomic writes (`os.replace`) for any full-file overwrite.
 - `FIT_DATA_DIR` env var overrides the data directory — useful for tests and alternate locations.
 - `tests/` holds a small, deliberately non-exhaustive pytest suite covering the
-  subtlest pure functions (splits, PBs, fitness EWMA, config parsing, importers).
-  Run `.venv/bin/pytest` after any change to `compute.py`, `storage.py`, or
-  `importers.py`.
+  subtlest pure functions (splits, PBs, fitness EWMA, config parsing, importers,
+  workout payloads/recommendations). Run `.venv/bin/pytest` after any change to
+  `compute.py`, `storage.py`, `importers.py`, or `planner.py`.
 - Everything committed under `examples/` and `tests/data/` is synthetic —
   generated fake data, no real recordings. Real personal data never enters the
   repo: keep it outside the project dir (e.g. `~/fit-dev-data/`) and point

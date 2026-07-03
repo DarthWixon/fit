@@ -87,8 +87,12 @@ def gpx_dir() -> Path:
     return resolve_data_dir() / "gpx"
 
 
+def plans_dir() -> Path:
+    return resolve_data_dir() / "plans"
+
+
 def ensure_data_dir() -> None:
-    for path in (activities_dir(), gpx_dir()):
+    for path in (activities_dir(), gpx_dir(), plans_dir()):
         path.mkdir(parents=True, exist_ok=True)
     if not config_path().exists():
         _write_atomic(config_path(), _serialize_config_text(DEFAULTS))
@@ -141,6 +145,24 @@ def write_activity(activity: dict) -> None:
 
 def activity_exists(activity_id: str) -> bool:
     return (activities_dir() / f"{activity_id}.json").exists()
+
+
+def write_plan(plan: dict) -> None:
+    _write_json_atomic(plans_dir() / f"{plan['id']}.json", plan)
+
+
+def read_plans() -> list[dict]:
+    """All saved plan dicts, silently skipping unparseable files — a corrupt
+    plan just drops out of the rep-progression defaults, which is the only
+    reason plans are read back."""
+    plans = []
+    for file_path in sorted(plans_dir().glob("*.json")):
+        try:
+            with open(file_path) as f:
+                plans.append(json.load(f))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return plans
 
 
 def _parse_config_text(text: str) -> dict:

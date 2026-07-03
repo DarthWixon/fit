@@ -27,6 +27,7 @@ def render_usage() -> None:
         "fit fitness-reset                            re-anchor fitness baseline to today\n"
         "fit import <path>                            import GPX/TCX/FIT file/folder or Strava export\n"
         "fit garmin-sync [--days N]                   pull recent activities from Garmin Connect\n"
+        "fit plan --sport S --type T [--no-push]      generate a workout, save to ~/.fit/plans, push to Garmin\n"
         "fit history [N]                              last N activities (default 10)\n"
         "fit trend <metric>                           sparkline for one metric over time\n"
         "fit usage                                    this screen\n"
@@ -377,3 +378,32 @@ def render_new_pb_messages(new_pbs: list[dict]) -> None:
             )
         elif parsed["category"] == "elevation":
             console.print(f"New most elevation gain: {value:.0f}m")
+
+
+def render_plan_recommendations(recs: dict) -> None:
+    """recs: planner.recommend_defaults' output — {key: {"default", "why"}}.
+    Prints nothing when there was no history to derive from."""
+    if not recs:
+        return
+    console.print("[dim]Recommended from your history:[/dim]")
+    for rec in recs.values():
+        if "default" in rec:
+            console.print(f"[dim]  {rec['default']} — {rec['why']}[/dim]")
+        else:  # "derive" recs resolve in the prompt itself; just show why
+            console.print(f"[dim]  {rec['why']}[/dim]")
+
+
+def render_plan_saved(plan: dict, step_lines: list[str]) -> None:
+    """step_lines: planner.describe_plan's output — one line per top-level
+    step (pace/power formatting happens there, not here)."""
+    console.print(f"[bold]{plan['workout_name']}[/bold]")
+    for line in step_lines:
+        console.print(f"  {line}")
+    console.print(f"Saved: plans/{plan['id']}.json")
+
+
+def render_plan_pushed(plan: dict) -> None:
+    console.print(
+        f"Pushed to Garmin Connect (workout id {plan.get('garmin_workout_id')}) — "
+        "it will appear under Training > Workouts on the watch's next sync"
+    )

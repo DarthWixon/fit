@@ -27,7 +27,8 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 ```
 
-Add the Garmin Connect sync dependency only if you use `fit garmin-sync`:
+Add the Garmin Connect dependency only if you use `fit garmin-sync` or push
+workouts to your watch with `fit plan`:
 
 ```bash
 uv pip install -e '.[garmin]'
@@ -39,7 +40,36 @@ uv pip install -e '.[garmin]'
 fit usage        # command cheat sheet
 fit import ./run.gpx
 fit dashboard
+fit plan --sport run --type intervals   # generate a workout, push to your watch
 ```
+
+`fit plan` prompts for the workout's parameters (reps, target pace, recovery, …)
+with defaults derived from your recent training where possible, saves the workout
+to `~/.fit/plans/`, and uploads it to Garmin Connect so it appears under
+Training > Workouts on the watch's next sync. Use `--no-push` to generate and
+save without a Garmin login (works without the `garmin` extra installed).
+
+Supported `--sport` / `--type` combinations:
+
+- **run** — `intervals`, `tempo`, `hills`, `baseline` (a best-effort benchmark
+  test to re-measure your pace)
+- **swim** — `intervals`
+- **cycle** — `intervals`, `hills`, `baseline` (an FTP-test shape)
+
+Prompt defaults are calculated from your last six months of activities where
+possible — each one is just a suggestion; press Enter to accept or type your own:
+
+- run interval pace: your best recent 5k (a whole run or the fastest 5k split
+  inside a longer one), read as 5k race pace — 3% faster when reps are 1km or
+  shorter
+- run tempo pace: ~7% slower than that 5k pace
+- swim interval pace: critical swim speed estimated from your best recent 500m
+  and 1k times (falling back to 1k pace, then your median swim pace)
+- cycle interval power: the highest average power among your recent rides of 20+
+  minutes
+- reps: one more than your last plan of the same type, capped at 10
+
+With no matching history, sensible static defaults are shown instead.
 
 Data lives in `~/.fit/`. Point the app somewhere else with the `FIT_DATA_DIR`
 environment variable — useful for development so you never touch real data:
