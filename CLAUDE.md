@@ -811,6 +811,8 @@ Plan file shape (`plans/<id>.json`):
 ## Conventions
 
 - Functions over classes, always.
+- British English in comments, docstrings, and user-facing text (e.g. "summarise",
+  "colour"); title case for table/section titles in `display.py` output.
 - `storage.py` is the filesystem boundary. Nothing outside it opens files.
 - `compute.py` is pure. No I/O, no side effects.
 - Use `.get()` for all activity dict field access in case older activities lack the field.
