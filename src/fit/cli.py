@@ -428,8 +428,3 @@ def calendar() -> None:
 @app.command()
 def usage() -> None:
     display.render_usage()
-
-
-@app.command()
-def trend(metric: str) -> None:
-    display.render_trend(_load_activities(), metric)

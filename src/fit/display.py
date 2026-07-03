@@ -30,7 +30,6 @@ def render_usage() -> None:
         "fit plan --sport S --type T [--no-push]      generate a workout, save to ~/.fit/plans, push to Garmin\n"
         "fit history [N]                              last N activities (default 10)\n"
         "fit calendar                                 active days in the last 2 calendar months\n"
-        "fit trend <metric>                           sparkline for one metric over time\n"
         "fit usage                                    this screen\n"
         "\n"
         "Data dir: ~/.fit  (override: FIT_DATA_DIR=path fit ...)\n"
@@ -229,18 +228,6 @@ def render_stats(activities: list[dict]) -> None:
 
     weekly = compute.weekly_volumes(activities)
     render_sparkline([w["distance_km"] for w in weekly], "Weekly volume")
-
-
-def render_trend(activities: list[dict], metric: str) -> None:
-    values = compute.rolling_average(activities, metric, window=1)
-    if not values:
-        console.print(f"[dim]No data for metric '{metric}'.[/dim]")
-        return
-
-    render_sparkline(values, metric)
-    console.print(
-        f"latest: {values[-1]:.1f}  min: {min(values):.1f}  max: {max(values):.1f}"
-    )
 
 
 def render_dashboard(

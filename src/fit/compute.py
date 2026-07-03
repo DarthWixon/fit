@@ -277,17 +277,6 @@ def activity_calendar(
     return grids
 
 
-def rolling_average(activities: list[dict], metric: str, window: int) -> list[float]:
-    sorted_activities = sorted(activities, key=lambda a: a.get("date", ""))
-    values = [a.get(metric) for a in sorted_activities if a.get(metric) is not None]
-
-    result = []
-    for i in range(len(values)):
-        window_values = values[max(0, i - window + 1) : i + 1]
-        result.append(sum(window_values) / len(window_values))
-    return result
-
-
 def _dedupe_by_time(points: list[dict]) -> list[dict]:
     """Collapse consecutive samples sharing an elapsed_seconds value, keeping
     the last one."""

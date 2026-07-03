@@ -60,7 +60,6 @@ fit garmin-sync --days 14    # pull recent activities from Garmin Connect (see "
 fit plan --sport run --type intervals  # generate a workout interactively, push to the watch (see "Workout planner")
 fit history 10               # last N activities as a table (default 10)
 fit calendar                 # active days in the last 2 calendar months, marked on a text calendar
-fit trend pace                # ASCII sparkline for a given metric over time
 fit usage                    # short command cheat sheet (man-page substitute)
 ```
 
@@ -208,7 +207,6 @@ Key functions:
   [3, 5, 12]}, ...]`. `weeks` comes from stdlib `calendar.monthcalendar`
   (Monday-first rows, 0 = padding cell); grid layout lives here so
   `display.render_calendar` stays computation-free. Powers `fit calendar`
-- `rolling_average(activities: list[dict], metric: str, window: int) -> list[float]`
 - `fastest_split(points: list[dict], target_distance_km: float) -> dict | None` — best
   continuous segment of a given distance within one activity's (elapsed_seconds,
   distance_km) point stream; see "Split PBs" below
@@ -314,7 +312,6 @@ Key functions:
   padding cells blank
 - `render_stats(activities: list[dict]) -> None`
 - `render_sparkline(data: list[float], label: str) -> None`
-- `render_trend(activities: list[dict], metric: str) -> None`
 - `render_new_pb_messages(new_pbs: list[dict]) -> None` — formats
   `compute.detect_new_pbs()`'s structured output into "New fastest 5k: 21:40"-style
   lines; uses its own mm:ss colon formatter (`_format_seconds_colon`), deliberately
@@ -659,7 +656,7 @@ Consumers:
 - `dashboard_weeks` — how many recent weeks the dashboard's weekly-volume and
   fitness-trend sparklines show (0 = all weeks). Applied as a final display-time
   slice of the (already sorted) weekly series in `display.render_dashboard` only
-  — the standalone `fit fitness`/`fit trend` deep-dive views stay full-history.
+  — the standalone `fit fitness` deep-dive view stays full-history.
   There is deliberately no CLI flag for this. `--timerange` takes priority: when
   it's driving the dashboard window, this cap is skipped so the explicit flag's
   range wins (same precedence as `pbs_window_months`).
