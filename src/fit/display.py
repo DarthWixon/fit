@@ -107,7 +107,7 @@ def render_pbs_table(
     if window_label:
         title = f"Personal Bests ({window_label})"
     elif window_months:
-        title = f"Personal Bests (Last {window_months} Uonths)"
+        title = f"Personal Bests (Last {window_months} Months)"
     else:
         title = "Personal Bests"
     table = Table(title=title)
