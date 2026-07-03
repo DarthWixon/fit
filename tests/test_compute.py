@@ -6,8 +6,8 @@ import pytest
 
 from fit import compute
 
-
 # --- calc_pace -----------------------------------------------------------------
+
 
 def test_calc_pace_run_per_km():
     assert compute.calc_pace(10.0, 3000, "run") == "5:00/km"
@@ -28,13 +28,20 @@ def test_calc_pace_no_distance_type_and_zero_distance():
 
 # --- date windows --------------------------------------------------------------
 
+
 def test_months_ago_clamps_day_to_month_end():
     assert compute.months_ago(date(2024, 3, 31), 1) == "2024-02-29"
 
 
 def test_parse_timerange_days_and_months():
-    assert compute.parse_timerange("10d", date(2026, 7, 2)) == ("2026-06-22", "2026-07-02")
-    assert compute.parse_timerange("3m", date(2026, 7, 2)) == ("2026-04-02", "2026-07-02")
+    assert compute.parse_timerange("10d", date(2026, 7, 2)) == (
+        "2026-06-22",
+        "2026-07-02",
+    )
+    assert compute.parse_timerange("3m", date(2026, 7, 2)) == (
+        "2026-04-02",
+        "2026-07-02",
+    )
 
 
 def test_parse_timerange_rejects_bad_input():
@@ -45,6 +52,7 @@ def test_parse_timerange_rejects_bad_input():
 
 
 # --- fastest_split -------------------------------------------------------------
+
 
 def _stream(pairs):
     return [{"elapsed_seconds": t, "distance_km": d} for t, d in pairs]
@@ -78,15 +86,21 @@ def test_fastest_split_dedupes_equal_timestamps():
 
 RUNS = [
     {"type": "run", "date": "2024-01-01", "distance_km": 5.1, "duration_seconds": 1500},
-    {"type": "run", "date": "2024-02-01", "distance_km": 10.5, "duration_seconds": 3300,
-     "elevation_gain_m": 120, "splits": {"5k_seconds": 1400}},
+    {
+        "type": "run",
+        "date": "2024-02-01",
+        "distance_km": 10.5,
+        "duration_seconds": 3300,
+        "elevation_gain_m": 120,
+        "splits": {"5k_seconds": 1400},
+    },
 ]
 
 
 def test_all_personal_bests_milestone_split_and_longest():
     pbs = compute.all_personal_bests(RUNS)["run"]
-    assert pbs["fastest_5k_seconds"] == 1500          # dedicated ~5k activity
-    assert pbs["fastest_5k_split_seconds"] == 1400    # best 5k inside any run
+    assert pbs["fastest_5k_seconds"] == 1500  # dedicated ~5k activity
+    assert pbs["fastest_5k_split_seconds"] == 1400  # best 5k inside any run
     assert pbs["longest_distance_km"] == 10.5
     assert pbs["most_elevation_gain_m"] == 120
 
@@ -94,7 +108,7 @@ def test_all_personal_bests_milestone_split_and_longest():
 def test_best_pb_per_label_prefers_faster_split():
     pbs = compute.all_personal_bests(RUNS)["run"]
     collapsed = compute.best_pb_per_label(pbs)
-    assert collapsed["fastest_5k_seconds"] == 1400   # split (1400) beat dedicated (1500)
+    assert collapsed["fastest_5k_seconds"] == 1400  # split (1400) beat dedicated (1500)
     assert collapsed["fastest_5k_date"] == "2024-02-01"
     assert "fastest_5k_split_seconds" not in collapsed
     assert "fastest_5k_split_date" not in collapsed
@@ -115,7 +129,10 @@ def test_best_pb_per_label_only_one_present():
     milestone_only = {"fastest_10k_seconds": 2900, "fastest_10k_date": "2024-03-01"}
     assert compute.best_pb_per_label(milestone_only) == milestone_only
 
-    split_only = {"fastest_10k_split_seconds": 2800, "fastest_10k_split_date": "2024-04-01"}
+    split_only = {
+        "fastest_10k_split_seconds": 2800,
+        "fastest_10k_split_date": "2024-04-01",
+    }
     assert compute.best_pb_per_label(split_only) == {
         "fastest_10k_seconds": 2800,
         "fastest_10k_date": "2024-04-01",
@@ -132,18 +149,28 @@ def test_best_pb_per_label_passes_through_non_time_keys():
 
 
 def test_all_personal_bests_no_distance_type_skips_longest():
-    squash = [{"type": "squash", "date": "2024-01-01", "distance_km": 0.07,
-               "duration_seconds": 3600}]
+    squash = [
+        {
+            "type": "squash",
+            "date": "2024-01-01",
+            "distance_km": 0.07,
+            "duration_seconds": 3600,
+        }
+    ]
     assert "longest_distance_km" not in compute.all_personal_bests(squash)["squash"]
 
 
 def test_detect_new_pbs_direction_of_comparison():
     current = {"run": {"fastest_5k_seconds": 1500, "longest_distance_km": 10.5}}
-    faster_5k = {"type": "run", "date": "2024-03-01", "distance_km": 5.0,
-                 "duration_seconds": 1450}
+    faster_5k = {
+        "type": "run",
+        "date": "2024-03-01",
+        "distance_km": 5.0,
+        "duration_seconds": 1450,
+    }
     broken = {pb["key"] for pb in compute.detect_new_pbs(faster_5k, current)}
-    assert "fastest_5k_seconds" in broken          # lower seconds wins
-    assert "longest_distance_km" not in broken     # 5.0 < 10.5
+    assert "fastest_5k_seconds" in broken  # lower seconds wins
+    assert "longest_distance_km" not in broken  # 5.0 < 10.5
 
     slower_5k = dict(faster_5k, duration_seconds=1600)
     assert not compute.detect_new_pbs(slower_5k, current)
@@ -151,19 +178,26 @@ def test_detect_new_pbs_direction_of_comparison():
 
 # --- fitness index -------------------------------------------------------------
 
+
 def test_fitness_ewma_seeds_first_day_and_decays():
-    activities = [{"type": "hike", "date": "2024-01-01", "distance_km": 5.0,
-                   "duration_seconds": 3600}]  # flat 6.0 MET * 1h = 6.0 load
+    activities = [
+        {
+            "type": "hike",
+            "date": "2024-01-01",
+            "distance_km": 5.0,
+            "duration_seconds": 3600,
+        }
+    ]  # flat 6.0 MET * 1h = 6.0 load
     series = compute.fitness_ewma_daily(activities, date(2024, 1, 3))
-    assert series[0]["value"] == 6.0                       # seeded, no ramp-up
+    assert series[0]["value"] == 6.0  # seeded, no ramp-up
     assert series[1]["value"] == pytest.approx(6.0 * (1 - 1 / 42))
-    assert series[2]["value"] < series[1]["value"]         # rest days decay
+    assert series[2]["value"] < series[1]["value"]  # rest days decay
 
 
 def test_activity_load_hr_multiplier_clamped():
     activity = {"type": "run", "distance_km": 10.0, "duration_seconds": 3000}
     base = compute.activity_load(activity, {})
-    assert base == pytest.approx(11.0 * 3000 / 3600)       # 300s/km band, no HR
+    assert base == pytest.approx(11.0 * 3000 / 3600)  # 300s/km band, no HR
 
     hot = dict(activity, avg_heart_rate=200)
     cold = dict(activity, avg_heart_rate=50)

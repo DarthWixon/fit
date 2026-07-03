@@ -17,7 +17,7 @@ def test_parse_config_text_types_and_tolerance():
     assert parsed["sports"] == ["run", "cycle"]
     assert parsed["pbs_window_months"] == 3
     assert parsed["show_pbs"] is False
-    assert "history_count" not in parsed      # bad int silently skipped
+    assert "history_count" not in parsed  # bad int silently skipped
     assert "unknown_key" not in parsed
 
 
@@ -34,15 +34,21 @@ def test_read_config_merges_over_defaults(tmp_path, monkeypatch):
     storage.config_path().write_text("pbs_window_months = 6\n")
     config = storage.read_config()
     assert config["pbs_window_months"] == 6
-    assert config["show_pbs"] is True                 # untouched keys fall back
+    assert config["show_pbs"] is True  # untouched keys fall back
 
 
 def test_activity_and_pbs_write_read_round_trip(tmp_path, monkeypatch):
     monkeypatch.setenv("FIT_DATA_DIR", str(tmp_path))
     storage.ensure_data_dir()
 
-    activity = {"id": "2024-01-15T08:30:00", "type": "run", "date": "2024-01-15",
-                "distance_km": 10.2, "duration_seconds": 3120, "source": "gpx"}
+    activity = {
+        "id": "2024-01-15T08:30:00",
+        "type": "run",
+        "date": "2024-01-15",
+        "distance_km": 10.2,
+        "duration_seconds": 3120,
+        "source": "gpx",
+    }
     storage.write_activity(activity)
     assert storage.activity_exists("2024-01-15T08:30:00")
     activities, warnings = storage.read_activities_with_warnings()
@@ -68,8 +74,14 @@ def test_plan_write_read_round_trip(tmp_path, monkeypatch):
     storage.ensure_data_dir()
     assert storage.plans_dir().is_dir()
 
-    plan = {"id": "2026-07-03T09:00:00", "sport": "run", "workout_type": "intervals",
-            "params": {"reps": 6}, "workout_name": "Run intervals", "payload": {}}
+    plan = {
+        "id": "2026-07-03T09:00:00",
+        "sport": "run",
+        "workout_type": "intervals",
+        "params": {"reps": 6},
+        "workout_name": "Run intervals",
+        "payload": {},
+    }
     storage.write_plan(plan)
     (storage.plans_dir() / "bad.json").write_text("{not json")
 

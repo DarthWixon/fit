@@ -20,11 +20,17 @@ from fit import compute
 GPXTPX_NS = "http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
 
 GPX_TYPE_MAP = {
-    "running": "run", "run": "run",
-    "cycling": "cycle", "biking": "cycle", "ride": "cycle",
-    "walking": "walk", "walk": "walk",
-    "hiking": "hike", "hike": "hike",
-    "swimming": "swim", "swim": "swim",
+    "running": "run",
+    "run": "run",
+    "cycling": "cycle",
+    "biking": "cycle",
+    "ride": "cycle",
+    "walking": "walk",
+    "walk": "walk",
+    "hiking": "hike",
+    "hike": "hike",
+    "swimming": "swim",
+    "swim": "swim",
 }
 
 # Per the Garmin TCX schema, Sport is only ever Running/Biking/Other — there's no
@@ -83,6 +89,7 @@ FILENAME_COLUMNS = ["Filename"]
 # Some exporters (older Garmin, some phone apps) emit no namespace at all, so
 # every lookup tries the namespaced tag first and falls back to the bare tag.
 
+
 def _parse_xml_root(path: str):
     """Root element of a GPX/TCX file, tolerating leading whitespace before
     the <?xml?> declaration. Strava's exported TCX files are padded with
@@ -134,7 +141,10 @@ def _haversine_km(lat1, lon1, lat2, lon2) -> float:
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    a = (
+        math.sin(dphi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    )
     return 2 * earth_radius_km * math.asin(math.sqrt(a))
 
 
@@ -167,7 +177,13 @@ def _compute_splits(activity_type: str, points: list[dict]) -> dict:
     return splits
 
 
-def _base_activity(start_time, activity_type: str, distance_km: float, duration_seconds: float, source: str) -> dict:
+def _base_activity(
+    start_time,
+    activity_type: str,
+    distance_km: float,
+    duration_seconds: float,
+    source: str,
+) -> dict:
     """The five always-present activity fields (full shape in storage.py's
     module docstring). Optional fields stay each importer's own concern —
     their presence conditions deliberately differ by format."""
@@ -192,6 +208,7 @@ def _attach_splits(activity: dict, points: list[dict]) -> dict:
 
 # --- GPX ----------------------------------------------------------------------------
 
+
 def _gpx_raw_points(trkpts, ns_uri) -> list[dict]:
     """One dict per trkpt: {"lat", "lon", "ele" (float | None), "time"
     (datetime | None), "hr" (int | None)} — a single XML pass that every other
@@ -200,13 +217,17 @@ def _gpx_raw_points(trkpts, ns_uri) -> list[dict]:
     for trkpt in trkpts:
         ele_elem = _find(trkpt, "ele", ns_uri)
         time_elem = _find(trkpt, "time", ns_uri)
-        raw_points.append({
-            "lat": float(trkpt.get("lat")),
-            "lon": float(trkpt.get("lon")),
-            "ele": float(ele_elem.text) if ele_elem is not None else None,
-            "time": _parse_iso_time(time_elem.text) if time_elem is not None else None,
-            "hr": _gpx_heart_rate(trkpt, ns_uri),
-        })
+        raw_points.append(
+            {
+                "lat": float(trkpt.get("lat")),
+                "lon": float(trkpt.get("lon")),
+                "ele": float(ele_elem.text) if ele_elem is not None else None,
+                "time": (
+                    _parse_iso_time(time_elem.text) if time_elem is not None else None
+                ),
+                "hr": _gpx_heart_rate(trkpt, ns_uri),
+            }
+        )
     return raw_points
 
 
@@ -215,7 +236,9 @@ def _gpx_total_distance_km(raw_points: list[dict]) -> float:
     prev_point = None
     for point in raw_points:
         if prev_point is not None:
-            total += _haversine_km(prev_point[0], prev_point[1], point["lat"], point["lon"])
+            total += _haversine_km(
+                prev_point[0], prev_point[1], point["lat"], point["lon"]
+            )
         prev_point = (point["lat"], point["lon"])
     return total
 
@@ -247,13 +270,17 @@ def _gpx_point_stream(raw_points: list[dict], start_time) -> list[dict]:
     prev_point = None
     for point in raw_points:
         if prev_point is not None:
-            distance_km += _haversine_km(prev_point[0], prev_point[1], point["lat"], point["lon"])
+            distance_km += _haversine_km(
+                prev_point[0], prev_point[1], point["lat"], point["lon"]
+            )
         prev_point = (point["lat"], point["lon"])
         if point["time"] is not None:
-            points.append({
-                "elapsed_seconds": (point["time"] - start_time).total_seconds(),
-                "distance_km": distance_km,
-            })
+            points.append(
+                {
+                    "elapsed_seconds": (point["time"] - start_time).total_seconds(),
+                    "distance_km": distance_km,
+                }
+            )
     return points
 
 
@@ -299,8 +326,11 @@ def import_gpx(path: str) -> dict:
     last_time = _gpx_last_time(raw_points, start_time)
 
     activity = _base_activity(
-        start_time, _gpx_activity_type(trk, ns_uri), distance_km,
-        (last_time - start_time).total_seconds(), "gpx",
+        start_time,
+        _gpx_activity_type(trk, ns_uri),
+        distance_km,
+        (last_time - start_time).total_seconds(),
+        "gpx",
     )
     if elevation_gain_m:
         activity["elevation_gain_m"] = round(elevation_gain_m)
@@ -317,6 +347,7 @@ def import_gpx(path: str) -> dict:
 # also lacks StartTime, trackpoints before the StartTime-carrying lap get a
 # negative elapsed offset in the point stream — harmless, since fastest_split
 # only ever uses elapsed-time differences.
+
 
 def _tcx_start_time(activity_elem, laps, ns_uri):
     """<Id> if present, else the first lap's StartTime attribute, else None."""
@@ -371,7 +402,9 @@ def _tcx_trackpoints(lap, ns_uri):
     return _findall(container, "Trackpoint", ns_uri)
 
 
-def _tcx_trackpoint_elevation(trackpoint, ns_uri, prev_ele: float | None) -> tuple[float, float | None]:
+def _tcx_trackpoint_elevation(
+    trackpoint, ns_uri, prev_ele: float | None
+) -> tuple[float, float | None]:
     """(gain_delta, new_prev_ele) for one trackpoint; prev_ele passed through
     unchanged if the trackpoint has no AltitudeMeters."""
     alt_elem = _find(trackpoint, "AltitudeMeters", ns_uri)
@@ -428,7 +461,9 @@ def _tcx_heart_rate_stats(laps, ns_uri) -> tuple[int | None, int | None]:
 
 def _tcx_power_avg(laps, ns_uri) -> int | None:
     """Mean of the laps' AvgWatts values, or None if no lap has power."""
-    power_avgs = [p for p in (_tcx_lap_power(lap, ns_uri) for lap in laps) if p is not None]
+    power_avgs = [
+        p for p in (_tcx_lap_power(lap, ns_uri) for lap in laps) if p is not None
+    ]
     return round(sum(power_avgs) / len(power_avgs)) if power_avgs else None
 
 
@@ -460,10 +495,12 @@ def _tcx_point_stream(laps, ns_uri, start_time) -> list[dict]:
             if prev_point is not None:
                 distance_km += _haversine_km(prev_point[0], prev_point[1], lat, lon)
             prev_point = (lat, lon)
-            points.append({
-                "elapsed_seconds": (trackpoint_time - start_time).total_seconds(),
-                "distance_km": distance_km,
-            })
+            points.append(
+                {
+                    "elapsed_seconds": (trackpoint_time - start_time).total_seconds(),
+                    "distance_km": distance_km,
+                }
+            )
     return points
 
 
@@ -489,7 +526,9 @@ def import_tcx(path: str) -> dict:
     elevation_gain_m = _tcx_elevation_gain_m(laps, ns_uri)
     points = _tcx_point_stream(laps, ns_uri, start_time)
 
-    activity = _base_activity(start_time, activity_type, total_distance_m / 1000, total_time_s, "garmin")
+    activity = _base_activity(
+        start_time, activity_type, total_distance_m / 1000, total_time_s, "garmin"
+    )
     if elevation_gain_m:
         activity["elevation_gain_m"] = round(elevation_gain_m)
     if avg_hr is not None:
@@ -502,6 +541,7 @@ def import_tcx(path: str) -> dict:
 
 
 # --- FIT ------------------------------------------------------------------------------
+
 
 def import_fit(path: str) -> dict:
     from fitparse import FitFile
@@ -528,9 +568,13 @@ def import_fit(path: str) -> dict:
         activity_type = FIT_SPORT_CODE_MAP.get(raw_sport, "run")
 
     distance_m = fields.get("total_distance") or 0.0
-    duration_s = fields.get("total_timer_time") or fields.get("total_elapsed_time") or 0.0
+    duration_s = (
+        fields.get("total_timer_time") or fields.get("total_elapsed_time") or 0.0
+    )
 
-    activity = _base_activity(start_time, activity_type, distance_m / 1000, duration_s, "garmin")
+    activity = _base_activity(
+        start_time, activity_type, distance_m / 1000, duration_s, "garmin"
+    )
     if fields.get("total_ascent") is not None:
         activity["elevation_gain_m"] = round(fields["total_ascent"])
     if fields.get("avg_heart_rate") is not None:
@@ -547,15 +591,18 @@ def import_fit(path: str) -> dict:
         record_timestamp = record_fields.get("timestamp")
         if record_distance_m is None or record_timestamp is None:
             continue
-        points.append({
-            "elapsed_seconds": (record_timestamp - start_time).total_seconds(),
-            "distance_km": record_distance_m / 1000,
-        })
+        points.append(
+            {
+                "elapsed_seconds": (record_timestamp - start_time).total_seconds(),
+                "distance_km": record_distance_m / 1000,
+            }
+        )
 
     return _attach_splits(activity, points)
 
 
 # --- Strava CSV / bulk export -----------------------------------------------------------
+
 
 def _get_first(row: dict, columns: list[str]):
     for col in columns:
@@ -595,7 +642,12 @@ def _parse_strava_row(row: dict) -> tuple[dict | None, str | None]:
     distance_m = float(_get_first(row, DISTANCE_COLUMNS) or 0)
     duration_s = float(_get_first(row, DURATION_COLUMNS) or 0)
 
-    return _base_activity(start_time, activity_type, distance_m / 1000, duration_s, "strava"), None
+    return (
+        _base_activity(
+            start_time, activity_type, distance_m / 1000, duration_s, "strava"
+        ),
+        None,
+    )
 
 
 def _strava_skip_warnings(skipped: Counter) -> list[str]:
@@ -666,7 +718,9 @@ def import_strava_export(export_dir: str) -> tuple[list[dict], list[str]]:
     export_path = Path(export_dir)
     csv_path = export_path / "activities.csv"
     if not csv_path.exists():
-        raise ValueError(f"{export_dir} does not look like a Strava export (no activities.csv)")
+        raise ValueError(
+            f"{export_dir} does not look like a Strava export (no activities.csv)"
+        )
 
     activities = []
     warnings: list[str] = []

@@ -56,7 +56,14 @@ SHORT_REP_FACTOR = 0.97
 # pace target to average (6:00/km run, 2:00/100m swim).
 _FALLBACK_SPEED_MPS = {"run": 1000 / 360, "swim": 100 / 120, "cycle": 25 / 3.6}
 
-_STEP_TYPES = {"warmup": 1, "cooldown": 2, "interval": 3, "recovery": 4, "rest": 5, "repeat": 6}
+_STEP_TYPES = {
+    "warmup": 1,
+    "cooldown": 2,
+    "interval": 3,
+    "recovery": 4,
+    "rest": 5,
+    "repeat": 6,
+}
 _END_CONDITIONS = {"lap.button": 1, "time": 2, "distance": 3, "iterations": 7}
 _TARGET_TYPES = {"no.target": 1, "power.zone": 2, "pace.zone": 6}
 
@@ -79,7 +86,9 @@ def parse_duration(text: str) -> int:
     if ":" in text:
         return parse_pace(text)
     if not text.isdigit() or int(text) == 0:
-        raise ValueError(f"invalid duration '{text}': expected seconds or m:ss, e.g. '90' or '1:30'")
+        raise ValueError(
+            f"invalid duration '{text}': expected seconds or m:ss, e.g. '90' or '1:30'"
+        )
     return int(text)
 
 
@@ -94,15 +103,21 @@ def _optional_pace(text: str) -> int | None:
     return parse_pace(text) if str(text).strip() else None
 
 
-def pace_zone_mps(seconds_per_km: int, tolerance_s: int = PACE_TOLERANCE_S_PER_KM) -> tuple[float, float]:
+def pace_zone_mps(
+    seconds_per_km: int, tolerance_s: int = PACE_TOLERANCE_S_PER_KM
+) -> tuple[float, float]:
     """(low, high) speed bounds in m/s for a pace +/- tolerance band."""
-    return 1000 / (seconds_per_km + tolerance_s), 1000 / max(seconds_per_km - tolerance_s, 1)
+    return 1000 / (seconds_per_km + tolerance_s), 1000 / max(
+        seconds_per_km - tolerance_s, 1
+    )
 
 
 def swim_pace_zone_mps(
     seconds_per_100m: int, tolerance_s: int = SWIM_PACE_TOLERANCE_S_PER_100M
 ) -> tuple[float, float]:
-    return 100 / (seconds_per_100m + tolerance_s), 100 / max(seconds_per_100m - tolerance_s, 1)
+    return 100 / (seconds_per_100m + tolerance_s), 100 / max(
+        seconds_per_100m - tolerance_s, 1
+    )
 
 
 # --- prompt specs ---------------------------------------------------------
@@ -112,63 +127,248 @@ def swim_pace_zone_mps(
 # raising ValueError to re-prompt).
 _PARAM_SPECS = {
     ("run", "intervals"): [
-        {"key": "warmup_minutes", "label": "Warmup (minutes)", "default": 10, "parse": _positive_int},
-        {"key": "reps", "label": "Number of reps", "default": 6, "parse": _positive_int},
-        {"key": "rep_distance_m", "label": "Rep distance (m)", "default": 800, "parse": _positive_int},
-        {"key": "target_pace", "label": "Target pace (min:sec per km)", "default": "4:30", "parse": parse_pace},
-        {"key": "recovery", "label": "Recovery (min:sec)", "default": "2:00", "parse": parse_duration},
-        {"key": "cooldown_minutes", "label": "Cooldown (minutes)", "default": 10, "parse": _positive_int},
+        {
+            "key": "warmup_minutes",
+            "label": "Warmup (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
+        {
+            "key": "reps",
+            "label": "Number of reps",
+            "default": 6,
+            "parse": _positive_int,
+        },
+        {
+            "key": "rep_distance_m",
+            "label": "Rep distance (m)",
+            "default": 800,
+            "parse": _positive_int,
+        },
+        {
+            "key": "target_pace",
+            "label": "Target pace (min:sec per km)",
+            "default": "4:30",
+            "parse": parse_pace,
+        },
+        {
+            "key": "recovery",
+            "label": "Recovery (min:sec)",
+            "default": "2:00",
+            "parse": parse_duration,
+        },
+        {
+            "key": "cooldown_minutes",
+            "label": "Cooldown (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
     ],
     ("run", "tempo"): [
-        {"key": "warmup_minutes", "label": "Warmup (minutes)", "default": 10, "parse": _positive_int},
-        {"key": "tempo_minutes", "label": "Tempo block (minutes)", "default": 20, "parse": _positive_int},
-        {"key": "target_pace", "label": "Target pace (min:sec per km)", "default": "5:00", "parse": parse_pace},
-        {"key": "cooldown_minutes", "label": "Cooldown (minutes)", "default": 10, "parse": _positive_int},
+        {
+            "key": "warmup_minutes",
+            "label": "Warmup (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
+        {
+            "key": "tempo_minutes",
+            "label": "Tempo block (minutes)",
+            "default": 20,
+            "parse": _positive_int,
+        },
+        {
+            "key": "target_pace",
+            "label": "Target pace (min:sec per km)",
+            "default": "5:00",
+            "parse": parse_pace,
+        },
+        {
+            "key": "cooldown_minutes",
+            "label": "Cooldown (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
     ],
     ("run", "hills"): [
-        {"key": "warmup_minutes", "label": "Warmup (minutes)", "default": 10, "parse": _positive_int},
-        {"key": "reps", "label": "Number of hill reps", "default": 8, "parse": _positive_int},
-        {"key": "effort", "label": "Uphill effort (min:sec)", "default": "0:45", "parse": parse_duration},
-        {"key": "recovery", "label": "Recovery (min:sec)", "default": "2:00", "parse": parse_duration},
-        {"key": "cooldown_minutes", "label": "Cooldown (minutes)", "default": 10, "parse": _positive_int},
+        {
+            "key": "warmup_minutes",
+            "label": "Warmup (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
+        {
+            "key": "reps",
+            "label": "Number of hill reps",
+            "default": 8,
+            "parse": _positive_int,
+        },
+        {
+            "key": "effort",
+            "label": "Uphill effort (min:sec)",
+            "default": "0:45",
+            "parse": parse_duration,
+        },
+        {
+            "key": "recovery",
+            "label": "Recovery (min:sec)",
+            "default": "2:00",
+            "parse": parse_duration,
+        },
+        {
+            "key": "cooldown_minutes",
+            "label": "Cooldown (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
     ],
     ("run", "baseline"): [
-        {"key": "warmup_minutes", "label": "Warmup (minutes)", "default": 10, "parse": _positive_int},
-        {"key": "test_distance_m", "label": "Test distance (m)", "default": 3000, "parse": _positive_int},
-        {"key": "cooldown_minutes", "label": "Cooldown (minutes)", "default": 10, "parse": _positive_int},
+        {
+            "key": "warmup_minutes",
+            "label": "Warmup (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
+        {
+            "key": "test_distance_m",
+            "label": "Test distance (m)",
+            "default": 3000,
+            "parse": _positive_int,
+        },
+        {
+            "key": "cooldown_minutes",
+            "label": "Cooldown (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
     ],
     ("swim", "intervals"): [
-        {"key": "warmup_m", "label": "Warmup distance (m)", "default": 200, "parse": _positive_int},
-        {"key": "reps", "label": "Number of reps", "default": 10, "parse": _positive_int},
-        {"key": "rep_distance_m", "label": "Rep distance (m)", "default": 100, "parse": _positive_int},
+        {
+            "key": "warmup_m",
+            "label": "Warmup distance (m)",
+            "default": 200,
+            "parse": _positive_int,
+        },
+        {
+            "key": "reps",
+            "label": "Number of reps",
+            "default": 10,
+            "parse": _positive_int,
+        },
+        {
+            "key": "rep_distance_m",
+            "label": "Rep distance (m)",
+            "default": 100,
+            "parse": _positive_int,
+        },
         {
             "key": "target_pace_100m",
             "label": "Target pace per 100m (min:sec, blank for none)",
             "default": "",
             "parse": _optional_pace,
         },
-        {"key": "rest", "label": "Rest between reps (min:sec)", "default": "0:20", "parse": parse_duration},
-        {"key": "cooldown_m", "label": "Cooldown distance (m)", "default": 200, "parse": _positive_int},
+        {
+            "key": "rest",
+            "label": "Rest between reps (min:sec)",
+            "default": "0:20",
+            "parse": parse_duration,
+        },
+        {
+            "key": "cooldown_m",
+            "label": "Cooldown distance (m)",
+            "default": 200,
+            "parse": _positive_int,
+        },
     ],
     ("cycle", "intervals"): [
-        {"key": "warmup_minutes", "label": "Warmup (minutes)", "default": 15, "parse": _positive_int},
-        {"key": "reps", "label": "Number of reps", "default": 4, "parse": _positive_int},
-        {"key": "work", "label": "Work block (min:sec)", "default": "8:00", "parse": parse_duration},
-        {"key": "target_watts", "label": "Target power (watts)", "default": 200, "parse": _positive_int},
-        {"key": "recovery", "label": "Recovery (min:sec)", "default": "4:00", "parse": parse_duration},
-        {"key": "cooldown_minutes", "label": "Cooldown (minutes)", "default": 10, "parse": _positive_int},
+        {
+            "key": "warmup_minutes",
+            "label": "Warmup (minutes)",
+            "default": 15,
+            "parse": _positive_int,
+        },
+        {
+            "key": "reps",
+            "label": "Number of reps",
+            "default": 4,
+            "parse": _positive_int,
+        },
+        {
+            "key": "work",
+            "label": "Work block (min:sec)",
+            "default": "8:00",
+            "parse": parse_duration,
+        },
+        {
+            "key": "target_watts",
+            "label": "Target power (watts)",
+            "default": 200,
+            "parse": _positive_int,
+        },
+        {
+            "key": "recovery",
+            "label": "Recovery (min:sec)",
+            "default": "4:00",
+            "parse": parse_duration,
+        },
+        {
+            "key": "cooldown_minutes",
+            "label": "Cooldown (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
     ],
     ("cycle", "hills"): [
-        {"key": "warmup_minutes", "label": "Warmup (minutes)", "default": 15, "parse": _positive_int},
-        {"key": "reps", "label": "Number of hill reps", "default": 6, "parse": _positive_int},
-        {"key": "effort", "label": "Climb effort (min:sec)", "default": "1:00", "parse": parse_duration},
-        {"key": "recovery", "label": "Recovery (min:sec)", "default": "3:00", "parse": parse_duration},
-        {"key": "cooldown_minutes", "label": "Cooldown (minutes)", "default": 10, "parse": _positive_int},
+        {
+            "key": "warmup_minutes",
+            "label": "Warmup (minutes)",
+            "default": 15,
+            "parse": _positive_int,
+        },
+        {
+            "key": "reps",
+            "label": "Number of hill reps",
+            "default": 6,
+            "parse": _positive_int,
+        },
+        {
+            "key": "effort",
+            "label": "Climb effort (min:sec)",
+            "default": "1:00",
+            "parse": parse_duration,
+        },
+        {
+            "key": "recovery",
+            "label": "Recovery (min:sec)",
+            "default": "3:00",
+            "parse": parse_duration,
+        },
+        {
+            "key": "cooldown_minutes",
+            "label": "Cooldown (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
     ],
     ("cycle", "baseline"): [
-        {"key": "warmup_minutes", "label": "Warmup (minutes)", "default": 20, "parse": _positive_int},
-        {"key": "test_minutes", "label": "Best-effort test (minutes)", "default": 20, "parse": _positive_int},
-        {"key": "cooldown_minutes", "label": "Cooldown (minutes)", "default": 10, "parse": _positive_int},
+        {
+            "key": "warmup_minutes",
+            "label": "Warmup (minutes)",
+            "default": 20,
+            "parse": _positive_int,
+        },
+        {
+            "key": "test_minutes",
+            "label": "Best-effort test (minutes)",
+            "default": 20,
+            "parse": _positive_int,
+        },
+        {
+            "key": "cooldown_minutes",
+            "label": "Cooldown (minutes)",
+            "default": 10,
+            "parse": _positive_int,
+        },
     ],
 }
 
@@ -178,8 +378,12 @@ def workout_params(sport: str, workout_type: str) -> list[dict]:
     Raises ValueError, listing the valid combos, when there is no such
     workout — the single validation point for --sport/--type."""
     if (sport, workout_type) not in _PARAM_SPECS:
-        valid = "; ".join(f"{s}: {', '.join(types)}" for s, types in WORKOUT_TYPES.items())
-        raise ValueError(f"no '{workout_type}' workout for sport '{sport}' — available: {valid}")
+        valid = "; ".join(
+            f"{s}: {', '.join(types)}" for s, types in WORKOUT_TYPES.items()
+        )
+        raise ValueError(
+            f"no '{workout_type}' workout for sport '{sport}' — available: {valid}"
+        )
     return [dict(spec) for spec in _PARAM_SPECS[(sport, workout_type)]]
 
 
@@ -187,7 +391,11 @@ def workout_params(sport: str, workout_type: str) -> list[dict]:
 
 
 def _step_type(key: str) -> dict:
-    return {"stepTypeId": _STEP_TYPES[key], "stepTypeKey": key, "displayOrder": _STEP_TYPES[key]}
+    return {
+        "stepTypeId": _STEP_TYPES[key],
+        "stepTypeKey": key,
+        "displayOrder": _STEP_TYPES[key],
+    }
 
 
 def _end_condition(key: str) -> dict:
@@ -200,12 +408,22 @@ def _end_condition(key: str) -> dict:
 
 
 def _no_target() -> dict:
-    return {"targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1}}
+    return {
+        "targetType": {
+            "workoutTargetTypeId": 1,
+            "workoutTargetTypeKey": "no.target",
+            "displayOrder": 1,
+        }
+    }
 
 
 def _pace_target(low_mps: float, high_mps: float) -> dict:
     return {
-        "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone", "displayOrder": 6},
+        "targetType": {
+            "workoutTargetTypeId": 6,
+            "workoutTargetTypeKey": "pace.zone",
+            "displayOrder": 6,
+        },
         "targetValueOne": low_mps,
         "targetValueTwo": high_mps,
     }
@@ -213,13 +431,19 @@ def _pace_target(low_mps: float, high_mps: float) -> dict:
 
 def _power_target(watts: int, tolerance_w: int = POWER_TOLERANCE_W) -> dict:
     return {
-        "targetType": {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone", "displayOrder": 2},
+        "targetType": {
+            "workoutTargetTypeId": 2,
+            "workoutTargetTypeKey": "power.zone",
+            "displayOrder": 2,
+        },
         "targetValueOne": watts - tolerance_w,
         "targetValueTwo": watts + tolerance_w,
     }
 
 
-def _step(order: int, step_key: str, end_key: str, end_value: float, target: dict) -> dict:
+def _step(
+    order: int, step_key: str, end_key: str, end_value: float, target: dict
+) -> dict:
     return {
         "type": "ExecutableStepDTO",
         "stepOrder": order,
@@ -256,10 +480,20 @@ def _format_meters(meters: float) -> str:
 def _run_intervals(params: dict) -> tuple[str, list[dict]]:
     steps = [
         _step(1, "warmup", "time", params["warmup_minutes"] * 60, _no_target()),
-        _repeat(2, params["reps"], [
-            _step(3, "interval", "distance", params["rep_distance_m"], _pace_target(*pace_zone_mps(params["target_pace"]))),
-            _step(4, "recovery", "time", params["recovery"], _no_target()),
-        ]),
+        _repeat(
+            2,
+            params["reps"],
+            [
+                _step(
+                    3,
+                    "interval",
+                    "distance",
+                    params["rep_distance_m"],
+                    _pace_target(*pace_zone_mps(params["target_pace"])),
+                ),
+                _step(4, "recovery", "time", params["recovery"], _no_target()),
+            ],
+        ),
         _step(5, "cooldown", "time", params["cooldown_minutes"] * 60, _no_target()),
     ]
     name = (
@@ -272,7 +506,13 @@ def _run_intervals(params: dict) -> tuple[str, list[dict]]:
 def _run_tempo(params: dict) -> tuple[str, list[dict]]:
     steps = [
         _step(1, "warmup", "time", params["warmup_minutes"] * 60, _no_target()),
-        _step(2, "interval", "time", params["tempo_minutes"] * 60, _pace_target(*pace_zone_mps(params["target_pace"]))),
+        _step(
+            2,
+            "interval",
+            "time",
+            params["tempo_minutes"] * 60,
+            _pace_target(*pace_zone_mps(params["target_pace"])),
+        ),
         _step(3, "cooldown", "time", params["cooldown_minutes"] * 60, _no_target()),
     ]
     name = f"Run tempo {params['tempo_minutes']}min @ {_format_mmss(params['target_pace'])}/km"
@@ -284,10 +524,14 @@ def _hills(sport_word: str, params: dict) -> tuple[str, list[dict]]:
     # and effort is the point — the watch just times the reps.
     steps = [
         _step(1, "warmup", "time", params["warmup_minutes"] * 60, _no_target()),
-        _repeat(2, params["reps"], [
-            _step(3, "interval", "time", params["effort"], _no_target()),
-            _step(4, "recovery", "time", params["recovery"], _no_target()),
-        ]),
+        _repeat(
+            2,
+            params["reps"],
+            [
+                _step(3, "interval", "time", params["effort"], _no_target()),
+                _step(4, "recovery", "time", params["recovery"], _no_target()),
+            ],
+        ),
         _step(5, "cooldown", "time", params["cooldown_minutes"] * 60, _no_target()),
     ]
     name = f"{sport_word} hills {params['reps']}x{_format_mmss(params['effort'])}"
@@ -310,10 +554,14 @@ def _swim_intervals(params: dict) -> tuple[str, list[dict]]:
     target = _pace_target(*swim_pace_zone_mps(pace)) if pace else _no_target()
     steps = [
         _step(1, "warmup", "distance", params["warmup_m"], _no_target()),
-        _repeat(2, params["reps"], [
-            _step(3, "interval", "distance", params["rep_distance_m"], target),
-            _step(4, "rest", "time", params["rest"], _no_target()),
-        ]),
+        _repeat(
+            2,
+            params["reps"],
+            [
+                _step(3, "interval", "distance", params["rep_distance_m"], target),
+                _step(4, "rest", "time", params["rest"], _no_target()),
+            ],
+        ),
         _step(5, "cooldown", "distance", params["cooldown_m"], _no_target()),
     ]
     name = f"Swim intervals {params['reps']}x{_format_meters(params['rep_distance_m'])}"
@@ -325,10 +573,20 @@ def _swim_intervals(params: dict) -> tuple[str, list[dict]]:
 def _cycle_intervals(params: dict) -> tuple[str, list[dict]]:
     steps = [
         _step(1, "warmup", "time", params["warmup_minutes"] * 60, _no_target()),
-        _repeat(2, params["reps"], [
-            _step(3, "interval", "time", params["work"], _power_target(params["target_watts"])),
-            _step(4, "recovery", "time", params["recovery"], _no_target()),
-        ]),
+        _repeat(
+            2,
+            params["reps"],
+            [
+                _step(
+                    3,
+                    "interval",
+                    "time",
+                    params["work"],
+                    _power_target(params["target_watts"]),
+                ),
+                _step(4, "recovery", "time", params["recovery"], _no_target()),
+            ],
+        ),
         _step(5, "cooldown", "time", params["cooldown_minutes"] * 60, _no_target()),
     ]
     name = f"Cycle intervals {params['reps']}x{_format_mmss(params['work'])} @ {params['target_watts']}W"
@@ -361,7 +619,9 @@ def _estimate_seconds(steps: list[dict], sport: str) -> float:
     total = 0.0
     for step in steps:
         if step["type"] == "RepeatGroupDTO":
-            total += step["numberOfIterations"] * _estimate_seconds(step["workoutSteps"], sport)
+            total += step["numberOfIterations"] * _estimate_seconds(
+                step["workoutSteps"], sport
+            )
         elif step["endCondition"]["conditionTypeKey"] == "time":
             total += step["endConditionValue"]
         else:  # distance: estimate via the pace target's midpoint if present
@@ -387,7 +647,11 @@ def build_plan(sport: str, workout_type: str, params: dict, created: str) -> dic
         "author": {},
         "description": "generated by fit",
         "workoutSegments": [
-            {"segmentOrder": 1, "sportType": dict(SPORT_TYPES[sport]), "workoutSteps": steps}
+            {
+                "segmentOrder": 1,
+                "sportType": dict(SPORT_TYPES[sport]),
+                "workoutSteps": steps,
+            }
         ],
     }
     return {
@@ -439,7 +703,9 @@ def describe_plan(plan: dict) -> list[str]:
     lines = []
     for step in plan["payload"]["workoutSegments"][0]["workoutSteps"]:
         if step["type"] == "RepeatGroupDTO":
-            children = ", ".join(_describe_step(child, sport) for child in step["workoutSteps"])
+            children = ", ".join(
+                _describe_step(child, sport) for child in step["workoutSteps"]
+            )
             lines.append(f"{step['numberOfIterations']} x {children}")
         else:
             lines.append(_describe_step(step, sport))
@@ -493,7 +759,10 @@ def _recent_run_5k(recent: list[dict]) -> tuple[int, str] | None:
         return None
     fastest = min(runs, key=lambda a: a["duration_seconds"] / a["distance_km"])
     pace = fastest["duration_seconds"] / fastest["distance_km"]
-    return round(pace * 5), f"fastest recent run pace {_format_mmss(round(pace))}/km ({fastest.get('date')})"
+    return (
+        round(pace * 5),
+        f"fastest recent run pace {_format_mmss(round(pace))}/km ({fastest.get('date')})",
+    )
 
 
 def _recent_swim_css(recent: list[dict]) -> tuple[int, str] | None:
@@ -506,17 +775,27 @@ def _recent_swim_css(recent: list[dict]) -> tuple[int, str] | None:
     t1k = _best_of_keys(pbs, ["fastest_1k_seconds", "fastest_1k_split_seconds"])
     if t500 and t1k and t1k[0] > t500[0]:
         css = round((t1k[0] - t500[0]) / 5)
-        return css, f"CSS from best recent 500m ({_format_mmss(t500[0])}) and 1k ({_format_mmss(t1k[0])})"
+        return (
+            css,
+            f"CSS from best recent 500m ({_format_mmss(t500[0])}) and 1k ({_format_mmss(t1k[0])})",
+        )
     if t1k:
-        return round(t1k[0] / 10), f"best recent 1k pace ({_format_mmss(t1k[0])}, {t1k[1]})"
+        return (
+            round(t1k[0] / 10),
+            f"best recent 1k pace ({_format_mmss(t1k[0])}, {t1k[1]})",
+        )
     swims = [
         a
         for a in recent
-        if a.get("type") == "swim" and a.get("distance_km") and a.get("duration_seconds")
+        if a.get("type") == "swim"
+        and a.get("distance_km")
+        and a.get("duration_seconds")
     ]
     if not swims:
         return None
-    median = statistics.median(a["duration_seconds"] / (a["distance_km"] * 10) for a in swims)
+    median = statistics.median(
+        a["duration_seconds"] / (a["distance_km"] * 10) for a in swims
+    )
     return round(median), "median pace of recent swims"
 
 
@@ -534,7 +813,10 @@ def _recent_ride_watts(recent: list[dict]) -> tuple[int, str] | None:
         return None
     best = max(rides, key=lambda a: a["avg_power"])
     watts = _round_to(best["avg_power"], 5)
-    return watts, f"best avg power of recent 20min+ rides ({best['avg_power']}W, {best.get('date')})"
+    return (
+        watts,
+        f"best avg power of recent 20min+ rides ({best['avg_power']}W, {best.get('date')})",
+    )
 
 
 def recommend_defaults(
@@ -569,7 +851,9 @@ def recommend_defaults(
                 # SHORT_REP_FACTOR discount (see recommended_interval_pace)
                 def _interval_pace_default(params_so_far: dict) -> str:
                     rep_m = params_so_far.get("rep_distance_m", 800)
-                    return _format_mmss(recommended_interval_pace(five_k_seconds, rep_m))
+                    return _format_mmss(
+                        recommended_interval_pace(five_k_seconds, rep_m)
+                    )
 
                 recs["target_pace"] = {
                     "derive": _interval_pace_default,

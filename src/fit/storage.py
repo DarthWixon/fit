@@ -38,14 +38,14 @@ import tempfile
 from pathlib import Path
 
 DEFAULTS = {
-    "sports": [],               # empty = all types shown
-    "pbs_window_months": 0,     # 0 = all-time PBs
-    "history_count": 5,         # rows in the dashboard's embedded history table
-    "dashboard_weeks": 12,      # weeks shown in dashboard volume/fitness sparklines (0 = all)
-    "show_sparkline": True,     # weekly volume sparkline block
-    "show_pbs": True,           # personal bests block
+    "sports": [],  # empty = all types shown
+    "pbs_window_months": 0,  # 0 = all-time PBs
+    "history_count": 5,  # rows in the dashboard's embedded history table
+    "dashboard_weeks": 12,  # weeks shown in dashboard volume/fitness sparklines (0 = all)
+    "show_sparkline": True,  # weekly volume sparkline block
+    "show_pbs": True,  # personal bests block
     "show_sports_summary": True,  # sports summary block (all types, count + distance)
-    "show_fitness_index": True,   # fitness index (EWMA training load rescaled to a baseline of 100) block
+    "show_fitness_index": True,  # fitness index (EWMA training load rescaled to a baseline of 100) block
 }
 
 _CONFIG_COMMENTS = {
@@ -100,7 +100,9 @@ def ensure_data_dir() -> None:
 
 def _write_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
@@ -206,7 +208,9 @@ def _serialize_config_text(config: dict) -> str:
 
 
 def read_config() -> dict:
-    stored = _parse_config_text(config_path().read_text()) if config_path().exists() else {}
+    stored = (
+        _parse_config_text(config_path().read_text()) if config_path().exists() else {}
+    )
     return {**DEFAULTS, **stored}
 
 

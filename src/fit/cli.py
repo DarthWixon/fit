@@ -4,8 +4,7 @@ compute -> call display. Nothing else.
 
 import tempfile
 from datetime import date as date_cls
-from datetime import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import typer
@@ -53,7 +52,10 @@ def _get_or_init_fitness_baseline(activities: list[dict]) -> dict:
     baseline_value = compute.compute_baseline_value(activities, date_cls.today())
     if not baseline_value:
         return {}
-    baseline = {"baseline_date": date_cls.today().isoformat(), "baseline_value": baseline_value}
+    baseline = {
+        "baseline_date": date_cls.today().isoformat(),
+        "baseline_value": baseline_value,
+    }
     storage.write_fitness_baseline(baseline)
     return baseline
 
@@ -62,7 +64,10 @@ _EMPTY_FITNESS_SNAPSHOT = {"current": None, "baseline_date": None, "weekly": []}
 
 
 def _fitness_snapshot(
-    activities: list[dict], today: date_cls, baseline: dict, window: tuple[str, str] | None = None
+    activities: list[dict],
+    today: date_cls,
+    baseline: dict,
+    window: tuple[str, str] | None = None,
 ) -> dict:
     """activities must always be the full, unfiltered list — never narrowed by
     --sport/--timerange — so the index stays "one combined index" and the
@@ -76,7 +81,9 @@ def _fitness_snapshot(
     raw_series = compute.fitness_ewma_daily(activities, today)
     index_series = compute.rescale_to_index(raw_series, baseline["baseline_value"])
     current = index_series[-1]["index"] if index_series else None
-    display_series = compute.filter_series_by_date(index_series, *window) if window else index_series
+    display_series = (
+        compute.filter_series_by_date(index_series, *window) if window else index_series
+    )
     weekly = compute.weekly_fitness_index(display_series)
     return {
         "current": current,
@@ -85,7 +92,12 @@ def _fitness_snapshot(
     }
 
 
-def _dashboard_window(all_activities: list[dict], timerange: str | None, config_months: int, today: date_cls) -> dict:
+def _dashboard_window(
+    all_activities: list[dict],
+    timerange: str | None,
+    config_months: int,
+    today: date_cls,
+) -> dict:
     """Resolve the dashboard's window precedence: --timerange beats
     pbs_window_months beats all-time. Returns the resolved activity list, the
     PBs to show, and the window labelling render_dashboard needs:
@@ -122,7 +134,9 @@ def _dashboard_window(all_activities: list[dict], timerange: str | None, config_
 @app.command()
 def dashboard(
     sport: str = typer.Option(
-        None, "--sport", help="Only show this sport for this run (overrides the sports config)"
+        None,
+        "--sport",
+        help="Only show this sport for this run (overrides the sports config)",
     ),
     timerange: str = typer.Option(
         None,
@@ -130,7 +144,9 @@ def dashboard(
         help="Rolling window ending today, e.g. 10d, 2w, 3m, 1y (overrides pbs_window_months for this run)",
     ),
     minimal: bool = typer.Option(
-        False, "--minimal", help="Show only the sparklines and recent activities for this run"
+        False,
+        "--minimal",
+        help="Show only the sparklines and recent activities for this run",
     ),
 ) -> None:
     all_activities = _load_activities()
@@ -140,14 +156,18 @@ def dashboard(
 
     today = date_cls.today()
     try:
-        window = _dashboard_window(all_activities, timerange, config["pbs_window_months"], today)
+        window = _dashboard_window(
+            all_activities, timerange, config["pbs_window_months"], today
+        )
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
     if config["show_fitness_index"]:
         baseline = _get_or_init_fitness_baseline(all_activities)
-        fitness = _fitness_snapshot(all_activities, today, baseline, window["date_window"])
+        fitness = _fitness_snapshot(
+            all_activities, today, baseline, window["date_window"]
+        )
     else:
         fitness = _EMPTY_FITNESS_SNAPSHOT
 
@@ -165,7 +185,11 @@ def dashboard(
 
 @app.command()
 def pbs(
-    months: int = typer.Option(None, "--months", help="Only consider activities from the last N months (0 = all-time)"),
+    months: int = typer.Option(
+        None,
+        "--months",
+        help="Only consider activities from the last N months (0 = all-time)",
+    ),
 ) -> None:
     activities = _load_activities()
     config = storage.read_config()
@@ -176,7 +200,9 @@ def pbs(
         current_pbs = _windowed_pbs(activities, start, today.isoformat())
     else:
         current_pbs = _get_fresh_pbs(activities)
-    display.render_pbs_table(current_pbs, sports=config["sports"] or None, window_months=window)
+    display.render_pbs_table(
+        current_pbs, sports=config["sports"] or None, window_months=window
+    )
 
 
 @app.command()
@@ -199,7 +225,10 @@ def fitness_reset() -> None:
         typer.echo("Not enough activity data to set a fitness baseline yet.", err=True)
         raise typer.Exit(code=1)
 
-    new_baseline = {"baseline_date": date_cls.today().isoformat(), "baseline_value": new_value}
+    new_baseline = {
+        "baseline_date": date_cls.today().isoformat(),
+        "baseline_value": new_value,
+    }
     storage.write_fitness_baseline(new_baseline)
     display.render_fitness_reset(old_baseline, new_baseline)
 
@@ -237,7 +266,9 @@ def _import_and_report(
         if save_original:
             storage.save_gpx_file(source_path, activity["id"])
         imported += 1
-        display.render_new_pb_messages(compute.detect_new_pbs(activity, pbs_before_import))
+        display.render_new_pb_messages(
+            compute.detect_new_pbs(activity, pbs_before_import)
+        )
 
     if imported:
         _recompute_and_write_pbs(_load_activities())
@@ -253,7 +284,9 @@ def import_activity(path: str) -> None:
     import_warnings: list[str] = []
     if source.is_dir():
         if (source / "activities.csv").exists():
-            new_activities, import_warnings = importers.import_strava_export(str(source))
+            new_activities, import_warnings = importers.import_strava_export(
+                str(source)
+            )
             save_original = False
         else:
             new_activities = importers.import_directory(str(source))
@@ -275,7 +308,9 @@ def import_activity(path: str) -> None:
 
 @app.command(name="garmin-sync")
 def garmin_sync(
-    days: int = typer.Option(14, "--days", help="Look back this many days for new activities"),
+    days: int = typer.Option(
+        14, "--days", help="Look back this many days for new activities"
+    ),
 ) -> None:
     storage.ensure_data_dir()
 
@@ -288,7 +323,9 @@ def garmin_sync(
     end = date_cls.today()
     start = end - timedelta(days=days)
     summaries = garmin.list_recent_activities(client, start, end)
-    typer.echo(f"Found {len(summaries)} activities on Garmin Connect since {start.isoformat()}")
+    typer.echo(
+        f"Found {len(summaries)} activities on Garmin Connect since {start.isoformat()}"
+    )
 
     new_activities, tmp_paths = [], []
     try:
@@ -329,7 +366,9 @@ def _prompt_params(specs: list[dict]) -> dict:
 def plan(
     sport: str = typer.Option(..., "--sport", help="run | swim | cycle"),
     type: str = typer.Option(
-        ..., "--type", help="intervals | tempo | hills | baseline (availability varies by sport)"
+        ...,
+        "--type",
+        help="intervals | tempo | hills | baseline (availability varies by sport)",
     ),
     push: bool = typer.Option(
         True, "--push/--no-push", help="Push to Garmin Connect after saving locally"
@@ -342,7 +381,9 @@ def plan(
         raise typer.Exit(code=1)
 
     activities = _load_activities()
-    recs = planner.recommend_defaults(sport, type, activities, storage.read_plans(), date_cls.today())
+    recs = planner.recommend_defaults(
+        sport, type, activities, storage.read_plans(), date_cls.today()
+    )
     for spec in specs:
         rec = recs.get(spec["key"])
         if rec and "derive" in rec:
@@ -362,7 +403,10 @@ def plan(
     try:
         client = garmin.login()
     except garmin.GarminAuthError as exc:
-        typer.echo(f"{exc}\nThe plan is saved locally — re-run with --no-push to skip Garmin.", err=True)
+        typer.echo(
+            f"{exc}\nThe plan is saved locally — re-run with --no-push to skip Garmin.",
+            err=True,
+        )
         raise typer.Exit(code=1)
     response = garmin.push_workout(client, plan_dict["payload"])
     plan_dict["garmin_workout_id"] = response.get("workoutId")

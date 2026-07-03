@@ -31,7 +31,13 @@ MILESTONE_TOLERANCE = 1.06
 # here.
 SPLIT_DISTANCES_KM = {
     "run": [(5.0, "5k"), (10.0, "10k")],
-    "cycle": [(25.0, "25k"), (50.0, "50k"), (75.0, "75k"), (100.0, "100k"), (160.0, "160k")],
+    "cycle": [
+        (25.0, "25k"),
+        (50.0, "50k"),
+        (75.0, "75k"),
+        (100.0, "100k"),
+        (160.0, "160k"),
+    ],
     "swim": [(0.5, "500m"), (1.0, "1k"), (1.5, "1.5k"), (2.0, "2k")],
 }
 
@@ -65,7 +71,13 @@ MET_TABLE = {
 # pace/speed to band on, so fall back to each type's "moderate" MET as a
 # neutral guess. The avg_heart_rate multiplier (activity_load, below) is what
 # actually differentiates a hard session from an easy one in this case.
-_MET_FALLBACK_ZERO_DISTANCE = {"run": 9.4, "walk": 4.3, "swim": 8.3, "cycle": 6.8, "hike": 6.0}
+_MET_FALLBACK_ZERO_DISTANCE = {
+    "run": 9.4,
+    "walk": 4.3,
+    "swim": 8.3,
+    "cycle": 6.8,
+    "hike": 6.0,
+}
 _MET_DEFAULT_UNKNOWN_TYPE = 6.0
 
 # One anomalous avg_heart_rate reading can't move a single day's load by more
@@ -98,11 +110,15 @@ def _speed_kmh(distance_km: float, duration_seconds: float) -> float:
     return distance_km / (duration_seconds / 3600)
 
 
-def calc_pace(distance_km: float, duration_seconds: int, activity_type: str = "") -> str:
+def calc_pace(
+    distance_km: float, duration_seconds: int, activity_type: str = ""
+) -> str:
     if not distance_km or activity_type in NO_DISTANCE_TYPES:
         return "—"
     if activity_type == "swim":
-        minutes, seconds = divmod(round(_seconds_per_100m(distance_km, duration_seconds)), 60)
+        minutes, seconds = divmod(
+            round(_seconds_per_100m(distance_km, duration_seconds)), 60
+        )
         return f"{minutes}:{seconds:02d}/100m"
     if activity_type == "cycle":
         if not duration_seconds:
@@ -172,7 +188,9 @@ def parse_timerange(text: str, reference: date) -> tuple[str, str]:
         )
     n, unit = int(match.group(1)), match.group(2)
     if n == 0:
-        raise ValueError(f"invalid --timerange '{text}': number must be greater than zero")
+        raise ValueError(
+            f"invalid --timerange '{text}': number must be greater than zero"
+        )
 
     try:
         if unit == "d":
@@ -217,11 +235,13 @@ def summarize_by_type(activities: list[dict]) -> list[dict]:
     for activity_type in types:
         type_activities = filter_by_type(activities, activity_type)
         distance = sum(a.get("distance_km", 0) or 0 for a in type_activities)
-        summary.append({
-            "type": activity_type,
-            "count": len(type_activities),
-            "distance_km": distance,
-        })
+        summary.append(
+            {
+                "type": activity_type,
+                "count": len(type_activities),
+                "distance_km": distance,
+            }
+        )
     return summary
 
 
@@ -231,7 +251,7 @@ def rolling_average(activities: list[dict], metric: str, window: int) -> list[fl
 
     result = []
     for i in range(len(values)):
-        window_values = values[max(0, i - window + 1):i + 1]
+        window_values = values[max(0, i - window + 1) : i + 1]
         result.append(sum(window_values) / len(window_values))
     return result
 
@@ -282,17 +302,27 @@ def fastest_split(points: list[dict], target_distance_km: float) -> dict | None:
     j = 0
     for i in range(n):
         j = max(j, i)
-        while j < n and deduped[j]["distance_km"] - deduped[i]["distance_km"] < target_distance_km:
+        while (
+            j < n
+            and deduped[j]["distance_km"] - deduped[i]["distance_km"]
+            < target_distance_km
+        ):
             j += 1
         if j >= n:
             break
 
-        crossing = _crossing_time(deduped, j, deduped[i]["distance_km"] + target_distance_km)
+        crossing = _crossing_time(
+            deduped, j, deduped[i]["distance_km"] + target_distance_km
+        )
         duration = crossing - deduped[i]["elapsed_seconds"]
         if best_duration is None or duration < best_duration:
             best_duration = duration
 
-    return {"duration_seconds": round(best_duration, 1)} if best_duration is not None else None
+    return (
+        {"duration_seconds": round(best_duration, 1)}
+        if best_duration is not None
+        else None
+    )
 
 
 def _longest_distance_pb(activities: list[dict]) -> dict:
@@ -310,7 +340,8 @@ def _milestone_pbs(activities: list[dict], activity_type: str) -> dict:
     result = {}
     for milestone_km, label in MILESTONES_KM.get(activity_type, []):
         matching = [
-            a for a in activities
+            a
+            for a in activities
             if a.get("distance_km") is not None
             and a.get("duration_seconds") is not None
             and milestone_km <= a["distance_km"] <= milestone_km * MILESTONE_TOLERANCE
@@ -438,7 +469,9 @@ def pbs_cache_is_valid(pbs: dict, activity_count: int) -> bool:
     return pbs.get("computed_from") == activity_count
 
 
-def _met_from_pace_bands(value_seconds: float, bands: list[tuple[float, float]]) -> float:
+def _met_from_pace_bands(
+    value_seconds: float, bands: list[tuple[float, float]]
+) -> float:
     """bands sorted ascending by threshold; first band where value_seconds <=
     threshold wins (smaller pace-seconds = faster = higher-MET band)."""
     for threshold, met in bands:
@@ -473,10 +506,16 @@ def met_for_activity(activity: dict) -> float:
         return _MET_FALLBACK_ZERO_DISTANCE[activity_type]
 
     if activity_type == "cycle":
-        return _met_from_speed_bands(_speed_kmh(distance_km, duration_seconds), MET_TABLE["cycle"])
+        return _met_from_speed_bands(
+            _speed_kmh(distance_km, duration_seconds), MET_TABLE["cycle"]
+        )
     if activity_type == "swim":
-        return _met_from_pace_bands(_seconds_per_100m(distance_km, duration_seconds), MET_TABLE["swim"])
-    return _met_from_pace_bands(_seconds_per_km(distance_km, duration_seconds), MET_TABLE[activity_type])
+        return _met_from_pace_bands(
+            _seconds_per_100m(distance_km, duration_seconds), MET_TABLE["swim"]
+        )
+    return _met_from_pace_bands(
+        _seconds_per_km(distance_km, duration_seconds), MET_TABLE[activity_type]
+    )
 
 
 def median_hr_by_type(activities: list[dict]) -> dict[str, float]:
@@ -525,7 +564,9 @@ def daily_load_totals(activities: list[dict]) -> dict[str, float]:
         activity_date = activity.get("date")
         if not activity_date:
             continue
-        totals[activity_date] = totals.get(activity_date, 0.0) + activity_load(activity, median_hr)
+        totals[activity_date] = totals.get(activity_date, 0.0) + activity_load(
+            activity, median_hr
+        )
     return totals
 
 
@@ -549,7 +590,11 @@ def fitness_ewma_daily(activities: list[dict], as_of: date) -> list[dict]:
     current, value = first_day, None
     while current <= as_of:
         load_today = totals.get(current.isoformat(), 0.0)
-        value = load_today if value is None else value + (load_today - value) / _EWMA_WINDOW_DAYS
+        value = (
+            load_today
+            if value is None
+            else value + (load_today - value) / _EWMA_WINDOW_DAYS
+        )
         series.append({"date": current.isoformat(), "value": value})
         current += timedelta(days=1)
     return series
@@ -565,7 +610,10 @@ def compute_baseline_value(activities: list[dict], as_of: date) -> float | None:
 
 def rescale_to_index(raw_series: list[dict], baseline_value: float) -> list[dict]:
     """[{"date": ..., "index": 100 * value / baseline_value}, ...]."""
-    return [{"date": row["date"], "index": 100 * row["value"] / baseline_value} for row in raw_series]
+    return [
+        {"date": row["date"], "index": 100 * row["value"] / baseline_value}
+        for row in raw_series
+    ]
 
 
 def filter_series_by_date(series: list[dict], start: str, end: str) -> list[dict]:

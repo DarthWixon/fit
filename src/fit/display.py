@@ -75,7 +75,7 @@ def _format_hr(value) -> str:
 def render_history_table(activities: list[dict], n: int) -> None:
     recent = sorted(activities, key=lambda a: a.get("date", ""), reverse=True)[:n]
 
-    table = Table(title=f"Last {n} activities")
+    table = Table(title=f"Last {n} Activities")
     table.add_column("Date")
     table.add_column("Type")
     table.add_column("Distance", justify="right")
@@ -105,11 +105,11 @@ def render_pbs_table(
     window_label: str | None = None,
 ) -> None:
     if window_label:
-        title = f"Personal bests ({window_label})"
+        title = f"Personal Bests ({window_label})"
     elif window_months:
-        title = f"Personal bests (last {window_months} months)"
+        title = f"Personal Bests (Last {window_months} Uonths)"
     else:
-        title = "Personal bests"
+        title = "Personal Bests"
     table = Table(title=title)
     table.add_column("Type")
     table.add_column("Metric")
@@ -166,8 +166,8 @@ def render_fitness_index(
         return
 
     console.print(
-        f"[cyan]Fitness index[/cyan]: {current_index:.0f}  "
-        f"[dim](baseline 100 set {baseline_date})[/dim]"
+        f"[cyan]Fitness Index[/cyan]: {current_index:.0f}  "
+        f"[dim](Baseline 100 set {baseline_date})[/dim]"
     )
     label = f"Fitness trend ({window_label})" if window_label else "Fitness trend"
     render_sparkline([w["index"] for w in weekly_series], label)
@@ -291,7 +291,10 @@ def render_dashboard(
 
         if config["show_pbs"]:
             render_pbs_table(
-                pbs, sports=sports, window_months=window_months, window_label=window_label
+                pbs,
+                sports=sports,
+                window_months=window_months,
+                window_label=window_label,
             )
             console.print()
 

@@ -125,11 +125,11 @@ def test_import_gpx(tmp_path):
     assert activity["date"] == "2024-01-15"
     assert activity["distance_km"] == pytest.approx(2.0, abs=0.01)
     assert activity["duration_seconds"] == 600
-    assert activity["elevation_gain_m"] == 10        # 10->20 up, 20->15 down
+    assert activity["elevation_gain_m"] == 10  # 10->20 up, 20->15 down
     assert activity["avg_heart_rate"] == 150
     assert activity["max_heart_rate"] == 160
     assert activity["source"] == "gpx"
-    assert "splits" not in activity                  # 2km run, no 5k to find
+    assert "splits" not in activity  # 2km run, no 5k to find
 
 
 def test_import_tcx(tmp_path):
@@ -140,12 +140,12 @@ def test_import_tcx(tmp_path):
     assert activity["id"] == "2024-01-15T08:30:00"
     assert activity["type"] == "run"
     assert activity["date"] == "2024-01-15"
-    assert activity["distance_km"] == 2.0            # lap DistanceMeters summed
-    assert activity["duration_seconds"] == 600       # lap TotalTimeSeconds summed
-    assert activity["elevation_gain_m"] == 15        # per-lap altitude reset
-    assert activity["avg_heart_rate"] == 145         # mean of lap averages
+    assert activity["distance_km"] == 2.0  # lap DistanceMeters summed
+    assert activity["duration_seconds"] == 600  # lap TotalTimeSeconds summed
+    assert activity["elevation_gain_m"] == 15  # per-lap altitude reset
+    assert activity["avg_heart_rate"] == 145  # mean of lap averages
     assert activity["max_heart_rate"] == 165
-    assert activity["avg_power"] == 200              # mean of lap AvgWatts
+    assert activity["avg_power"] == 200  # mean of lap AvgWatts
     assert activity["source"] == "garmin"
     assert "splits" not in activity
 
@@ -173,7 +173,7 @@ def test_import_strava_csv_maps_and_drops_types(tmp_path):
     path.write_text(STRAVA_CSV_FIXTURE)
     activities, warnings = importers.import_strava_csv(str(path))
 
-    assert len(activities) == 1                      # Workout row dropped
+    assert len(activities) == 1  # Workout row dropped
     assert activities[0] == {
         "id": "2024-01-15T08:30:00",
         "type": "run",
