@@ -620,11 +620,44 @@ Consumers:
 
 - `planner.py` — structured workout generation (intervals, tempo runs, long rides)
   following a periodised plan. Rule-based initially, adaptive later.
-- `garmin.py` — auth and upload via the unofficial `python-garminconnect` library.
-  Approach TBD: file-based GPX import vs live API sync.
 
 Do not design current modules around these features. They will be added as separate
 modules when the MVP is stable.
+
+---
+
+## Garmin integration
+
+`garmin.py` is implemented — live API sync via the unofficial `garminconnect`
+library, gated behind the optional `garmin` extra (`pip install -e '.[garmin]'`).
+It is the **only** module that talks to the Garmin Connect network API. Like
+`importers.py`, it never touches the data dir or builds fit's activity dict shape
+directly — it returns raw FIT bytes and raw Garmin activity summaries, and
+`cli.py`'s `garmin-sync` command feeds those bytes through
+`importers.import_fit` -> `storage.write_activity`, the same path every other
+import takes.
+
+The optional `garminconnect` dependency is imported lazily inside functions (same
+pattern as `importers.import_fit`'s lazy `fitparse` import), so every other
+command works without it installed — `garmin.GarminAuthError` with
+`garmin.INSTALL_HINT` is raised instead if it's missing.
+
+Key functions:
+- `login()` — resumes a saved session from `TOKEN_STORE` if present; otherwise
+  prompts for email/password (and MFA if needed) via `typer`, then saves a
+  session token for next time. The session token lives at the library-default
+  `~/.garminconnect`, deliberately outside `~/.fit` so a zipped backup of the
+  data dir never carries a login.
+- `list_recent_activities(client, start_date, end_date) -> list[dict]` — raw
+  Garmin Connect activity summaries in range, not yet in fit's activity shape.
+- `download_activity_fit(client, garmin_activity_id) -> bytes` — raw FIT bytes
+  for one activity; unwraps Garmin's zip-wrapped "original" export format.
+
+`fit garmin-sync --days N` (default 14, `cli.py`) logs in, lists recent
+activities, downloads each as FIT bytes to a temp file, imports it via
+`importers.import_fit`, and hands the results to the same `_import_and_report`
+tail every other import path shares (dedupe, write, save original, print new
+PBs, recompute PB cache). Temp files are cleaned up in a `finally` block.
 
 ---
 
