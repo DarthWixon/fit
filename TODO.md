@@ -8,3 +8,4 @@ No priority at the moment, look into what needs doing
 4. Simple text calendar of days in the last 2 calendar months an activity has occured
 5. British english for comments, title case for titles enforced as style guide
 6. Black and Isort for python code formatting
+7. Add scheduling support for garmin workouts, ability to make multiple workouts at once
