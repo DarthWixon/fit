@@ -10,7 +10,18 @@ Ordered by priority (importance x ease). Work top to bottom.
    client.schedule_workout exists in garminconnect. While in there: diff
    client.get_workout_by_id() against a generated payload and update the
    "not yet verified" note in planner.py's docstring.
-3. How can we set up the database to work with a cloud service like
-   protondrive? Likely a docs/setup task (one-file-per-activity was chosen for
-   rsync-style sync), but Proton Drive has no official Linux client — research
-   spike first.
+3. Set up fit-sync on the Linux machine (Mac side done 2026-07-04; script,
+   data, and usage guide all live in /my-files/.fit on Proton Drive):
+   - Download the official proton-drive CLI (linux-x64 build, v0.4.6+) from
+     proton.me/download/drive/cli to ~/bin, chmod +x, `proton-drive auth
+     login` (needs a running Secret Service — gnome-keyring/KWallet — for the
+     session token).
+   - Pull the script + guide: `proton-drive filesystem download
+     /my-files/.fit/fit-sync /my-files/.fit/fit-sync-usage.md ~/bin`,
+     chmod +x, then edit ROLE to "primary" (the Mac is secondary).
+   - Before the first run: check the Linux box's ~/.fit config and
+     fitness.json are the ones that should win — the primary's copies
+     overwrite the remote (and then the Mac) from the first sync onward.
+   - Run ~/bin/fit-sync, then `fit dashboard` to confirm the merged history
+     renders. Optionally trash the stale gpx/ and pbs.json leftovers in
+     /my-files/.fit afterwards.
