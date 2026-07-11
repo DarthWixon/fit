@@ -184,6 +184,23 @@ def dashboard(
 
 
 @app.command()
+def dash(
+    sport: str = typer.Option(
+        None,
+        "--sport",
+        help="Only show this sport for this run (overrides the sports config)",
+    ),
+    timerange: str = typer.Option(
+        None,
+        "--timerange",
+        help="Rolling window ending today, e.g. 10d, 2w, 3m, 1y (overrides pbs_window_months for this run)",
+    ),
+) -> None:
+    """Shorthand for `fit dashboard --minimal`."""
+    dashboard(sport=sport, timerange=timerange, minimal=True)
+
+
+@app.command()
 def pbs(
     months: int = typer.Option(
         None,

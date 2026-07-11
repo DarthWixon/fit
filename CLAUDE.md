@@ -50,6 +50,7 @@ fit dashboard                # summary: recent activity, weekly volume, trend sp
 fit dashboard --sport cycle  # dashboard filtered to one sport for this run (overrides config)
 fit dashboard --timerange 3m # dashboard windowed to a rolling 3 months (history, sparkline, sports summary, PBs)
 fit dashboard --minimal      # dashboard with just the sparklines and recent activities for this run (hides PBs, sports summary)
+fit dash                     # shorthand for `fit dashboard --minimal` (also takes --sport / --timerange)
 fit pbs                      # personal bests table, grouped by activity type
 fit pbs --months 3           # personal bests over just the last N months (overrides config)
 fit stats                    # breakdown, accepts --week / --month / --year
