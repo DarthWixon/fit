@@ -1,0 +1,33 @@
+#!/bin/sh
+# Checks staged Python files with isort and black. Enable once per clone:
+#
+#   git config core.hooksPath hooks
+#
+# Checks rather than reformats: the commit then contains exactly what was
+# staged. (Auto-formatting would have to `git add` whole files, which would
+# sweep in any hunks deliberately left unstaged by `git add -p`.)
+
+set -e
+
+staged=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
+[ -z "$staged" ] && exit 0
+
+if [ -x .venv/bin/black ] && [ -x .venv/bin/isort ]; then
+    bin=.venv/bin/
+elif command -v black >/dev/null && command -v isort >/dev/null; then
+    bin=""
+else
+    echo "pre-commit: black/isort not found, skipping format check."
+    echo "            install them with: pip install -e '.[dev]'"
+    exit 0
+fi
+
+# --check against the working tree, not the index: a staged file with further
+# unstaged edits is checked as it currently reads on disk.
+if ! "${bin}isort" --check-only --quiet $staged || ! "${bin}black" --check --quiet $staged; then
+    echo
+    echo "commit aborted: staged files are not formatted. Run"
+    echo "  ${bin}isort src tests && ${bin}black src tests"
+    echo "then re-stage."
+    exit 1
+fi
