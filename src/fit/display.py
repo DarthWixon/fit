@@ -3,6 +3,8 @@ No file I/O. Any math needed to build a composite view (e.g. weekly volumes for
 the dashboard) is delegated to compute.py, never done inline here.
 """
 
+from datetime import date
+
 from rich.console import Console
 from rich.table import Table
 
@@ -38,7 +40,9 @@ def render_usage() -> None:
     )
 
 
-def render_sparkline(data: list[float], label: str) -> None:
+def render_sparkline(data: list[float], label: str, partial_last: bool = False) -> None:
+    """partial_last dims the final bar — for a still-in-progress week, whose
+    volume is low simply because the week isn't over yet."""
     if not data:
         console.print(f"{label}: [dim](no data)[/dim]")
         return
@@ -49,6 +53,8 @@ def render_sparkline(data: list[float], label: str) -> None:
     else:
         indices = [round((v - lo) / (hi - lo) * (len(_SPARK_CHARS) - 1)) for v in data]
     spark = "".join(_SPARK_CHARS[i] for i in indices)
+    if partial_last:
+        spark = f"{spark[:-1]}[dim]{spark[-1]}[/dim]"
 
     console.print(f"[cyan]{label}[/cyan]: {spark}  ({lo:.1f}–{hi:.1f})")
 
@@ -222,7 +228,12 @@ def render_fitness_reset(old_baseline: dict, new_baseline: dict) -> None:
         )
 
 
-def render_stats(activities: list[dict]) -> None:
+def _last_week_partial(weekly: list[dict], today: date) -> bool:
+    """Whether a weekly series ends on the still-in-progress current week."""
+    return bool(weekly) and compute.is_current_week(weekly[-1]["week"], today)
+
+
+def render_stats(activities: list[dict], today: date) -> None:
     if not activities:
         console.print("[dim]No activities yet.[/dim]")
         return
@@ -238,9 +249,11 @@ def render_stats(activities: list[dict]) -> None:
 
     _render_type_summary_table(activities, title="By type")
 
-    weekly = compute.weekly_volumes(activities)
+    weekly = compute.weekly_volumes(activities, through=today)
     render_sparkline(
-        [w["duration_seconds"] / 3600 for w in weekly], "Weekly volume (hours)"
+        [w["duration_seconds"] / 3600 for w in weekly],
+        "Weekly volume (hours)",
+        partial_last=_last_week_partial(weekly, today),
     )
 
 
@@ -249,6 +262,7 @@ def render_dashboard(
     pbs: dict,
     config: dict,
     fitness: dict,
+    today: date,
     sports: list[str] | None = None,
     window_months: int = 0,
     window_label: str | None = None,
@@ -258,7 +272,8 @@ def render_dashboard(
     "weekly"} — always full-history/as-of-today, never narrowed by sports or
     window (see "Fitness index" in CLAUDE.md). The volume and fitness-trend
     sparklines are capped to the last config["dashboard_weeks"] weeks (0 = all),
-    unless --timerange is already driving the window.
+    unless --timerange is already driving the window. today anchors the volume
+    series' final week (see compute.weekly_volumes) and marks it as partial.
 
     Block order: fitness index -> weekly volume sparkline -> time range banner
     -> history table -> personal bests -> sports summary. Sports summary
@@ -299,13 +314,15 @@ def render_dashboard(
         console.print()
     else:
         if config["show_sparkline"]:
-            weekly = compute.weekly_volumes(filtered)
+            weekly = compute.weekly_volumes(filtered, through=today)
             volume_label = "Weekly volume (hours)"
             if weeks_cap:
                 weekly = weekly[-weeks_cap:]
                 volume_label += f" (last {weeks_cap} wks)"
             render_sparkline(
-                [w["duration_seconds"] / 3600 for w in weekly], volume_label
+                [w["duration_seconds"] / 3600 for w in weekly],
+                volume_label,
+                partial_last=_last_week_partial(weekly, today),
             )
             console.print()
 

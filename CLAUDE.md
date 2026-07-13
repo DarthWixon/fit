@@ -175,13 +175,21 @@ Key functions:
   since bike effort is conventionally read as speed rather than pace). Always
   returns `"—"` for any type in `NO_DISTANCE_TYPES` (currently `"squash"`),
   regardless of `distance_km` — its nonzero distance is never a real pace signal
-- `weekly_volumes(activities: list[dict]) -> list[dict]` —
+- `weekly_volumes(activities: list[dict], through: date | None = None) -> list[dict]` —
   one bucket per ISO week, oldest first: `{"week", "count", "duration_seconds",
   "distance_km"}`. **Volume is measured in time, not distance** — `duration_seconds`
   is what the dashboard/stats sparklines plot (as decimal hours), since distance is
   heavily biased across sports (an hour of cycling covers ~4x an hour of running,
   ~40x an hour of swimming, and squash covers nothing real at all). `distance_km`
-  stays in the bucket as a secondary figure
+  stays in the bucket as a secondary figure. The series spans **every calendar
+  week** between the first and last activity — weeks with no activity zero-fill
+  rather than collapsing, so a rest week is a trough and not a missing bar, and a
+  `[-n:]` slice really is the last n weeks. `through` (callers pass today) extends
+  the series to that date's week, so the current week always appears even with
+  nothing logged in it yet
+- `is_current_week(week_key: str, reference: date) -> bool` — whether a `weekly_*`
+  series' final bucket is the still-filling-up current week; `display` uses it to
+  dim that bar (see `render_sparkline`)
 - `filter_by_type(activities: list[dict], type: str) -> list[dict]`
 - `filter_by_types(activities: list[dict], types: list[str]) -> list[dict]` — like
   `filter_by_type` but for the config-driven `sports` list; empty/falsy `types`
@@ -242,7 +250,10 @@ Key functions:
 - `rescale_to_index(raw_series: list[dict], baseline_value: float) -> list[dict]`
 - `filter_series_by_date(series: list[dict], start: str, end: str) -> list[dict]` —
   like `filter_by_date` but for a `{"date": ...}`-keyed series
-- `weekly_fitness_index(index_series: list[dict]) -> list[dict]` — resamples to one
+- `weekly_fitness_index(index_series: list[dict]) -> list[dict]` — needs no
+  zero-filling of its own (unlike `weekly_volumes`): its input daily series from
+  `fitness_ewma_daily` is already dense over every calendar day, so the weeks come
+  out contiguous. Resamples to one
   point per ISO week (the week's last value, not a sum — see "Fitness index")
 
 Key constants:
@@ -266,7 +277,7 @@ Takes outputs of compute functions and renders Rich output to stdout. No file I/
 no computation.
 
 Key functions:
-- `render_dashboard(activities: list[dict], pbs: dict, config: dict, fitness: dict, sports: list[str] | None = None, window_months: int = 0, window_label: str | None = None) -> None` —
+- `render_dashboard(activities: list[dict], pbs: dict, config: dict, fitness: dict, today: date, sports: list[str] | None = None, window_months: int = 0, window_label: str | None = None) -> None` —
   `config` is the `storage.read_config()` dict (supplies `history_count`,
   `dashboard_weeks`, and the four `show_*` toggles); `fitness` is
   `cli._fitness_snapshot()`'s dict
@@ -322,8 +333,14 @@ Key functions:
 - `render_calendar(months: list[dict]) -> None` — `fit calendar`'s output: one
   month grid per `compute.activity_calendar` dict, active days in bold green,
   padding cells blank
-- `render_stats(activities: list[dict]) -> None`
-- `render_sparkline(data: list[float], label: str) -> None`
+- `render_stats(activities: list[dict], today: date) -> None`
+- `render_sparkline(data: list[float], label: str, partial_last: bool = False) -> None` —
+  `partial_last` dims the final bar (Rich `[dim]`), for a week that is only low
+  because it isn't over yet. Callers set it via the private `_last_week_partial`,
+  which wraps `compute.is_current_week`. Deliberately *not* set for the
+  fitness-trend sparkline: that series plots each week's closing EWMA *level*, not
+  a sum, so the current week's value is a legitimate as-of-today reading rather
+  than a half-filled bucket
 - `render_new_pb_messages(new_pbs: list[dict]) -> None` — formats
   `compute.detect_new_pbs()`'s structured output into "New fastest 5k: 21:40"-style
   lines; uses its own mm:ss colon formatter (`_format_seconds_colon`), deliberately

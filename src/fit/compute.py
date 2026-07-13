@@ -213,26 +213,60 @@ def _iso_week_key(date_iso: str) -> str:
     return f"{year}-W{week:02d}"
 
 
-def weekly_volumes(activities: list[dict]) -> list[dict]:
-    """One bucket per ISO week, oldest first: {"week", "count",
-    "duration_seconds", "distance_km"}.
+def _week_start(date_iso: str) -> date:
+    """Monday of the ISO week containing date_iso."""
+    day = date.fromisoformat(date_iso)
+    return day - timedelta(days=day.weekday())
+
+
+def _empty_week(key: str) -> dict:
+    return {"week": key, "distance_km": 0.0, "duration_seconds": 0, "count": 0}
+
+
+def is_current_week(week_key: str, reference: date) -> bool:
+    """True if week_key ('2026-W28') is the ISO week containing reference — i.e.
+    that week is still filling up, so its volume is not yet comparable to the
+    complete weeks beside it."""
+    return week_key == _iso_week_key(reference.isoformat())
+
+
+def weekly_volumes(activities: list[dict], through: date | None = None) -> list[dict]:
+    """One bucket per ISO week, oldest first, spanning every calendar week from
+    the first activity's through the last — weeks with no activity zero-fill
+    rather than collapsing, so the series reads as a timeline (a rest week is a
+    trough, not a missing bar). `through`, when given, extends the series to the
+    week containing that date, so the current week always appears even before
+    anything is logged in it.
 
     Volume is measured in time: duration_seconds is what the sparklines plot.
     distance_km rides along as a secondary figure."""
     weeks: dict[str, dict] = {}
+    dates = []
     for activity in activities:
         activity_date = activity.get("date")
         if not activity_date:
             continue
+        dates.append(activity_date)
         key = _iso_week_key(activity_date)
-        bucket = weeks.setdefault(
-            key, {"week": key, "distance_km": 0.0, "duration_seconds": 0, "count": 0}
-        )
+        bucket = weeks.setdefault(key, _empty_week(key))
         bucket["distance_km"] += activity.get("distance_km", 0) or 0
         bucket["duration_seconds"] += activity.get("duration_seconds", 0) or 0
         bucket["count"] += 1
 
-    return [weeks[key] for key in sorted(weeks)]
+    if not dates:
+        return []
+
+    monday = _week_start(min(dates))
+    last_monday = _week_start(max(dates))
+    if through is not None:
+        last_monday = max(last_monday, _week_start(through.isoformat()))
+
+    series = []
+    while monday <= last_monday:
+        key = _iso_week_key(monday.isoformat())
+        series.append(weeks.get(key, _empty_week(key)))
+        monday += timedelta(days=7)
+    return series
 
 
 def summarize_by_type(activities: list[dict]) -> list[dict]:

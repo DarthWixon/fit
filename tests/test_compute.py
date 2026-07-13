@@ -73,6 +73,37 @@ def test_activity_calendar_weeks_are_monday_first_with_padding():
     assert months[0]["active_days"] == []
 
 
+# --- weekly_volumes ------------------------------------------------------------
+
+
+def test_weekly_volumes_zero_fills_and_spans_year_boundary():
+    activities = [
+        {"date": "2025-12-20", "type": "run", "duration_seconds": 3600},
+        {"date": "2026-01-10", "type": "run", "duration_seconds": 1800},
+    ]
+    weekly = compute.weekly_volumes(activities)
+    # Rest weeks are troughs, not missing bars — and W52 rolls into W01 cleanly.
+    assert [w["week"] for w in weekly] == [
+        "2025-W51",
+        "2025-W52",
+        "2026-W01",
+        "2026-W02",
+    ]
+    assert [w["duration_seconds"] for w in weekly] == [3600, 0, 0, 1800]
+
+
+def test_weekly_volumes_through_extends_to_the_current_week():
+    activities = [{"date": "2026-01-10", "type": "run", "duration_seconds": 1800}]
+    weekly = compute.weekly_volumes(activities, through=date(2026, 1, 26))
+    assert [w["week"] for w in weekly] == [
+        "2026-W02",
+        "2026-W03",
+        "2026-W04",
+        "2026-W05",
+    ]
+    assert compute.is_current_week(weekly[-1]["week"], date(2026, 1, 26))
+
+
 # --- fastest_split -------------------------------------------------------------
 
 

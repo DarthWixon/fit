@@ -177,6 +177,7 @@ def dashboard(
         window["pbs"],
         config,
         fitness,
+        today,
         sports=sports,
         window_months=window["window_months"],
         window_label=window["window_label"],
@@ -254,12 +255,13 @@ def fitness_reset() -> None:
 def stats(week: bool = False, month: bool = False, year: bool = False) -> None:
     activities = _load_activities()
 
+    today = date_cls.today()
     window = "week" if week else "month" if month else "year" if year else None
-    date_range = compute.stats_date_range(window, date_cls.today())
+    date_range = compute.stats_date_range(window, today)
     if date_range is not None:
         activities = compute.filter_by_date(activities, *date_range)
 
-    display.render_stats(activities)
+    display.render_stats(activities, today)
 
 
 def _import_and_report(
