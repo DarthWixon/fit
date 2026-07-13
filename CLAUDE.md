@@ -175,7 +175,13 @@ Key functions:
   since bike effort is conventionally read as speed rather than pace). Always
   returns `"—"` for any type in `NO_DISTANCE_TYPES` (currently `"squash"`),
   regardless of `distance_km` — its nonzero distance is never a real pace signal
-- `weekly_volumes(activities: list[dict]) -> list[dict]`
+- `weekly_volumes(activities: list[dict]) -> list[dict]` —
+  one bucket per ISO week, oldest first: `{"week", "count", "duration_seconds",
+  "distance_km"}`. **Volume is measured in time, not distance** — `duration_seconds`
+  is what the dashboard/stats sparklines plot (as decimal hours), since distance is
+  heavily biased across sports (an hour of cycling covers ~4x an hour of running,
+  ~40x an hour of swimming, and squash covers nothing real at all). `distance_km`
+  stays in the bucket as a secondary figure
 - `filter_by_type(activities: list[dict], type: str) -> list[dict]`
 - `filter_by_types(activities: list[dict], types: list[str]) -> list[dict]` — like
   `filter_by_type` but for the config-driven `sports` list; empty/falsy `types`
@@ -198,7 +204,7 @@ Key functions:
   dashboard --timerange`
 - `summarize_by_type(activities: list[dict]) -> list[dict]` — one row per distinct
   activity type present, sorted alphabetically:
-  `[{"type": ..., "count": ..., "distance_km": ...}, ...]`. Shared by
+  `[{"type": ..., "count": ..., "duration_seconds": ..., "distance_km": ...}, ...]`. Shared by
   `display.render_stats`'s "By type" table and the dashboard's sports-summary block
   (`display.render_sports_summary`) — the single source of truth for "by type"
   aggregation
@@ -279,7 +285,9 @@ Key functions:
   even the empty-activities early return, so the headline (always
   full-history/as-of-today) never disappears just because
   `--sport`/`--timerange` matches nothing elsewhere on the page — see
-  "Fitness index". Both the weekly-volume and fitness-trend sparklines are
+  "Fitness index". The weekly-volume sparkline plots each week's summed
+  `duration_seconds` as decimal hours (see `compute.weekly_volumes`), not
+  distance. Both it and the fitness-trend sparkline are
   capped to the last `config["dashboard_weeks"]` weeks (0 = all) so long
   history doesn't wrap over multiple lines; the cap is skipped when
   `--timerange` (a truthy `window_label`) is already driving the window.
@@ -299,7 +307,10 @@ Key functions:
   is fine — this is how it respects `--timerange` while ignoring `--sport`).
   Shares its table-building logic with `render_stats` via the private
   `_render_type_summary_table(activities, title)`, which wraps
-  `compute.summarize_by_type`
+  `compute.summarize_by_type`. Columns are Type / Count / Time / Distance —
+  Time (the volume measure) leads Distance, and Distance shows `"—"` for any
+  `compute.NO_DISTANCE_TYPES` member, same rule as the history table's
+  `_format_distance`
 - `render_fitness_index(current_index: float | None, baseline_date: str | None, weekly_series: list[dict], window_label: str | None = None) -> None` —
   headline (always full-history/as-of-today) + trend sparkline (windowed by
   `window_label`/`--timerange` if the caller passes an already-windowed
@@ -617,9 +628,9 @@ DEFAULTS = {
     "pbs_window_months": 0,     # 0 = all-time PBs
     "history_count": 5,         # rows in the dashboard's embedded history table
     "dashboard_weeks": 12,      # weeks shown in dashboard volume/fitness sparklines (0 = all)
-    "show_sparkline": True,     # weekly volume sparkline block
+    "show_sparkline": True,     # weekly volume (hours) sparkline block
     "show_pbs": True,           # personal bests block
-    "show_sports_summary": True,  # sports summary block (all types, count + distance)
+    "show_sports_summary": True,  # sports summary block (all types, count + time + distance)
     "show_fitness_index": True,   # fitness index (EWMA training load rescaled to a baseline of 100) block
 }
 ```

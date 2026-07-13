@@ -214,14 +214,22 @@ def _iso_week_key(date_iso: str) -> str:
 
 
 def weekly_volumes(activities: list[dict]) -> list[dict]:
+    """One bucket per ISO week, oldest first: {"week", "count",
+    "duration_seconds", "distance_km"}.
+
+    Volume is measured in time: duration_seconds is what the sparklines plot.
+    distance_km rides along as a secondary figure."""
     weeks: dict[str, dict] = {}
     for activity in activities:
         activity_date = activity.get("date")
         if not activity_date:
             continue
         key = _iso_week_key(activity_date)
-        bucket = weeks.setdefault(key, {"week": key, "distance_km": 0.0, "count": 0})
+        bucket = weeks.setdefault(
+            key, {"week": key, "distance_km": 0.0, "duration_seconds": 0, "count": 0}
+        )
         bucket["distance_km"] += activity.get("distance_km", 0) or 0
+        bucket["duration_seconds"] += activity.get("duration_seconds", 0) or 0
         bucket["count"] += 1
 
     return [weeks[key] for key in sorted(weeks)]
@@ -229,16 +237,19 @@ def weekly_volumes(activities: list[dict]) -> list[dict]:
 
 def summarize_by_type(activities: list[dict]) -> list[dict]:
     """One row per distinct activity type present, sorted alphabetically.
-    Returns [{"type": ..., "count": ..., "distance_km": ...}, ...]."""
+    Returns [{"type": ..., "count": ..., "duration_seconds": ..., "distance_km": ...}, ...].
+    """
     types = sorted({a.get("type", "unknown") for a in activities})
     summary = []
     for activity_type in types:
         type_activities = filter_by_type(activities, activity_type)
         distance = sum(a.get("distance_km", 0) or 0 for a in type_activities)
+        duration = sum(a.get("duration_seconds", 0) or 0 for a in type_activities)
         summary.append(
             {
                 "type": activity_type,
                 "count": len(type_activities),
+                "duration_seconds": duration,
                 "distance_km": distance,
             }
         )

@@ -42,9 +42,9 @@ DEFAULTS = {
     "pbs_window_months": 0,  # 0 = all-time PBs
     "history_count": 5,  # rows in the dashboard's embedded history table
     "dashboard_weeks": 12,  # weeks shown in dashboard volume/fitness sparklines (0 = all)
-    "show_sparkline": True,  # weekly volume sparkline block
+    "show_sparkline": True,  # weekly volume (hours) sparkline block
     "show_pbs": True,  # personal bests block
-    "show_sports_summary": True,  # sports summary block (all types, count + distance)
+    "show_sports_summary": True,  # sports summary block (all types, count + time + distance)
     "show_fitness_index": True,  # fitness index (EWMA training load rescaled to a baseline of 100) block
 }
 
@@ -53,9 +53,9 @@ _CONFIG_COMMENTS = {
     "pbs_window_months": "how far back to look for PBs shown on dashboard/pbs (0 = all-time)",
     "history_count": "rows in the dashboard's recent-activity table",
     "dashboard_weeks": "weeks shown in dashboard volume/fitness sparklines (0 = all)",
-    "show_sparkline": "weekly volume sparkline block",
+    "show_sparkline": "weekly volume (hours) sparkline block",
     "show_pbs": "personal bests block",
-    "show_sports_summary": "sports summary block (all types, count + distance)",
+    "show_sports_summary": "sports summary block (all types, count + time + distance)",
     "show_fitness_index": "fitness index (EWMA training load rescaled to a baseline of 100) block",
 }
 

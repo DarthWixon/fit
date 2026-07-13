@@ -137,9 +137,20 @@ def _render_type_summary_table(activities: list[dict], title: str) -> None:
     table = Table(title=title)
     table.add_column("Type")
     table.add_column("Count", justify="right")
+    table.add_column("Time", justify="right")
     table.add_column("Distance", justify="right")
     for row in compute.summarize_by_type(activities):
-        table.add_row(row["type"], str(row["count"]), f"{row['distance_km']:.1f}km")
+        distance = (
+            "—"
+            if row["type"] in compute.NO_DISTANCE_TYPES
+            else f"{row['distance_km']:.1f}km"
+        )
+        table.add_row(
+            row["type"],
+            str(row["count"]),
+            _format_duration(row["duration_seconds"]),
+            distance,
+        )
     console.print(table)
 
 
@@ -221,14 +232,16 @@ def render_stats(activities: list[dict]) -> None:
 
     console.print(
         f"[bold]{len(activities)}[/bold] activities, "
-        f"[bold]{total_distance:.1f}km[/bold] total, "
-        f"[bold]{_format_duration(total_duration)}[/bold] total time"
+        f"[bold]{_format_duration(total_duration)}[/bold] total time, "
+        f"[bold]{total_distance:.1f}km[/bold] total"
     )
 
     _render_type_summary_table(activities, title="By type")
 
     weekly = compute.weekly_volumes(activities)
-    render_sparkline([w["distance_km"] for w in weekly], "Weekly volume")
+    render_sparkline(
+        [w["duration_seconds"] / 3600 for w in weekly], "Weekly volume (hours)"
+    )
 
 
 def render_dashboard(
@@ -287,11 +300,13 @@ def render_dashboard(
     else:
         if config["show_sparkline"]:
             weekly = compute.weekly_volumes(filtered)
-            volume_label = "Weekly volume (km)"
+            volume_label = "Weekly volume (hours)"
             if weeks_cap:
                 weekly = weekly[-weeks_cap:]
                 volume_label += f" (last {weeks_cap} wks)"
-            render_sparkline([w["distance_km"] for w in weekly], volume_label)
+            render_sparkline(
+                [w["duration_seconds"] / 3600 for w in weekly], volume_label
+            )
             console.print()
 
         if window_label:
