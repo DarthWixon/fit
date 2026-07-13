@@ -15,10 +15,14 @@ no cloud. See `CLAUDE.md` for the full design notes.
 
 ```bash
 git clone <repo-url> fit && cd fit
-uv venv                      # creates .venv with the pinned Python version
-uv pip install -e '.[dev]'   # the app plus pytest
-.venv/bin/fit usage          # smoke test
+uv venv                        # creates .venv with the pinned Python version
+uv pip install -e '.[dev]'     # the app plus pytest, black, isort
+git config core.hooksPath hooks  # enable the pre-commit format check
+.venv/bin/fit usage            # smoke test
 ```
+
+The `core.hooksPath` line is needed once per clone — git does not pick up
+`hooks/` on its own (see [Formatting](#formatting) below).
 
 Without uv, any Python ≥3.11 works:
 
@@ -105,3 +109,23 @@ git restore examples/data && git clean -fdq examples/data
 ```bash
 .venv/bin/pytest
 ```
+
+## Formatting
+
+Code is formatted with black (default settings) and isort (black profile).
+`hooks/pre-commit` checks staged `.py` files and aborts the commit if either
+would change them — it never reformats behind your back, so a commit contains
+exactly what you staged. Enable it once per clone:
+
+```bash
+git config core.hooksPath hooks
+```
+
+To fix what it flags:
+
+```bash
+.venv/bin/isort src tests && .venv/bin/black src tests
+```
+
+Without the `dev` extra installed the hook skips itself with a hint rather than
+blocking the commit.
