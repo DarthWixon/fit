@@ -10,6 +10,7 @@ Activity dicts have the shape:
         "elevation_gain_m": 45,            # optional
         "avg_heart_rate": 152,             # optional
         "max_heart_rate": 171,             # optional
+        "hr_zones": {"zone1_seconds": 120.0, ...},  # optional, see "HR zones"
         "source": "gpx",                   # "gpx" | "garmin" | "strava"
         "gpx_file": "gpx/2024-01-15T08:30:00.gpx"  # optional, relative path
     }
@@ -42,6 +43,7 @@ DEFAULTS = {
     "pbs_window_months": 0,  # 0 = all-time PBs
     "history_count": 5,  # rows in the dashboard's embedded history table
     "dashboard_weeks": 12,  # weeks shown in dashboard volume/fitness sparklines (0 = all)
+    "max_heart_rate": 0,  # bpm, 0 = unset (HR zone breakdown column shows "—" until set)
     "show_sparkline": True,  # weekly volume (hours) sparkline block
     "show_pbs": True,  # personal bests block
     "show_sports_summary": True,  # sports summary block (all types, count + time + distance)
@@ -53,6 +55,7 @@ _CONFIG_COMMENTS = {
     "pbs_window_months": "how far back to look for PBs shown on dashboard/pbs (0 = all-time)",
     "history_count": "rows in the dashboard's recent-activity table",
     "dashboard_weeks": "weeks shown in dashboard volume/fitness sparklines (0 = all)",
+    "max_heart_rate": "your max heart rate in bpm, used to compute HR zone % breakdowns (0 = unset)",
     "show_sparkline": "weekly volume (hours) sparkline block",
     "show_pbs": "personal bests block",
     "show_sports_summary": "sports summary block (all types, count + time + distance)",

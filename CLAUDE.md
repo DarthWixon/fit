@@ -225,6 +225,14 @@ Key functions:
 - `fastest_split(points: list[dict], target_distance_km: float) -> dict | None` — best
   continuous segment of a given distance within one activity's (elapsed_seconds,
   distance_km) point stream; see "Split PBs" below
+- `hr_zone_seconds(points: list[dict], max_heart_rate: int) -> dict` — time spent
+  in each of the 5 HR zones from a point stream of `{"elapsed_seconds", "hr",
+  ...}` dicts, attributing the gap to the earlier sample's zone; `{}` if
+  `max_heart_rate <= 0` or fewer than 2 points carry `hr`; see "HR zones"
+- `hr_zone_percentages(hr_zones: dict | None) -> dict | None` — converts a
+  stored `hr_zones` seconds dict into `{"zone1": pct, ..., "zone5": pct}`
+  summing to ~100, or `None` if missing/empty/all-zero; the display-time
+  arithmetic behind `display._format_hr_zones`
 - `all_personal_bests(activities: list[dict]) -> dict` — groups activities by type and
   calls the private `_candidate_pbs` per type, which itself composes four
   single-purpose helpers: `_longest_distance_pb`, `_milestone_pbs`, `_split_pbs`,
@@ -268,6 +276,8 @@ Key constants:
   an indoor court sport with no GPS track); `calc_pace` and `_candidate_pbs`
   both check it to suppress pace strings and the "longest distance" PB for
   these types
+- `HR_ZONE_BOUNDARIES` — fraction-of-max-heart-rate lower bounds for the 5
+  standard HR training zones (`[0.5, 0.6, 0.7, 0.8, 0.9]`); see "HR zones"
 
 Always use `.get()` when accessing activity fields — older activities may not have
 fields added after they were logged (e.g. `avg_heart_rate`, `elevation_gain_m`).
@@ -307,8 +317,11 @@ Key functions:
   activities that have it, falling back to `compute.calc_pace()` otherwise.
   "Distance" uses `_format_distance()`, showing `"—"` for any
   `compute.NO_DISTANCE_TYPES` member instead of a meaningless value, same as
-  "Pace" already does. "Avg HR"/"Max HR" use `_format_hr()`, showing `"—"`
-  when `avg_heart_rate`/`max_heart_rate` are absent
+  "Pace" already does. "HR Zones" uses `_format_hr_zones()`, a segmented
+  colour bar (Z1 blue -> Z5 red, built from `compute.hr_zone_percentages()`)
+  showing each zone's share of the activity's time; shows `"—"` when an
+  activity has no `hr_zones` (predates the feature, Strava-CSV-only, or
+  `max_heart_rate` wasn't configured at import time) — see "HR zones"
 - `render_pbs_table(pbs: dict, sports: list[str] | None = None, window_months: int = 0, window_label: str | None = None) -> None` —
   `window_label`, when set, overrides the `window_months`-based title text
   (`"Personal bests (last N months)"`) with `"Personal bests ({window_label})"`,
@@ -363,19 +376,25 @@ Parses external formats and returns a correctly-shaped activity dict. Uses stdli
 `xml.etree.ElementTree` for GPX/TCX (no external XML library) and `fitparse` for FIT.
 
 Key functions:
-- `import_gpx(path: str) -> dict`
-- `import_tcx(path: str) -> dict`
-- `import_fit(path: str) -> dict`
+- `import_gpx(path: str, max_heart_rate: int = 0) -> dict`
+- `import_tcx(path: str, max_heart_rate: int = 0) -> dict`
+- `import_fit(path: str, max_heart_rate: int = 0) -> dict`
 - `import_strava_csv(path: str) -> tuple[list[dict], list[str]]` — a single bare
   Strava `activities.csv`; second element is warning strings (see below)
-- `import_strava_export(export_dir: str) -> tuple[list[dict], list[str]]` — a full
-  Strava bulk-export archive (`activities.csv` + linked, possibly gzipped,
+- `import_strava_export(export_dir: str, max_heart_rate: int = 0) -> tuple[list[dict], list[str]]` —
+  a full Strava bulk-export archive (`activities.csv` + linked, possibly gzipped,
   GPX/TCX/FIT files); second element is warning strings (see below)
-- `import_by_extension(path: str, suffix: str) -> dict` — dispatches to
-  `import_gpx`/`import_tcx`/`import_fit` by suffix, raising `ValueError` for anything
-  else; the single source of truth for extension dispatch, used by both `cli.py`'s
-  `import` command and `_import_strava_linked_file` (for linked/gzipped files inside
-  a bulk export)
+- `import_by_extension(path: str, suffix: str, max_heart_rate: int = 0) -> dict` —
+  dispatches to `import_gpx`/`import_tcx`/`import_fit` by suffix, raising
+  `ValueError` for anything else; the single source of truth for extension
+  dispatch, used by both `cli.py`'s `import` command and
+  `_import_strava_linked_file` (for linked/gzipped files inside a bulk export)
+
+`max_heart_rate` (all three `import_*` plus every function above that dispatches
+to them) is threaded down from `cli.py`'s `storage.read_config()["max_heart_rate"]`
+call — importers.py never reads config/storage itself (see below), so this is an
+explicit parameter rather than a lookup, the same pattern `planner.py`'s pure
+functions use.
 
 Importers never check for duplicates themselves — they always return every activity
 they parse. `cli.py`'s `import_activity` is the single place that calls
@@ -396,6 +415,13 @@ are always surfaced. This is the single reason `import_strava_csv`/
 distance_km) point stream while parsing, purely in memory, and use it to compute
 best-effort split times (see "Split PBs" below) before attaching the result to the
 returned dict's `splits` field and discarding the raw stream — it is never persisted.
+The same point stream also carries `hr` where the format provides it (GPX's
+already-parsed per-point `<gpxtpx:hr>`; TCX's per-trackpoint `<HeartRateBpm>`, read
+by `_tcx_trackpoint_heart_rate` — a new extractor alongside the existing
+`_tcx_trackpoint_elevation`, since only lap-level HR was read before; FIT's
+per-record `heart_rate` field, already decoded by `fitparse` but previously
+unread) and feeds `compute.hr_zone_seconds` alongside the split computation,
+attaching the result to `hr_zones` before the stream is discarded — see "HR zones".
 
 **Known limitation**: the Garmin TCX schema's `Sport` attribute only supports
 `Running`/`Biking`/`Other` — there is no native `Swimming` value. `import_tcx`
@@ -486,7 +512,9 @@ functions, never each other):
     "avg_power": 187,                  # optional, watts; TCX (lap AvgWatts) / FIT (session avg_power) only
     "source": "gpx",                   # "gpx" | "garmin" | "strava"
     "gpx_file": "gpx/2024-01-15T08:30:00.gpx",  # optional, relative path
-    "splits": {"5k_seconds": 1423, "10k_seconds": 2950}  # optional, see "Split PBs"
+    "splits": {"5k_seconds": 1423, "10k_seconds": 2950},  # optional, see "Split PBs"
+    "hr_zones": {"zone1_seconds": 120.0, "zone2_seconds": 340.5, "zone3_seconds": 890.0,
+                 "zone4_seconds": 210.0, "zone5_seconds": 40.0}  # optional, see "HR zones"
 }
 ```
 
@@ -563,6 +591,47 @@ keys — both coexist per type without collision:
 If a distance isn't in `SPLIT_DISTANCES_KM`, it isn't instantly queryable after the
 fact — recomputing it means re-importing from the original file (kept in `gpx/` for
 exactly this kind of reference).
+
+---
+
+## HR zones
+
+The dashboard's recent-activity table shows a per-activity breakdown of time
+spent in each of 5 heart-rate training zones, as a segmented colour bar (see
+`display.render_history_table`/`_format_hr_zones`), replacing the older plain
+"Avg HR"/"Max HR" columns.
+
+Zones are the standard 5-band %-of-max-heart-rate model: Z1 50-60%, Z2 60-70%,
+Z3 70-80%, Z4 80-90%, Z5 90-100%+ of `max_heart_rate` (`compute.HR_ZONE_BOUNDARIES`).
+`max_heart_rate` is a new config key (bpm, `0` = unset) — the user's own value,
+not derived or calibrated from activity data (unlike the fitness index's
+self-calibrating HR multiplier).
+
+Like split PBs, there is no persisted stream of trackpoint data. `import_gpx`/
+`import_tcx`/`import_fit` compute HR zone-seconds once, at import time, from the
+same transient (elapsed_seconds, distance_km, ...) point stream used for splits,
+now also carrying `hr` where the format provides it — GPX's already-parsed
+per-point `<gpxtpx:hr>`, TCX's per-trackpoint `<HeartRateBpm>` (a new extractor,
+`_tcx_trackpoint_heart_rate`, since previously only lap-level HR was read), and
+FIT's per-record `heart_rate` field (already decoded by `fitparse`, previously
+unread). `compute.hr_zone_seconds` attributes each gap between samples to the
+earlier sample's zone and returns `{}` if `max_heart_rate` is unset or fewer than
+2 points carry `hr` — the result is attached as the activity dict's optional
+`hr_zones` field (raw seconds, e.g. `{"zone1_seconds": 120.0, ...}`), and the raw
+point stream is discarded immediately after, same as splits.
+
+Because `max_heart_rate` is only consulted at import time, this is
+**going-forward only**: activities imported before the config key was set (or
+before this feature existed at all) simply have no `hr_zones` field, and the
+dashboard column shows `"—"` for them — same as Strava-CSV-only imports, which
+have no track data to derive zones from regardless. There is no backfill and no
+recompute-on-config-change; changing `max_heart_rate` later only affects
+activities imported afterward (consistent with `fitness.json`'s baseline being
+sticky rather than silently recomputed — see "Fitness index").
+
+`compute.hr_zone_percentages` converts the stored seconds into
+`{"zone1": pct, ..., "zone5": pct}` at display time — this arithmetic
+deliberately lives in `compute.py`, not `display.py`.
 
 ---
 
@@ -645,6 +714,7 @@ DEFAULTS = {
     "pbs_window_months": 0,     # 0 = all-time PBs
     "history_count": 5,         # rows in the dashboard's embedded history table
     "dashboard_weeks": 12,      # weeks shown in dashboard volume/fitness sparklines (0 = all)
+    "max_heart_rate": 0,        # bpm, 0 = unset (HR zone breakdown column shows "—" until set)
     "show_sparkline": True,     # weekly volume (hours) sparkline block
     "show_pbs": True,           # personal bests block
     "show_sports_summary": True,  # sports summary block (all types, count + time + distance)
@@ -689,6 +759,12 @@ Consumers:
   There is deliberately no CLI flag for this. `--timerange` takes priority: when
   it's driving the dashboard window, this cap is skipped so the explicit flag's
   range wins (same precedence as `pbs_window_months`).
+- `max_heart_rate` — used only at import time (`importers.import_gpx`/
+  `import_tcx`/`import_fit`, threaded down from `cli.py`) to compute each
+  newly-imported activity's `hr_zones` breakdown (see "HR zones"). Changing it
+  later has no effect on already-imported activities — no backfill, no silent
+  recompute, same "explicit only" precedent as `fitness.json`'s baseline
+  (`fit fitness-reset`).
 - `show_sparkline` / `show_pbs` — toggle those two dashboard blocks off entirely.
 - `show_sports_summary` — toggles the dashboard's sports-summary block
   (`display.render_sports_summary`). Unlike `sports`, this block is never

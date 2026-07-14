@@ -67,11 +67,13 @@ TCX_FIXTURE = """   <?xml version="1.0" encoding="UTF-8"?>
             <Time>2024-01-15T08:30:00Z</Time>
             <Position><LatitudeDegrees>0.000</LatitudeDegrees><LongitudeDegrees>0.0</LongitudeDegrees></Position>
             <AltitudeMeters>10</AltitudeMeters>
+            <HeartRateBpm><Value>100</Value></HeartRateBpm>
           </Trackpoint>
           <Trackpoint>
             <Time>2024-01-15T08:35:00Z</Time>
             <Position><LatitudeDegrees>0.009</LatitudeDegrees><LongitudeDegrees>0.0</LongitudeDegrees></Position>
             <AltitudeMeters>20</AltitudeMeters>
+            <HeartRateBpm><Value>140</Value></HeartRateBpm>
           </Trackpoint>
         </Track>
         <Extensions>
@@ -90,11 +92,13 @@ TCX_FIXTURE = """   <?xml version="1.0" encoding="UTF-8"?>
             <Time>2024-01-15T08:35:10Z</Time>
             <Position><LatitudeDegrees>0.009</LatitudeDegrees><LongitudeDegrees>0.0</LongitudeDegrees></Position>
             <AltitudeMeters>25</AltitudeMeters>
+            <HeartRateBpm><Value>150</Value></HeartRateBpm>
           </Trackpoint>
           <Trackpoint>
             <Time>2024-01-15T08:40:00Z</Time>
             <Position><LatitudeDegrees>0.018</LatitudeDegrees><LongitudeDegrees>0.0</LongitudeDegrees></Position>
             <AltitudeMeters>30</AltitudeMeters>
+            <HeartRateBpm><Value>170</Value></HeartRateBpm>
           </Trackpoint>
         </Track>
         <Extensions>
@@ -130,6 +134,24 @@ def test_import_gpx(tmp_path):
     assert activity["max_heart_rate"] == 160
     assert activity["source"] == "gpx"
     assert "splits" not in activity  # 2km run, no 5k to find
+    assert "hr_zones" not in activity  # max_heart_rate not passed, defaults to 0
+
+
+def test_import_gpx_with_max_heart_rate(tmp_path):
+    path = tmp_path / "run.gpx"
+    path.write_text(GPX_FIXTURE)
+    activity = importers.import_gpx(str(path), max_heart_rate=200)
+
+    # 140bpm (0->300s) and 150bpm (300->600s) both fall in zone3 (ratio 0.7/0.75,
+    # i.e. 3 boundaries met -> 0-based index 2); the final sample (160bpm) has
+    # no following gap to attribute.
+    assert activity["hr_zones"] == {
+        "zone1_seconds": 0.0,
+        "zone2_seconds": 0.0,
+        "zone3_seconds": 600.0,
+        "zone4_seconds": 0.0,
+        "zone5_seconds": 0.0,
+    }
 
 
 def test_import_tcx(tmp_path):
@@ -148,6 +170,23 @@ def test_import_tcx(tmp_path):
     assert activity["avg_power"] == 200  # mean of lap AvgWatts
     assert activity["source"] == "garmin"
     assert "splits" not in activity
+    assert "hr_zones" not in activity  # max_heart_rate not passed, defaults to 0
+
+
+def test_import_tcx_with_max_heart_rate(tmp_path):
+    path = tmp_path / "run.tcx"
+    path.write_text(TCX_FIXTURE)
+    activity = importers.import_tcx(str(path), max_heart_rate=200)
+
+    # Per-trackpoint HR: 100 (0->300s, zone1), 140 (300->310s, zone3),
+    # 150 (310->600s, zone3), 170 (no following gap to attribute).
+    assert activity["hr_zones"] == {
+        "zone1_seconds": 300.0,
+        "zone2_seconds": 0.0,
+        "zone3_seconds": 300.0,
+        "zone4_seconds": 0.0,
+        "zone5_seconds": 0.0,
+    }
 
 
 def test_import_fit_generated_fixture():

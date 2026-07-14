@@ -298,24 +298,27 @@ def _import_and_report(
 @app.command(name="import")
 def import_activity(path: str) -> None:
     storage.ensure_data_dir()
+    max_hr = storage.read_config()["max_heart_rate"]
     source = Path(path)
 
     import_warnings: list[str] = []
     if source.is_dir():
         if (source / "activities.csv").exists():
             new_activities, import_warnings = importers.import_strava_export(
-                str(source)
+                str(source), max_hr
             )
             save_original = False
         else:
-            new_activities = importers.import_directory(str(source))
+            new_activities = importers.import_directory(str(source), max_hr)
             save_original = True
     else:
         suffix = source.suffix.lower()
         if suffix == ".csv":
             new_activities, import_warnings = importers.import_strava_csv(str(source))
         elif suffix in (".gpx", ".tcx", ".fit"):
-            new_activities = [importers.import_by_extension(str(source), suffix)]
+            new_activities = [
+                importers.import_by_extension(str(source), suffix, max_hr)
+            ]
         else:
             typer.echo(f"Unsupported file type: {suffix}", err=True)
             raise typer.Exit(code=1)
@@ -332,6 +335,7 @@ def garmin_sync(
     ),
 ) -> None:
     storage.ensure_data_dir()
+    max_hr = storage.read_config()["max_heart_rate"]
 
     try:
         client = garmin.login()
@@ -353,7 +357,7 @@ def garmin_sync(
             with tempfile.NamedTemporaryFile(suffix=".fit", delete=False) as tmp:
                 tmp.write(fit_bytes)
                 tmp_paths.append(tmp.name)
-            activity = importers.import_fit(tmp_paths[-1])
+            activity = importers.import_fit(tmp_paths[-1], max_hr)
             activity["_source_path"] = tmp_paths[-1]
             new_activities.append(activity)
 

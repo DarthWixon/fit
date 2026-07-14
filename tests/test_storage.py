@@ -22,7 +22,12 @@ def test_parse_config_text_types_and_tolerance():
 
 
 def test_config_serialize_parse_round_trip():
-    config = {**storage.DEFAULTS, "sports": ["run"], "show_sparkline": False}
+    config = {
+        **storage.DEFAULTS,
+        "sports": ["run"],
+        "show_sparkline": False,
+        "max_heart_rate": 190,
+    }
     assert storage._parse_config_text(storage._serialize_config_text(config)) == config
 
 

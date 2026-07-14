@@ -206,6 +206,16 @@ def _attach_splits(activity: dict, points: list[dict]) -> dict:
     return activity
 
 
+def _attach_hr_zones(activity: dict, points: list[dict], max_heart_rate: int) -> dict:
+    """Attach HR zone-seconds from the transient point stream; the key is
+    omitted entirely (never an empty dict) when zones can't be computed (no
+    max_heart_rate configured, or no per-point hr data in this format/file)."""
+    hr_zones = compute.hr_zone_seconds(points, max_heart_rate)
+    if hr_zones:
+        activity["hr_zones"] = hr_zones
+    return activity
+
+
 # --- GPX ----------------------------------------------------------------------------
 
 
@@ -279,6 +289,7 @@ def _gpx_point_stream(raw_points: list[dict], start_time) -> list[dict]:
                 {
                     "elapsed_seconds": (point["time"] - start_time).total_seconds(),
                     "distance_km": distance_km,
+                    "hr": point["hr"],
                 }
             )
     return points
@@ -299,7 +310,7 @@ def _gpx_activity_type(trk, ns_uri) -> str:
     return GPX_TYPE_MAP.get((type_elem.text or "").lower(), "run")
 
 
-def import_gpx(path: str) -> dict:
+def import_gpx(path: str, max_heart_rate: int = 0) -> dict:
     root = _parse_xml_root(path)
     ns_uri = _namespace(root.tag)
 
@@ -337,7 +348,8 @@ def import_gpx(path: str) -> dict:
     if avg_hr is not None:
         activity["avg_heart_rate"] = avg_hr
         activity["max_heart_rate"] = max_hr
-    return _attach_splits(activity, points)
+    activity = _attach_splits(activity, points)
+    return _attach_hr_zones(activity, points, max_heart_rate)
 
 
 # --- TCX ------------------------------------------------------------------------------
@@ -432,6 +444,15 @@ def _tcx_trackpoint_position(trackpoint, ns_uri):
     return float(lat_elem.text), float(lon_elem.text), _parse_iso_time(time_elem.text)
 
 
+def _tcx_trackpoint_heart_rate(trackpoint, ns_uri) -> int | None:
+    """Per-trackpoint HeartRateBpm/Value, or None if the trackpoint has none.
+    Older/lap-summary-only exporters carry HR at the Lap level instead (see
+    _tcx_lap_heart_rate) — trackpoint-level HR is what powers the HR zone
+    breakdown, since that needs a per-sample time series, not a lap average."""
+    hr_elem = _find_path(trackpoint, "HeartRateBpm/Value", ns_uri)
+    return round(float(hr_elem.text)) if hr_elem is not None else None
+
+
 def _tcx_totals(laps, ns_uri) -> tuple[float, float]:
     """(total_distance_m, total_time_s) summed over all laps."""
     total_distance_m = 0.0
@@ -499,12 +520,13 @@ def _tcx_point_stream(laps, ns_uri, start_time) -> list[dict]:
                 {
                     "elapsed_seconds": (trackpoint_time - start_time).total_seconds(),
                     "distance_km": distance_km,
+                    "hr": _tcx_trackpoint_heart_rate(trackpoint, ns_uri),
                 }
             )
     return points
 
 
-def import_tcx(path: str) -> dict:
+def import_tcx(path: str, max_heart_rate: int = 0) -> dict:
     root = _parse_xml_root(path)
     ns_uri = _namespace(root.tag)
 
@@ -537,13 +559,14 @@ def import_tcx(path: str) -> dict:
         activity["max_heart_rate"] = max_hr
     if avg_power is not None:
         activity["avg_power"] = avg_power
-    return _attach_splits(activity, points)
+    activity = _attach_splits(activity, points)
+    return _attach_hr_zones(activity, points, max_heart_rate)
 
 
 # --- FIT ------------------------------------------------------------------------------
 
 
-def import_fit(path: str) -> dict:
+def import_fit(path: str, max_heart_rate: int = 0) -> dict:
     from fitparse import FitFile
 
     fit_file = FitFile(path)
@@ -595,10 +618,12 @@ def import_fit(path: str) -> dict:
             {
                 "elapsed_seconds": (record_timestamp - start_time).total_seconds(),
                 "distance_km": record_distance_m / 1000,
+                "hr": record_fields.get("heart_rate"),
             }
         )
 
-    return _attach_splits(activity, points)
+    activity = _attach_splits(activity, points)
+    return _attach_hr_zones(activity, points, max_heart_rate)
 
 
 # --- Strava CSV / bulk export -----------------------------------------------------------
@@ -672,17 +697,17 @@ def import_strava_csv(path: str) -> tuple[list[dict], list[str]]:
     return activities, _strava_skip_warnings(skipped)
 
 
-def import_by_extension(path: str, suffix: str) -> dict:
+def import_by_extension(path: str, suffix: str, max_heart_rate: int = 0) -> dict:
     if suffix == ".gpx":
-        return import_gpx(path)
+        return import_gpx(path, max_heart_rate)
     if suffix == ".tcx":
-        return import_tcx(path)
+        return import_tcx(path, max_heart_rate)
     if suffix == ".fit":
-        return import_fit(path)
+        return import_fit(path, max_heart_rate)
     raise ValueError(f"unsupported activity file format: {suffix}")
 
 
-def _import_strava_linked_file(file_path: Path) -> dict:
+def _import_strava_linked_file(file_path: Path, max_heart_rate: int = 0) -> dict:
     if file_path.suffix.lower() == ".gz":
         inner_suffix = file_path.with_suffix("").suffix.lower()
         with tempfile.NamedTemporaryFile(suffix=inner_suffix, delete=False) as tmp:
@@ -690,13 +715,13 @@ def _import_strava_linked_file(file_path: Path) -> dict:
                 shutil.copyfileobj(gz, tmp)
             tmp_path = tmp.name
         try:
-            return import_by_extension(tmp_path, inner_suffix)
+            return import_by_extension(tmp_path, inner_suffix, max_heart_rate)
         finally:
             Path(tmp_path).unlink(missing_ok=True)
-    return import_by_extension(str(file_path), file_path.suffix.lower())
+    return import_by_extension(str(file_path), file_path.suffix.lower(), max_heart_rate)
 
 
-def import_directory(dir_path: str) -> list[dict]:
+def import_directory(dir_path: str, max_heart_rate: int = 0) -> list[dict]:
     """A loose folder of .gpx/.tcx/.fit files - e.g. a Garmin watch's mounted
     GARMIN/ACTIVITY folder - NOT a Strava bulk export (see import_strava_export
     for that; cli.py tells the two apart by checking for activities.csv).
@@ -708,13 +733,15 @@ def import_directory(dir_path: str) -> list[dict]:
         suffix = file_path.suffix.lower()
         if suffix not in (".gpx", ".tcx", ".fit"):
             continue
-        activity = import_by_extension(str(file_path), suffix)
+        activity = import_by_extension(str(file_path), suffix, max_heart_rate)
         activity["_source_path"] = str(file_path)
         activities.append(activity)
     return activities
 
 
-def import_strava_export(export_dir: str) -> tuple[list[dict], list[str]]:
+def import_strava_export(
+    export_dir: str, max_heart_rate: int = 0
+) -> tuple[list[dict], list[str]]:
     export_path = Path(export_dir)
     csv_path = export_path / "activities.csv"
     if not csv_path.exists():
@@ -735,7 +762,9 @@ def import_strava_export(export_dir: str) -> tuple[list[dict], list[str]]:
             filename = _get_first(row, FILENAME_COLUMNS)
             if filename:
                 try:
-                    activity = _import_strava_linked_file(export_path / filename)
+                    activity = _import_strava_linked_file(
+                        export_path / filename, max_heart_rate
+                    )
                 except Exception as exc:
                     warnings.append(f"skipped {filename}: {exc}")
                     continue

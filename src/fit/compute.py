@@ -97,6 +97,11 @@ _EWMA_WINDOW_DAYS = 42  # Coggan's CTL/"Fitness" smoothing window
 # with the same characteristic.
 NO_DISTANCE_TYPES = {"squash"}
 
+# Fraction-of-max-heart-rate lower bounds for the 5 standard HR training zones
+# (Z1 50-60%, Z2 60-70%, Z3 70-80%, Z4 80-90%, Z5 90-100%+ of max_heart_rate).
+# A ratio below the first boundary still counts as zone 1 (no "zone 0" bucket).
+HR_ZONE_BOUNDARIES = [0.5, 0.6, 0.7, 0.8, 0.9]
+
 
 def _seconds_per_km(distance_km: float, duration_seconds: float) -> float:
     return duration_seconds / distance_km
@@ -389,6 +394,60 @@ def fastest_split(points: list[dict], target_distance_km: float) -> dict | None:
         if best_duration is not None
         else None
     )
+
+
+def _hr_zone_index(hr: float, max_heart_rate: int) -> int:
+    """0-based zone index (0..4) for one heart-rate reading, clamped at both ends.
+
+    HR_ZONE_BOUNDARIES holds each zone's *lower* bound (zone 1's included), so
+    the count of boundaries met is 1-based already for zone 1 -- subtract 1 to
+    get a 0-based index, floored at 0 for anything below zone 1's floor."""
+    ratio = hr / max_heart_rate
+    met = sum(1 for boundary in HR_ZONE_BOUNDARIES if ratio >= boundary)
+    return max(met - 1, 0)
+
+
+def hr_zone_seconds(points: list[dict], max_heart_rate: int) -> dict:
+    """Time spent in each of the 5 HR zones, from a point stream of
+    {"elapsed_seconds": float, "hr": float | None, ...} dicts sorted ascending
+    by elapsed_seconds. The gap between two consecutive samples is attributed
+    to the earlier sample's zone (no interpolation between HR readings, same
+    simplification style as fastest_split's distance interpolation).
+
+    Returns {} if max_heart_rate <= 0 or fewer than 2 points carry an hr value
+    (can't derive a duration from a single sample) — same "nothing to report"
+    convention as fastest_split returning None.
+    """
+    if max_heart_rate <= 0:
+        return {}
+    if len([p for p in points if p.get("hr") is not None]) < 2:
+        return {}
+
+    totals = [0.0] * 5
+    for i in range(len(points) - 1):
+        hr = points[i].get("hr")
+        if hr is None:
+            continue
+        dt = points[i + 1]["elapsed_seconds"] - points[i]["elapsed_seconds"]
+        if dt > 0:
+            totals[_hr_zone_index(hr, max_heart_rate)] += dt
+
+    if sum(totals) == 0:
+        return {}
+    return {f"zone{i + 1}_seconds": round(seconds, 1) for i, seconds in enumerate(totals)}
+
+
+def hr_zone_percentages(hr_zones: dict | None) -> dict | None:
+    """Converts a stored hr_zones seconds dict into % of time per zone (keys
+    "zone1".."zone5", summing to ~100.0), or None if hr_zones is missing/empty
+    or all-zero.
+    """
+    if not hr_zones:
+        return None
+    total = sum(hr_zones.get(f"zone{i}_seconds", 0) for i in range(1, 6))
+    if total <= 0:
+        return None
+    return {f"zone{i}": 100 * hr_zones.get(f"zone{i}_seconds", 0) / total for i in range(1, 6)}
 
 
 def _longest_distance_pb(activities: list[dict]) -> dict:

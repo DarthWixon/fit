@@ -135,6 +135,55 @@ def test_fastest_split_dedupes_equal_timestamps():
     assert compute.fastest_split(points, 5.0) == {"duration_seconds": 1200}
 
 
+# --- HR zones --------------------------------------------------------------------
+
+
+def _hr_stream(pairs):
+    return [{"elapsed_seconds": t, "hr": hr} for t, hr in pairs]
+
+
+def test_hr_zone_seconds_spans_multiple_zones():
+    # max_heart_rate=200: 100bpm -> ratio 0.5 -> zone1, 150bpm -> ratio 0.75 ->
+    # zone3, 180bpm -> ratio 0.9 -> zone5. Each reading's zone is charged for
+    # the gap to the next sample.
+    points = _hr_stream([(0, 100), (60, 150), (120, 180), (180, 180)])
+    assert compute.hr_zone_seconds(points, 200) == {
+        "zone1_seconds": 60.0,
+        "zone2_seconds": 0.0,
+        "zone3_seconds": 60.0,
+        "zone4_seconds": 0.0,
+        "zone5_seconds": 60.0,
+    }
+
+
+def test_hr_zone_seconds_no_max_heart_rate_returns_empty():
+    points = _hr_stream([(0, 100), (60, 150)])
+    assert compute.hr_zone_seconds(points, 0) == {}
+
+
+def test_hr_zone_seconds_no_hr_data_returns_empty():
+    points = _hr_stream([(0, None), (60, None)])
+    assert compute.hr_zone_seconds(points, 200) == {}
+
+
+def test_hr_zone_percentages_sums_to_100():
+    hr_zones = {
+        "zone1_seconds": 60.0,
+        "zone2_seconds": 0.0,
+        "zone3_seconds": 60.0,
+        "zone4_seconds": 0.0,
+        "zone5_seconds": 60.0,
+    }
+    percentages = compute.hr_zone_percentages(hr_zones)
+    assert sum(percentages.values()) == pytest.approx(100.0)
+    assert percentages["zone1"] == pytest.approx(100 / 3)
+
+
+def test_hr_zone_percentages_none_when_absent():
+    assert compute.hr_zone_percentages(None) is None
+    assert compute.hr_zone_percentages({}) is None
+
+
 # --- personal bests ------------------------------------------------------------
 
 RUNS = [

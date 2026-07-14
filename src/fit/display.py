@@ -7,12 +7,17 @@ from datetime import date
 
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from fit import compute
 
 console = Console()
 
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+# Z1..Z5, cool -> hot, matching the standard training-zone colour convention.
+_HR_ZONE_COLORS = ["blue", "green", "yellow", "dark_orange", "red"]
+_HR_ZONE_BAR_WIDTH = 10
 
 
 def render_warnings(messages: list[str]) -> None:
@@ -75,8 +80,26 @@ def _format_distance(activity: dict) -> str:
     return f"{distance_km:.2f}km"
 
 
-def _format_hr(value) -> str:
-    return f"{round(value)}bpm" if value is not None else "—"
+def _format_hr_zones(activity: dict) -> Text | str:
+    """Segmented colour bar (Z1 blue -> Z5 red), each zone's block-character
+    width proportional to its % of time in that zone. "—" when the activity
+    has no hr_zones (predates this feature, Strava-CSV-only import, or
+    max_heart_rate wasn't configured at import time)."""
+    percentages = compute.hr_zone_percentages(activity.get("hr_zones"))
+    if percentages is None:
+        return "—"
+    bar = Text()
+    allocated = 0
+    for i in range(1, 6):
+        if i < 5:
+            width = round(percentages[f"zone{i}"] / 100 * _HR_ZONE_BAR_WIDTH)
+        else:
+            width = _HR_ZONE_BAR_WIDTH - allocated
+        width = max(width, 0)
+        allocated += width
+        if width:
+            bar.append("█" * width, style=_HR_ZONE_COLORS[i - 1])
+    return bar
 
 
 def render_history_table(activities: list[dict], n: int) -> None:
@@ -88,8 +111,7 @@ def render_history_table(activities: list[dict], n: int) -> None:
     table.add_column("Distance", justify="right")
     table.add_column("Duration", justify="right")
     table.add_column("Pace", justify="right")
-    table.add_column("Avg HR", justify="right")
-    table.add_column("Max HR", justify="right")
+    table.add_column("HR Zones", justify="left")
 
     for activity in recent:
         duration_seconds = activity.get("duration_seconds", 0) or 0
@@ -99,8 +121,7 @@ def render_history_table(activities: list[dict], n: int) -> None:
             _format_distance(activity),
             _format_duration(duration_seconds),
             _format_effort(activity),
-            _format_hr(activity.get("avg_heart_rate")),
-            _format_hr(activity.get("max_heart_rate")),
+            _format_hr_zones(activity),
         )
     console.print(table)
 
