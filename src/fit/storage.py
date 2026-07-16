@@ -48,6 +48,7 @@ DEFAULTS = {
     "show_pbs": True,  # personal bests block
     "show_sports_summary": True,  # sports summary block (all types, count + time + distance)
     "show_fitness_index": True,  # fitness index (EWMA training load rescaled to a baseline of 100) block
+    "show_calendar": True,  # calendar block (active days over the last 2 months)
 }
 
 _CONFIG_COMMENTS = {
@@ -60,6 +61,7 @@ _CONFIG_COMMENTS = {
     "show_pbs": "personal bests block",
     "show_sports_summary": "sports summary block (all types, count + time + distance)",
     "show_fitness_index": "fitness index (EWMA training load rescaled to a baseline of 100) block",
+    "show_calendar": "calendar block (active days over the last 2 months)",
 }
 
 

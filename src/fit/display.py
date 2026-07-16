@@ -297,10 +297,10 @@ def render_dashboard(
     series' final week (see compute.weekly_volumes) and marks it as partial.
 
     Block order: fitness index -> weekly volume sparkline -> time range banner
-    -> history table -> personal bests -> sports summary. Sports summary
-    always renders last and is never restricted by --sport/config sports —
-    even when the sport filter matches nothing elsewhere on the page, it
-    still shows every type present."""
+    -> history table -> calendar -> personal bests -> sports summary. Sports
+    summary always renders last and is never restricted by --sport/config
+    sports — even when the sport filter matches nothing elsewhere on the
+    page, it still shows every type present."""
     # Cap the volume/fitness sparklines to a recent window, unless --timerange
     # is already driving the window (a truthy window_label), in which case the
     # explicit flag wins and nothing is further truncated.
@@ -353,6 +353,10 @@ def render_dashboard(
 
         render_history_table(filtered, config["history_count"])
         console.print()
+
+        if config["show_calendar"]:
+            render_calendar(compute.activity_calendar(filtered, today))
+            console.print()
 
         if config["show_pbs"]:
             render_pbs_table(

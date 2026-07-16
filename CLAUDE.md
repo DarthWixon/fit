@@ -289,20 +289,25 @@ no computation.
 Key functions:
 - `render_dashboard(activities: list[dict], pbs: dict, config: dict, fitness: dict, today: date, sports: list[str] | None = None, window_months: int = 0, window_label: str | None = None) -> None` —
   `config` is the `storage.read_config()` dict (supplies `history_count`,
-  `dashboard_weeks`, and the four `show_*` toggles); `fitness` is
+  `dashboard_weeks`, and the five `show_*` toggles); `fitness` is
   `cli._fitness_snapshot()`'s dict
   (`current`/`baseline_date`/`weekly`), passed through whole rather than
   unpacked into separate parameters.
   Block order: fitness index -> weekly volume sparkline -> time range banner
-  -> history table -> personal bests -> sports summary. When `window_label`
-  is set (from `--timerange`), prints a "Time range: ..." banner and threads
-  the label into `render_pbs_table`'s title instead of the int-months
-  wording. The sports-summary block always renders *last*, over the
-  unfiltered `activities` list, so it always shows every type present (never
-  restricted by `--sport`/config `sports`) even when the sport filter itself
-  matches nothing — in that case the sparkline/history/pbs blocks are
-  replaced by a single "no activities match" message, but sports-summary
-  still renders afterward. The fitness-index block renders *first*, before
+  -> history table -> calendar -> personal bests -> sports summary. When
+  `window_label` is set (from `--timerange`), prints a "Time range: ..."
+  banner and threads the label into `render_pbs_table`'s title instead of
+  the int-months wording. The calendar block (`render_calendar` +
+  `compute.activity_calendar`, `months=2`) uses the same sport-filtered
+  activity list as the history table right above it, so `--sport` narrows
+  its active days too — unlike sports-summary/fitness, it is not a
+  sport-agnostic overview block. The sports-summary block always renders
+  *last*, over the unfiltered `activities` list, so it always shows every
+  type present (never restricted by `--sport`/config `sports`) even when the
+  sport filter itself matches nothing — in that case the
+  sparkline/history/calendar/pbs blocks are replaced by a single "no
+  activities match" message, but sports-summary still renders afterward.
+  The fitness-index block renders *first*, before
   even the empty-activities early return, so the headline (always
   full-history/as-of-today) never disappears just because
   `--sport`/`--timerange` matches nothing elsewhere on the page — see
@@ -719,6 +724,7 @@ DEFAULTS = {
     "show_pbs": True,           # personal bests block
     "show_sports_summary": True,  # sports summary block (all types, count + time + distance)
     "show_fitness_index": True,   # fitness index (EWMA training load rescaled to a baseline of 100) block
+    "show_calendar": True,        # calendar block (active days over the last 2 months)
 }
 ```
 
@@ -778,6 +784,15 @@ Consumers:
   headline value is *never* restricted by `--timerange`/`pbs_window_months`
   either (always full-history/as-of-today) — only its trend sparkline narrows with
   `--timerange`.
+- `show_calendar` — toggles the dashboard's calendar block
+  (`display.render_calendar` + `compute.activity_calendar`, same view as the
+  standalone `fit calendar` command). Unlike `show_sports_summary`/
+  `show_fitness_index`, it *is* restricted by `--sport`/config `sports` — it
+  shares the same sport-filtered activity list as the history table
+  immediately above it. `--minimal`/`fit dash` does not force this toggle
+  off (only `show_pbs`/`show_sports_summary` are forced off), so the
+  calendar block stays visible in minimal mode, same as the sparkline and
+  fitness-index blocks.
 
 ---
 
