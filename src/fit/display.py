@@ -185,7 +185,7 @@ def render_sports_summary(activities: list[dict]) -> None:
     """Dashboard block: always covers every activity type present in the given
     activities — callers must not pre-filter by sport (pre-filtering by date
     is fine)."""
-    _render_type_summary_table(activities, title="Sports summary")
+    _render_type_summary_table(activities, title="Sports Summary")
 
 
 def render_calendar(months: list[dict]) -> None:
