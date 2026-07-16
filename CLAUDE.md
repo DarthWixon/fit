@@ -349,8 +349,9 @@ Key functions:
   old→new baseline values; `old_baseline == {}` (never initialized) gets a
   simpler "baseline set" message
 - `render_calendar(months: list[dict]) -> None` — `fit calendar`'s output: one
-  month grid per `compute.activity_calendar` dict, active days in bold green,
-  padding cells blank
+  month grid per `compute.activity_calendar` dict, rendered side by side as
+  columns of a borderless `Table.grid()`, active days in bold green, padding
+  cells blank
 - `render_stats(activities: list[dict], today: date) -> None`
 - `render_sparkline(data: list[float], label: str, partial_last: bool = False) -> None` —
   `partial_last` dims the final bar (Rich `[dim]`), for a week that is only low

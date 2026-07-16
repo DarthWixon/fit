@@ -188,27 +188,31 @@ def render_sports_summary(activities: list[dict]) -> None:
     _render_type_summary_table(activities, title="Sports Summary")
 
 
+def _render_month_block(month: dict) -> Text:
+    lines = [f"[bold]{month['label']}[/bold]", "[dim]Mo Tu We Th Fr Sa Su[/dim]"]
+    active = set(month["active_days"])
+    for week in month["weeks"]:
+        cells = []
+        for day in week:
+            if not day:
+                cells.append("  ")
+            elif day in active:
+                cells.append(f"[bold green]{day:2d}[/bold green]")
+            else:
+                cells.append(f"{day:2d}")
+        lines.append(" ".join(cells))
+    return Text.from_markup("\n".join(lines))
+
+
 def render_calendar(months: list[dict]) -> None:
     """months: compute.activity_calendar's output — one grid dict per month,
-    oldest first. Active days render bold green; padding cells (0) blank."""
-    for i, month in enumerate(months):
-        if i:
-            console.print()
-        console.print(f"[bold]{month['label']}[/bold]")
-        console.print("[dim]Mo Tu We Th Fr Sa Su[/dim]")
-        active = set(month["active_days"])
-        for week in month["weeks"]:
-            cells = []
-            for day in week:
-                if not day:
-                    cells.append("  ")
-                elif day in active:
-                    cells.append(f"[bold green]{day:2d}[/bold green]")
-                else:
-                    cells.append(f"{day:2d}")
-            # highlight=False: Rich's default number highlighter would paint
-            # every inactive day cyan, drowning out the active-day green.
-            console.print(" ".join(cells), highlight=False)
+    oldest first, rendered side by side as columns. Active days render bold
+    green; padding cells (0) blank."""
+    grid = Table.grid(padding=(0, 2, 0, 0))
+    for _ in months:
+        grid.add_column()
+    grid.add_row(*(_render_month_block(month) for month in months))
+    console.print(grid)
 
 
 def render_fitness_index(
