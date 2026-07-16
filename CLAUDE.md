@@ -20,6 +20,10 @@ moved to a new machine.
 - `typer` — CLI flag parsing and help text
 - `rich` — all terminal output: tables, coloured text, Unicode sparklines
 - Standard library `xml.etree.ElementTree` for GPX/TCX parsing (no lxml)
+- `fitparse` — required, for FIT file parsing (`importers.import_fit`); pinned
+  `fitparse>=1.2,<2.0` (see importers.py's "Known limitation" on undecoded sport
+  codes). The `garmin` extra (`garminconnect`) is the only genuinely optional
+  dependency — see "Garmin integration"
 - No database, no ORM, no heavy framework
 
 Keep the dependency footprint minimal. Before adding a new library, check whether the
@@ -37,6 +41,10 @@ no Pydantic models. Functions take dicts in and return dicts or primitive values
 This is a deliberate choice for simplicity and readability. Do not introduce classes
 to represent activities, configs, or personal bests — use dicts with consistent keys
 (see activity shape below) and document the expected keys in docstrings.
+
+The one exception is `garmin.GarminAuthError`, a plain `Exception` subclass with no
+state or methods — idiomatic Python for a distinguishable error type, not a data
+model, so it doesn't conflict with the rule above.
 
 ---
 
@@ -56,7 +64,7 @@ fit pbs --months 3           # personal bests over just the last N months (overr
 fit stats                    # breakdown, accepts --week / --month / --year
 fit fitness                  # current fitness index (baseline 100) + trend sparkline
 fit fitness-reset            # re-anchor the fitness index baseline to today
-fit import ./run.gpx         # parse and store a GPX or TCX file
+fit import ./run.gpx         # import a file, folder of files, or Strava export
 fit garmin-sync --days 14    # pull recent activities from Garmin Connect (see "Garmin integration")
 fit plan --sport run --type intervals  # generate a workout interactively, push to the watch (see "Workout planner")
 fit history 10               # last N activities as a table (default 10)
@@ -237,6 +245,11 @@ Key functions:
   calls the private `_candidate_pbs` per type, which itself composes four
   single-purpose helpers: `_longest_distance_pb`, `_milestone_pbs`, `_split_pbs`,
   `_elevation_pb` — each returns its own slice of the PB dict, merged by `_candidate_pbs`
+- `best_pb_per_label(type_pbs: dict) -> dict` — collapses a single type's
+  dedicated (`fastest_{label}_seconds`) and split (`fastest_{label}_split_seconds`)
+  PBs sharing a distance label down to whichever is faster, for display only;
+  `pbs.json` keeps both stored independently (see "Split PBs"). Used by
+  `display.render_pbs_table` to produce one row per label instead of two
 - `detect_new_pbs(new_activity: dict, current_pbs: dict) -> list[dict]` — returns
   `[{"key": ..., "value": ...}, ...]` for each PB category broken, structured rather
   than pre-formatted; `display.render_new_pb_messages()` turns these into the
@@ -390,6 +403,11 @@ Key functions:
 - `import_strava_export(export_dir: str, max_heart_rate: int = 0) -> tuple[list[dict], list[str]]` —
   a full Strava bulk-export archive (`activities.csv` + linked, possibly gzipped,
   GPX/TCX/FIT files); second element is warning strings (see below)
+- `import_directory(dir_path: str, max_heart_rate: int = 0) -> list[dict]` — a
+  loose folder of `.gpx`/`.tcx`/`.fit` files (e.g. a mounted Garmin watch's
+  `GARMIN/ACTIVITY` folder), not a Strava bulk export; each returned dict
+  carries a transient `"_source_path"` key `cli.py` uses to copy the original
+  into `gpx/`
 - `import_by_extension(path: str, suffix: str, max_heart_rate: int = 0) -> dict` —
   dispatches to `import_gpx`/`import_tcx`/`import_fit` by suffix, raising
   `ValueError` for anything else; the single source of truth for extension
@@ -403,7 +421,8 @@ explicit parameter rather than a lookup, the same pattern `planner.py`'s pure
 functions use.
 
 Importers never check for duplicates themselves — they always return every activity
-they parse. `cli.py`'s `import_activity` is the single place that calls
+they parse. `cli.py`'s shared `_import_and_report` helper (the common tail of both
+`import_activity` and `garmin_sync`) is the single place that calls
 `activity_exists()` per activity to decide what to skip; this keeps `importers.py`
 fully decoupled from `storage.py`'s on-disk state (it doesn't import `storage` at all).
 
@@ -467,6 +486,10 @@ Key functions:
   "Workout planner"); keys with nothing to derive from are absent. Run intervals'
   target_pace carries a `"derive"` callable instead of `"default"` (its value
   depends on the not-yet-prompted rep distance)
+- `recommended_interval_pace(five_k_seconds: int, rep_distance_m: int) -> int` —
+  seconds/km target for a given rep length from a recent 5k time, applying the
+  short-rep discount (see "History-derived defaults" below); wrapped by
+  `recommend_defaults`'s run-intervals `"derive"` callable
 - `build_plan(sport, workout_type, params, created: str) -> dict` — the saved-plan
   dict: `{"id", "sport", "workout_type", "params", "workout_name", "payload"}`,
   where `payload` is the complete workout-service dict for `garmin.push_workout`
@@ -484,22 +507,53 @@ tolerances (`PACE_TOLERANCE_S_PER_KM = 10`, `SWIM_PACE_TOLERANCE_S_PER_100M = 5`
 Typer app. One function per subcommand. Each function: call storage → call compute → call
 display. Nothing else.
 
-Shared coordination helpers (each one level deep — they call storage/compute/display
-functions, never each other):
+Shared coordination helpers (small, single-purpose, and mostly one level deep — a
+few intentionally compose one another, noted below):
 - `_load_activities() -> list[dict]` — the preamble every history-reading command
   shares: `ensure_data_dir` → `read_activities_with_warnings` → `render_warnings`
-- `_dashboard_window(all_activities, timerange, config_months, today) -> dict` —
-  resolves the dashboard's `--timerange` / `pbs_window_months` / all-time precedence
-  into `{"activities", "pbs", "window_months", "window_label", "date_window"}`
+- `_recompute_and_write_pbs(activities) -> dict` — recomputes `pbs.json` and
+  writes it; called after every successful import and by `_get_fresh_pbs` when
+  the cache is stale
+- `_get_fresh_pbs(activities) -> dict` — reads `pbs.json`, recomputing via
+  `_recompute_and_write_pbs` if the cache is stale
+- `_windowed_pbs(activities, start, end) -> dict` — PBs computed fresh over a
+  date-filtered slice, bypassing the `pbs.json` cache entirely
+- `_pbs_for_window(activities, months, today) -> dict` — picks between the two
+  above for a `--months`/`pbs_window_months` value (0 = cached all-time via
+  `_get_fresh_pbs`, else windowed via `_windowed_pbs`); shared by the `pbs`
+  command and `_dashboard_window`
+- `_write_new_baseline(value) -> dict` — builds and persists a
+  `{"baseline_date", "baseline_value"}` fitness.json dict for `value` dated
+  today; shared by `_get_or_init_fitness_baseline` (lazy init) and
+  `fitness_reset` (explicit re-anchor)
+- `_get_or_init_fitness_baseline(activities) -> dict` — lazy-cache-if-missing,
+  mirroring `_get_fresh_pbs`, via `_write_new_baseline`; `fitness.json`'s
+  baseline is sticky rather than auto-recomputed (see "Fitness index")
 - `_fitness_snapshot(activities, today, baseline, window=None) -> dict` — the
   `{"current", "baseline_date", "weekly"}` dict `render_dashboard`/`render_fitness_index`
   consume; callers fetch `baseline` via `_get_or_init_fitness_baseline` first
+- `_dashboard_window(all_activities, timerange, config_months, today) -> dict` —
+  resolves the dashboard's `--timerange` / `pbs_window_months` / all-time precedence
+  into `{"activities", "pbs", "window_months", "window_label", "date_window"}`,
+  via `_pbs_for_window`
+- `_import_and_report(new_activities, save_original, fallback_source=None) -> None` —
+  the shared tail of every import path (dedupe via `storage.activity_exists`,
+  write, save the original into `gpx/`, print new-PB messages, recompute the
+  PB cache, print the imported/skipped summary); used by both `import_activity`
+  and `garmin_sync`
 - `_prompt_params(specs: list[dict]) -> dict` — `typer.prompt`s each
   `planner.workout_params` spec (Enter accepts the shown default), re-prompting
   on `ValueError` from the spec's parser; a spec carrying a `"derive"` callable
   (see `planner.recommend_defaults`) gets its default computed at prompt time
   from the answers so far. The only interactive prompting in `cli.py` (the other
   is `garmin.login`'s credential flow)
+
+`import_activity` is the one command with real branching beyond storage → compute
+→ display: it inspects `path`'s filesystem shape (directory vs file,
+`activities.csv` present, suffix) to pick which `importers.py` entry point to
+call. That's classification of the raw CLI argument, not business logic, so it
+stays inline rather than moving to `importers.py` (which doesn't own path-shape
+decisions) or a private helper (which would just relocate the same branches).
 
 ---
 
@@ -593,6 +647,12 @@ keys — both coexist per type without collision:
     }
 }
 ```
+
+At display time, `compute.best_pb_per_label` (called from `display.render_pbs_table`)
+collapses each label's dedicated/split pair down to whichever is faster, so the PBs
+table shows one row per label, not two — `pbs.json` itself still stores both keys
+independently, exactly as above, since `detect_new_pbs` needs to track each category
+separately.
 
 If a distance isn't in `SPLIT_DISTANCES_KM`, it isn't instantly queryable after the
 fact — recomputing it means re-importing from the original file (kept in `gpx/` for

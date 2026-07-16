@@ -263,8 +263,9 @@ def render_stats(activities: list[dict], today: date) -> None:
         console.print("[dim]No activities yet.[/dim]")
         return
 
-    total_distance = sum(a.get("distance_km", 0) or 0 for a in activities)
-    total_duration = sum(a.get("duration_seconds", 0) or 0 for a in activities)
+    summary = compute.summarize_by_type(activities)
+    total_distance = sum(row["distance_km"] for row in summary)
+    total_duration = sum(row["duration_seconds"] for row in summary)
 
     console.print(
         f"[bold]{len(activities)}[/bold] activities, "

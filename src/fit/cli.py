@@ -42,6 +42,24 @@ def _windowed_pbs(activities: list[dict], start: str, end: str) -> dict:
     return compute.all_personal_bests(windowed)
 
 
+def _pbs_for_window(activities: list[dict], months: int, today: date_cls) -> dict:
+    """PBs for a --months/pbs_window_months value: cached all-time when 0,
+    windowed fresh-compute otherwise. Shared by `pbs` and `_dashboard_window`."""
+    if not months:
+        return _get_fresh_pbs(activities)
+    start = compute.months_ago(today, months)
+    return _windowed_pbs(activities, start, today.isoformat())
+
+
+def _write_new_baseline(value: float) -> dict:
+    """Builds {"baseline_date", "baseline_value"} for `value` (dated today) and
+    persists it — shared by _get_or_init_fitness_baseline (lazy init) and
+    fitness_reset (explicit re-anchor)."""
+    baseline = {"baseline_date": date_cls.today().isoformat(), "baseline_value": value}
+    storage.write_fitness_baseline(baseline)
+    return baseline
+
+
 def _get_or_init_fitness_baseline(activities: list[dict]) -> dict:
     """Lazy-cache-if-missing, mirroring _get_fresh_pbs — but unlike pbs.json,
     fitness.json's baseline is sticky: never auto-recomputed once set, only
@@ -52,12 +70,7 @@ def _get_or_init_fitness_baseline(activities: list[dict]) -> dict:
     baseline_value = compute.compute_baseline_value(activities, date_cls.today())
     if not baseline_value:
         return {}
-    baseline = {
-        "baseline_date": date_cls.today().isoformat(),
-        "baseline_value": baseline_value,
-    }
-    storage.write_fitness_baseline(baseline)
-    return baseline
+    return _write_new_baseline(baseline_value)
 
 
 _EMPTY_FITNESS_SNAPSHOT = {"current": None, "baseline_date": None, "weekly": []}
@@ -113,19 +126,10 @@ def _dashboard_window(
             "window_label": f"last {timerange.strip().lower()}",
             "date_window": (start, end),
         }
-    if config_months:
-        start = compute.months_ago(today, config_months)
-        return {
-            "activities": all_activities,
-            "pbs": _windowed_pbs(all_activities, start, today.isoformat()),
-            "window_months": config_months,
-            "window_label": None,
-            "date_window": None,
-        }
     return {
         "activities": all_activities,
-        "pbs": _get_fresh_pbs(all_activities),
-        "window_months": 0,
+        "pbs": _pbs_for_window(all_activities, config_months, today),
+        "window_months": config_months,
         "window_label": None,
         "date_window": None,
     }
@@ -212,12 +216,7 @@ def pbs(
     activities = _load_activities()
     config = storage.read_config()
     window = months if months is not None else config["pbs_window_months"]
-    if window:
-        today = date_cls.today()
-        start = compute.months_ago(today, window)
-        current_pbs = _windowed_pbs(activities, start, today.isoformat())
-    else:
-        current_pbs = _get_fresh_pbs(activities)
+    current_pbs = _pbs_for_window(activities, window, date_cls.today())
     display.render_pbs_table(
         current_pbs, sports=config["sports"] or None, window_months=window
     )
@@ -243,11 +242,7 @@ def fitness_reset() -> None:
         typer.echo("Not enough activity data to set a fitness baseline yet.", err=True)
         raise typer.Exit(code=1)
 
-    new_baseline = {
-        "baseline_date": date_cls.today().isoformat(),
-        "baseline_value": new_value,
-    }
-    storage.write_fitness_baseline(new_baseline)
+    new_baseline = _write_new_baseline(new_value)
     display.render_fitness_reset(old_baseline, new_baseline)
 
 

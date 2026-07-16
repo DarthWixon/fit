@@ -10,7 +10,9 @@ Activity dicts have the shape:
         "elevation_gain_m": 45,            # optional
         "avg_heart_rate": 152,             # optional
         "max_heart_rate": 171,             # optional
+        "avg_power": 187,                  # optional, watts; TCX/FIT only
         "hr_zones": {"zone1_seconds": 120.0, ...},  # optional, see "HR zones"
+        "splits": {"5k_seconds": 1423, ...},  # optional, see "Split PBs"
         "source": "gpx",                   # "gpx" | "garmin" | "strava"
         "gpx_file": "gpx/2024-01-15T08:30:00.gpx"  # optional, relative path
     }
