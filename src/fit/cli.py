@@ -323,6 +323,12 @@ def import_activity(path: str) -> None:
     _import_and_report(new_activities, save_original, fallback_source=str(source))
 
 
+@app.command()
+def gs() -> None:
+    """Shorthand for `garmin-sync --days = 7`."""
+    garmin_sync(days=7)
+
+
 @app.command(name="garmin-sync")
 def garmin_sync(
     days: int = typer.Option(
