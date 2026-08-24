@@ -64,7 +64,7 @@ Supported `--sport` / `--type` combinations:
 
 - **run** — `intervals`, `tempo`, `hills`, `baseline` (a best-effort benchmark
   test to re-measure your pace), `easy`, `long`
-- **swim** — `intervals`, `continuous`
+- **swim** — `intervals`, `continuous`, `baseline` (a 1km time trial)
 - **cycle** — `intervals`, `hills`, `baseline` (an FTP-test shape), `endurance`,
   `long`
 
@@ -116,6 +116,7 @@ uv pip install -e '.[train]'   # only `train import` needs this (PyYAML)
 
 fit train import plan.yaml     # expand it into a dated schedule
 fit train show --weeks 2       # what's coming, and what you've already done
+fit train retarget             # apply a re-test: rebuild the remaining weeks
 fit train sync --dry-run       # exactly what would be pushed, without pushing
 fit train sync                 # push + schedule the next 14 days on Garmin
 fit train clear                # take future sessions back off the calendar
@@ -173,18 +174,36 @@ and they stay put — the sessions get longer, not faster. A plan that assumed y
 would improve on schedule would start prescribing work you cannot finish.
 
 Instead every plan schedules **re-tests** on its recovery weeks, when you are
-rested: a 3km best effort for running, a 20-minute FTP test for cycling, taking
-turns if the goal trains both. Each one replaces that week's quality session
-rather than adding to it.
+rested: a 5km best effort for running, a bare 20-minute FTP test for cycling, a
+bare 1km time trial for swimming, taking turns between whichever the goal trains.
+Each one replaces that week's quality session rather than adding to it.
+
+The cycle and swim tests are deliberately bare — no warmup or cooldown in the
+workout — because for those sports the recorded activity has to *be* the test:
+average power and pool-swim pace are whole-activity figures with nothing to
+isolate an effort from within them. Warm up first, then start recording. (The
+run test keeps its warmup: fit finds the fastest 5km anywhere in the track.)
 
 ```
 Re-test weeks: 4, 8, 12 — do the test, sync it back, then re-import to
 rebuild the rest at your new fitness.
 ```
 
-So the cycle is: do the test, `fit garmin-sync`, then `fit train clear` and
-`fit train import` again. The remaining weeks come back rebuilt at whatever you
-just demonstrated. Add `benchmarks: false` to skip them.
+So the cycle is: do the test, `fit garmin-sync`, then **`fit train retarget`**.
+The sessions still ahead of you are rewritten at whatever you just demonstrated —
+no Garmin login, nothing on your calendar moves:
+
+```
+Retargeted 114 future session(s) · 0 already on target · 2 left scheduled on Garmin
+  Run 5k 31:56 → 22:54
+    best recent 5k 22:54 (2026-08-20)
+```
+
+`--dry-run` shows the change without writing it. Sessions already pushed to your
+watch keep their old targets — a pushed workout can't be edited, so `fit train
+clear` first if you want those rewritten too. Volume is never touched: the
+sessions get their new paces, not new distances. Add `benchmarks: false` to skip
+the tests entirely.
 
 ### Easing in
 

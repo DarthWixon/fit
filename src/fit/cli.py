@@ -547,7 +547,8 @@ def train_import(
             typer.echo(
                 f"The active plan still has {len(pending)} future session(s) on the "
                 "Garmin calendar. Run `fit train clear` first, or they will be left "
-                "there with nothing tracking them.",
+                "there with nothing tracking them. To update this plan's targets "
+                "without touching the calendar, use `fit train retarget`.",
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -572,6 +573,37 @@ def train_show(
     """Show the active plan with each session marked planned or done."""
     plan = _require_training_plan()
     _show_plan(plan, _load_activities(), weeks)
+
+
+@train_app.command(name="retarget")
+def train_retarget(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would change, then stop"
+    ),
+) -> None:
+    """Re-derive the plan's intensity targets from your latest history."""
+    plan = _require_training_plan()
+    activities = _load_activities()
+
+    # A plan file predating the stored spec, or naming a goal that no longer
+    # exists, cannot be re-derived — say so rather than KeyError-ing inside
+    # derive_targets.
+    spec = plan.get("spec")
+    if not spec or spec.get("goal") not in training.GOAL_TEMPLATES:
+        typer.echo(
+            "This plan can't be retargeted — it predates the stored plan spec, or "
+            "its goal no longer exists. Run `fit train clear` then "
+            "`fit train import` instead.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    today = date_cls.today()
+    targets = training.derive_targets(spec, activities, today)
+    summary = training.retarget_sessions(plan, targets, today)
+    if not dry_run:
+        storage.write_training_plan(plan)
+    display.render_training_retargeted(summary, dry_run=dry_run)
 
 
 @train_app.command(name="sync")

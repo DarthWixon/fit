@@ -65,24 +65,39 @@ MIN_PLAN_WEEKS = 4
 # lands on recovery weeks — you test rested, which is what makes one test
 # comparable to the next — cycling through the sports the goal trains, and
 # replacing that sport's quality session for the week. Its own numbers never
-# scale: a 3km test is only a benchmark if it is the same 3km every time.
+# scale: a 5km test is only a benchmark if it is the same 5km every time.
 #
-# Doing the test then re-running `fit train import` re-derives every target from
-# the updated history and rebuilds the remaining weeks. Swimming has no
-# benchmark workout type, so swim targets still come from CSS over stored splits.
+# Doing the test then re-running `fit train retarget` re-derives every target
+# from the updated history and rewrites the sessions still ahead of you.
+# Whether a test can afford a warmup inside the same recording depends on the
+# sport, not on taste: the recorded activity must BE the test unless the
+# sport's split machinery can isolate it from within.
 BENCHMARK_SESSIONS = {
+    # Run keeps its warmup and cooldown. compute.fastest_split finds the
+    # fastest 5k window anywhere in the track, so the test is isolated from the
+    # jogging around it. 5km rather than 3km because 3km appears in neither
+    # SPLIT_DISTANCES_KM nor MILESTONES_KM — a 3km effort is measurable
+    # nowhere, and the best 5k window containing it necessarily drags in 2km of
+    # warmup, which made the test worse than no test at all.
     "run": {
         "session_type": "baseline",
         "params": {
             "warmup_minutes": 10,
-            "test_distance_m": 3000,
+            "test_distance_m": 5000,
             "cooldown_minutes": 10,
         },
     },
-    "cycle": {
-        "session_type": "baseline",
-        "params": {"warmup_minutes": 20, "test_minutes": 20, "cooldown_minutes": 10},
-    },
+    # Bare. Stored avg_power is the whole-activity mean with no split analogue,
+    # so anything else in the recording dilutes the result — a 20+20+10 session
+    # reads roughly 40% easy riding into the FTP estimate.
+    "cycle": {"session_type": "baseline", "params": {"test_minutes": 20}},
+    # Bare, and 1km: a whole swim of 1.000-1.060km lands in the existing
+    # fastest_1k milestone, which derive_swim_css already reads. Pool swims
+    # often carry no cumulative-distance stream, so the milestone — computed
+    # from distance and duration on every read — is the only measurement that
+    # can be relied on. A shorter test would have needed a new split distance
+    # and a reworked CSS model for a less reliable signal.
+    "swim": {"session_type": "baseline", "params": {"test_distance_m": 1000}},
 }
 
 # --- starting volume ------------------------------------------------------
@@ -902,7 +917,7 @@ def parse_plan_spec(text: str) -> dict:
         # setting does nothing here".
         usable = {
             override_key
-            for sport, (_, override_key, _) in _SPORT_TARGETS.items()
+            for sport, (_, override_key) in _SPORT_TARGETS.items()
             if sport in template_sports(goal)
         }
         unusable = set(targets) - usable
@@ -1117,9 +1132,9 @@ def _scaled(scale: dict, multiplier: float) -> int:
 # Which target each sport needs, so a single-sport goal never derives (or
 # reports) an intensity nothing in the plan uses.
 _SPORT_TARGETS = {
-    "run": ("run_5k_seconds", "run_5k", planner.derive_run_5k),
-    "swim": ("swim_css_100m", "swim_css_100m", planner.derive_swim_css),
-    "cycle": ("bike_ftp", "bike_ftp", planner.derive_ride_watts),
+    "run": ("run_5k_seconds", "run_5k"),
+    "swim": ("swim_css_100m", "swim_css_100m"),
+    "cycle": ("bike_ftp", "bike_ftp"),
 }
 
 
@@ -1139,18 +1154,22 @@ def derive_targets(spec: dict, activities: list[dict], reference: date) -> dict:
     targets: dict = {"why": {}}
 
     for sport in sorted(template_sports(spec["goal"])):
-        key, override_key, derive = _SPORT_TARGETS[sport]
+        key, override_key = _SPORT_TARGETS[sport]
         if override_key in overrides:
             targets[key] = overrides[override_key]
             targets["why"][key] = "set in the plan description"
             continue
-        derived = derive(recent)
-        if derived:
-            value, targets["why"][key] = derived
-            targets[key] = int(round(value))
+        # planner.derive_target guards the measurement; a rejected one comes
+        # back as None with a why saying what was thrown away and why, so the
+        # fallback never looks like an absence of data when it was a bad
+        # reading.
+        derived = planner.derive_target(sport, recent)
+        if derived["value"] is not None:
+            targets[key] = derived["value"]
+            targets["why"][key] = derived["why"]
         else:
             targets[key] = FALLBACK_TARGETS[key]
-            targets["why"][key] = "default (no recent history to derive from)"
+            targets["why"][key] = f"default — {derived['why']}"
     return targets
 
 
@@ -1320,9 +1339,10 @@ def _build_session(
 
 
 def benchmark_sports(goal: str) -> list[str]:
-    """Sports in this goal that have a benchmark workout, in test order."""
+    """Sports in this goal that have a benchmark workout. BENCHMARK_SESSIONS'
+    own order is the rotation order."""
     trained = template_sports(goal)
-    return [s for s in ("run", "cycle") if s in trained and s in BENCHMARK_SESSIONS]
+    return [sport for sport in BENCHMARK_SESSIONS if sport in trained]
 
 
 def _build_benchmark(sport: str, session_date: date, week: int, phase: str) -> dict:
@@ -1651,6 +1671,84 @@ def sync_window(sessions: list[dict], today: date, window_days: int) -> list[dic
         and s.get("status") == "planned"
         and today.isoformat() <= s["date"] <= end
     ]
+
+
+# The intensity params _apply_target writes — exactly one per session, which is
+# what makes an intensity-only rewrite possible at all. Volume is not
+# recoverable from a stored session: the template's `scale` dict is never
+# persisted, so a session knows its own size but not the rule that produced it.
+_INTENSITY_PARAMS = ("target_pace", "target_watts", "target_pace_100m")
+
+
+def retargetable(sessions: list[dict], today: date) -> list[dict]:
+    """Sessions a retarget may rewrite. Skipped, in order: extras (no "params"
+    key at all — touching one is a KeyError), benchmarks (deliberately
+    untargeted; a test at a prescribed pace is not a test), anything already
+    scheduled on Garmin (a pushed workout is a frozen copy on the account and
+    garmin.py has no endpoint to update or delete it), and anything dated
+    before today. `>= today` matches sync_window's horizon: a session dated
+    today that is still "planned" has not been pushed."""
+    return [
+        s
+        for s in sessions
+        if not s.get("is_extra")
+        and not s.get("is_benchmark")
+        and s.get("status") == "planned"
+        and s["date"] >= today.isoformat()
+    ]
+
+
+def retarget_sessions(plan: dict, targets: dict, today: date) -> dict:
+    """Re-derive the intensity of every retargetable session against `targets`,
+    in place, and report what moved:
+
+        {"old_targets", "new_targets", "retargeted", "unchanged",
+         "frozen", "past", "changed"}
+
+    Mutates plan["sessions"] and plan["targets"] — the same in-place convention
+    `fit train sync` uses (and unlike match_completion, which returns copies);
+    cli.py writes the plan afterwards. "Pure" in this codebase means no I/O,
+    not no mutation.
+
+    Intensity only, never volume — see _INTENSITY_PARAMS."""
+    old_targets = dict(plan.get("targets", {}))
+    eligible = retargetable(plan["sessions"], today)
+    eligible_ids = {id(s) for s in eligible}
+
+    real = [s for s in plan["sessions"] if not s.get("is_extra")]
+    frozen = sum(
+        1
+        for s in real
+        if s.get("status") == "scheduled" and s["date"] >= today.isoformat()
+    )
+    past = sum(1 for s in real if s["date"] < today.isoformat())
+
+    changed = []
+    for session in eligible:
+        sport, session_type = session["sport"], session["session_type"]
+        # A hand-edited plan file could name a sport this goal never trained.
+        if sport not in _SPORT_TARGETS or _SPORT_TARGETS[sport][0] not in targets:
+            continue
+        params = session["params"]
+        before = {key: params.get(key) for key in _INTENSITY_PARAMS}
+        _apply_target(sport, session_type, params, targets)
+        if {key: params.get(key) for key in _INTENSITY_PARAMS} == before:
+            continue
+        # The stored name is derived from params, so it has to be rebuilt or it
+        # will disagree with the payload that eventually gets pushed.
+        session["workout_name"] = planner.workout_name(sport, session_type, params)
+        changed.append(session)
+
+    plan["targets"] = targets
+    return {
+        "old_targets": old_targets,
+        "new_targets": targets,
+        "retargeted": len(changed),
+        "unchanged": len(eligible_ids) - len(changed),
+        "frozen": frozen,
+        "past": past,
+        "changed": changed,
+    }
 
 
 def future_scheduled(sessions: list[dict], today: date) -> list[dict]:

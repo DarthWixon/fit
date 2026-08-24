@@ -806,11 +806,13 @@ def test_benchmarks_replace_a_session_rather_than_adding_one():
     assert _benchmarks(with_tests) and not _benchmarks(without)
 
 
-def test_benchmarks_alternate_between_a_multisport_goals_disciplines():
+def test_benchmarks_take_turns_between_a_multisport_goals_disciplines():
+    """Every testable discipline gets a turn, and none is tested twice running
+    while another is waiting — the rotation picks whichever has gone longest."""
     plan = _at_length("standard_triathlon", 22, "days_per_week: [3, 5]\n")
     sports = [s["sport"] for s in _benchmarks(plan)]
-    assert set(sports) == {"run", "cycle"}
-    assert all(a != b for a, b in zip(sports, sports[1:]))  # never twice running
+    assert set(sports) == {"run", "cycle", "swim"}
+    assert all(a != b for a, b in zip(sports, sports[1:]))
 
 
 def test_a_benchmark_is_unscaled_and_untargeted():
@@ -870,3 +872,164 @@ def test_re_importing_after_a_test_re_derives_the_targets():
 def test_benchmarks_rejects_non_boolean(bad):
     with pytest.raises(ValueError):
         training.parse_plan_spec(SPORTIVE + bad)
+
+
+# --- retargeting ---------------------------------------------------------------
+
+RETARGET_SPEC = "goal: run_half\nevent_date: 2027-02-07\nstart_date: 2026-08-24\n"
+SLOW_5K = [
+    {
+        "id": "a",
+        "type": "run",
+        "date": "2026-08-01",
+        "distance_km": 5.0,
+        "duration_seconds": 1916,
+    }
+]
+FAST_5K = SLOW_5K + [
+    {
+        "id": "b",
+        "type": "run",
+        "date": "2026-08-20",
+        "distance_km": 5.0,
+        "duration_seconds": 1374,
+    }
+]
+
+
+def _retargeted(plan_activities=SLOW_5K, new_activities=FAST_5K):
+    """A plan built on slow history, then retargeted against faster history."""
+    spec = training.parse_plan_spec(RETARGET_SPEC)
+    plan = training.expand_plan(spec, plan_activities, REFERENCE)
+    targets = training.derive_targets(spec, new_activities, REFERENCE)
+    return plan, training.retarget_sessions(plan, targets, REFERENCE)
+
+
+def _volume_of(plan):
+    return {
+        (s["date"], s["sport"], s["session_type"]): {
+            k: v for k, v in s["params"].items() if k not in training._INTENSITY_PARAMS
+        }
+        for s in plan["sessions"]
+        if not s["is_extra"]
+    }
+
+
+def test_retarget_rewrites_only_future_unscheduled_sessions():
+    spec = training.parse_plan_spec(RETARGET_SPEC)
+    plan = training.expand_plan(spec, SLOW_5K, REFERENCE)
+    future = [
+        s for s in plan["sessions"] if not s["is_extra"] and s["date"] >= "2026-08-24"
+    ]
+    future[3]["status"] = "scheduled"
+    frozen = dict(future[3]["params"])
+
+    summary = training.retarget_sessions(
+        plan, training.derive_targets(spec, FAST_5K, REFERENCE), REFERENCE
+    )
+    assert summary["retargeted"] > 0
+    assert summary["frozen"] == 1
+    # A pushed workout is a frozen copy on the Garmin account with no update
+    # endpoint, so rewriting it locally would only desynchronise the two.
+    assert future[3]["params"] == frozen
+
+
+def test_retarget_never_changes_volume():
+    """The load-bearing invariant: a session's `scale` rule is not stored, so
+    volume is not recoverable from a session alone — only intensity is."""
+    spec = training.parse_plan_spec(RETARGET_SPEC)
+    plan = training.expand_plan(spec, SLOW_5K, REFERENCE)
+    before = _volume_of(plan)
+    training.retarget_sessions(
+        plan, training.derive_targets(spec, FAST_5K, REFERENCE), REFERENCE
+    )
+    assert _volume_of(plan) == before
+
+
+def test_retarget_leaves_benchmarks_and_extras_alone():
+    plan, _ = _retargeted()
+    for session in plan["sessions"]:
+        if session.get("is_benchmark"):
+            assert not any(k in session["params"] for k in training._INTENSITY_PARAMS)
+        if session["is_extra"]:
+            assert "params" not in session  # would KeyError if we touched one
+
+
+def test_retarget_regenerates_the_workout_name():
+    """A stale name would disagree with the payload that gets pushed."""
+    plan, _ = _retargeted()
+    for session in plan["sessions"]:
+        if session["is_extra"]:
+            continue
+        assert session["workout_name"] == planner.workout_name(
+            session["sport"], session["session_type"], session["params"]
+        )
+
+
+def test_retarget_matches_the_intensity_of_a_fresh_expansion():
+    """The contract, made executable: retargeting gets you the same intensities
+    a fresh import would. Only intensities — a fresh expansion also re-measures
+    volume from newer history, which retarget deliberately does not."""
+    spec = training.parse_plan_spec(RETARGET_SPEC)
+    plan, _ = _retargeted()
+    fresh = training.expand_plan(spec, FAST_5K, REFERENCE)
+    fresh_by_key = {
+        (s["date"], s["sport"], s["session_type"]): s for s in fresh["sessions"]
+    }
+    compared = 0
+    for session in plan["sessions"]:
+        other = fresh_by_key.get(
+            (session["date"], session["sport"], session["session_type"])
+        )
+        if not other or session["is_extra"] or session.get("is_benchmark"):
+            continue
+        for key in training._INTENSITY_PARAMS:
+            if key in session["params"] and key in other["params"]:
+                assert session["params"][key] == other["params"][key]
+                compared += 1
+    assert compared > 0
+
+
+def test_retarget_is_idempotent():
+    spec = training.parse_plan_spec(RETARGET_SPEC)
+    plan, _ = _retargeted()
+    again = training.retarget_sessions(
+        plan, training.derive_targets(spec, FAST_5K, REFERENCE), REFERENCE
+    )
+    assert again["retargeted"] == 0 and again["changed"] == []
+
+
+def test_retarget_reports_the_old_and_new_targets():
+    plan, summary = _retargeted()
+    assert summary["old_targets"]["run_5k_seconds"] == 1916
+    assert summary["new_targets"]["run_5k_seconds"] == 1374
+    # Every eligible session is accounted for as either rewritten or already
+    # on target — nothing falls between the two counts.
+    eligible = training.retargetable(plan["sessions"], REFERENCE)
+    assert summary["retargeted"] + summary["unchanged"] == len(eligible)
+
+
+def test_an_implausible_derivation_falls_back_with_a_reason():
+    """The real failure: a 500m from a 2021 drill session against a 1k from
+    2025 produced a 35s/100m CSS — faster than the world record."""
+    swims = [
+        {
+            "id": "s1",
+            "type": "swim",
+            "date": "2026-05-01",
+            "distance_km": 0.81,
+            "duration_seconds": 2461,
+            "splits": {"500m_seconds": 1179.9},
+        },
+        {
+            "id": "s2",
+            "type": "swim",
+            "date": "2026-08-01",
+            "distance_km": 1.0,
+            "duration_seconds": 1355,
+        },
+    ]
+    spec = training.parse_plan_spec("goal: sprint_triathlon\nevent_date: 2026-11-15\n")
+    targets = training.derive_targets(spec, swims, REFERENCE)
+    low, high = planner.PLAUSIBLE_TARGETS["swim"]
+    assert low <= targets["swim_css_100m"] <= high

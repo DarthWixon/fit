@@ -75,6 +75,7 @@ fit plan --sport run --type intervals  # generate a workout interactively, push 
 fit plan --sport run --type intervals --schedule 2026-08-28  # also place it on that date in the Garmin calendar
 fit train import plan.yaml   # expand a YAML goal description into a full periodised plan
 fit train show --weeks 2     # the plan, per week, with planned/done marks
+fit train retarget           # re-derive intensity targets from your latest history
 fit train sync [--dry-run]   # push + schedule the next N days of sessions (see "Training plans")
 fit train clear              # unschedule the plan's future sessions from Garmin
 fit history 10               # last N activities as a table (default 10)
@@ -428,6 +429,11 @@ Key functions:
   grouping and counting happens there
 - `render_training_synced(summary) -> None` / `render_training_cleared(summary)` —
   one-line confirmations plus any per-session failure warnings
+- `render_training_retargeted(summary, dry_run=False) -> None` — the old → new
+  target lines from `training.retarget_sessions`, following
+  `render_fitness_reset`'s pair shape. One line per target that moved, never one
+  per session: intensity is a pure function of the target, so eighty session
+  lines would say nothing the two target lines do not
 - `render_training_missing() -> None` — the "no active plan, create one with"
   message
 
@@ -560,6 +566,11 @@ Key functions:
   `RECENT_MONTHS` of activities, the window every `derive_*` helper expects.
   Public so `training.py` windows history identically rather than repeating the
   same two `compute` calls
+- `derive_target(sport, recent) -> dict` — `{"value", "why"}`, the
+  **plausibility-guarded front door** to the three derivations below and the one
+  callers should use. `value` is `None` both when there was nothing to measure
+  and when what was measured falls outside `PLAUSIBLE_TARGETS`; `why` says
+  which, so a rejected reading is never silently swapped for a default
 - `derive_run_5k(recent) -> tuple[int, str] | None` / `derive_swim_css(recent)` /
   `derive_ride_watts(recent)` — the three history-derivation helpers (each
   returns `(value, why)`), public rather than private precisely so `training.py`
@@ -574,6 +585,16 @@ Key functions:
 - `describe_plan(plan: dict) -> list[str]` — human step lines ("6 x 800m @
   4:20–4:40/km, 2:00 recovery") so `display.render_plan_saved` stays
   computation-free (same split as `detect_new_pbs` → `render_new_pb_messages`)
+
+Guard constants: `PLAUSIBLE_TARGETS` (per-sport bounds a *derived* target must
+fall inside — an explicit `targets:` override is the user's own word and is not
+bounded), `CSS_PAIR_MIN_RATIO` / `CSS_PAIR_MAX_DAYS` (the two-point
+critical-speed model only means something when both efforts are maximal, from
+comparable fitness — the shorter must actually be faster per 100m, which the old
+`t1k > t500` check never established), `FTP_FROM_20MIN` (0.95, the conventional
+correction, worth applying now the cycle benchmark is a bare test) and
+`RIDE_POWER_MIN_SECONDS` (1140 — a watch stopped on the beep records 1199s, and
+disqualifying a test that was actually done is the worst failure available).
 
 Key constants: `SPORT_TYPES` / `WORKOUT_TYPES` (valid combos), `STEADY_TYPES`
 (the four single-block types — see "Workout planner"), the target-band
@@ -621,6 +642,9 @@ Key functions:
   (same split as `planner.describe_plan` → `render_plan_saved`)
 - `plan_summary(plan, today) -> dict` — header figures for `fit train show`
 - `describe_session(session) -> str` — one human line per session
+- `retargetable(sessions, today) -> list[dict]` / `retarget_sessions(plan,
+  targets, today) -> dict` — re-derive intensity for the sessions still ahead;
+  see "Retargeting"
 - `sync_window(sessions, today, window_days) -> list[dict]` — the still-
   unscheduled, non-extra sessions inside the rolling horizon; what makes
   `fit train sync` idempotent
@@ -675,7 +699,7 @@ few intentionally compose one another, noted below):
   and `garmin_sync`
 - `_require_training_plan() -> dict` — the active plan, or the
   render-and-exit "no active plan" path
-- `_show_plan(activities, weeks) -> None` — the shared `train import`/`train
+- `_show_plan(plan, activities, weeks) -> None` — the shared `train import`/`train
   show` tail: match completion, group by week, render
 - `_login_or_exit()` — the `garmin.login()` + `GarminAuthError` → exit dance
   shared by `train sync` and `train clear`
@@ -1466,9 +1490,36 @@ is worse than prescribing work that is slightly easy. Volume and intensity are
 separate axes (see "Building frequency").
 
 A plan therefore earns a faster pace by **re-measuring**. `BENCHMARK_SESSIONS`
-defines a re-test per sport (run: a 3km best effort; cycle: a 20-minute FTP
-test; swimming has none, so swim targets keep coming from CSS over stored
-splits), and `expand_plan` places them:
+defines a re-test per sport, and each one's *shape* follows a single rule:
+
+> **The recorded activity must BE the test, unless the sport's split machinery
+> can isolate the test from within it.**
+
+- **run: a 5km best effort, warmup and cooldown included.**
+  `compute.fastest_split` is a sliding-window minimum over the whole track, so
+  the fastest 5k window is the test itself however much jogging surrounds it.
+  5km rather than 3km because 3km appears in neither `SPLIT_DISTANCES_KM` nor
+  `MILESTONES_KM` — a 3km effort was measurable *nowhere*, and worse, the best
+  5k window containing it necessarily dragged in 2km of warmup, and that branch
+  takes precedence over the fallback. The old 3km test made the estimate worse
+  than not testing.
+- **cycle: a bare 20-minute test, no warmup or cooldown steps.** Stored
+  `avg_power` is a whole-activity mean with no split analogue (FIT session
+  field; TCX an unweighted mean of lap `AvgWatts`), so a 20+20+10 session read
+  roughly 40% easy riding into the FTP estimate and the test's own output was
+  unrecoverable.
+- **swim: a bare 1km test.** A whole swim of 1.000–1.060km lands in the existing
+  `fastest_1k` milestone, which `derive_swim_css` already reads — so this needed
+  no `compute.py` change at all. Milestones are computed from `distance_km` and
+  `duration_seconds` on every read, which matters because pool swims frequently
+  carry no cumulative-distance stream for `splits` to be derived from.
+
+A bare test instructs no warmup, and nothing in the payload can carry that
+instruction — `build_plan` hard-codes `description`. So `planner._bare_suffix`
+puts it in the **workout name** ("Cycle baseline 20min test (warm up first)"),
+which is what the athlete actually reads on the watch.
+
+`expand_plan` then places them:
 
 - **On recovery weeks only**, never in the taper — you test rested, which is
   what makes one test comparable with the next.
@@ -1476,7 +1527,8 @@ splits), and `expand_plan` places them:
   a quality session (`intervals`, then `tempo`) if the week has one, otherwise
   the `long` session, which at low frequencies is the only slot a sport has.
 - **Taking turns** between the sports a goal trains, picking whichever has gone
-  longest without a test. A week where no testable sport has a suitable session
+  longest without a test. `benchmark_sports` iterates `BENCHMARK_SESSIONS`, so
+  that dict's order is the rotation order. A week where no testable sport has a suitable session
   is skipped *without* consuming a turn, so a low-frequency opening block cannot
   silently eat every run's test.
 - **Unscaled and untargeted** — a 3km test is only a benchmark if it is the same
@@ -1486,12 +1538,37 @@ splits), and `expand_plan` places them:
 `benchmarks: false` in the description turns them off. Weeks carrying one are
 recorded in `plan["benchmark_weeks"]` and surfaced by `render_training_plan`.
 
-**The loop is manual by design**: do the test → `fit garmin-sync` → `fit train
-import` again, which re-derives every target from the updated history and
-rebuilds the remaining weeks. Import still refuses to replace a plan with future
-scheduled sessions, so that means `fit train clear` first. A `fit train
-retarget` that rewrote only unstarted future sessions in place would be tidier
-and is the obvious next step, but it is not built.
+**Applying a re-test**: do the test → `fit garmin-sync` → **`fit train
+retarget`**, which re-derives every target from the updated history and rewrites
+the sessions still ahead of you, in place. No Garmin login, no calendar change.
+`fit train import` remains the way to change a plan's *shape* and still refuses
+to replace a plan with future scheduled sessions.
+
+### Retargeting
+
+`training.retargetable(sessions, today)` selects what may be rewritten, and
+`training.retarget_sessions(plan, targets, today)` does it, returning
+`{"old_targets", "new_targets", "retargeted", "unchanged", "frozen", "past",
+"changed"}`. Four things it deliberately will not touch:
+
+- **Extras** — they have no `params` key at all; touching one is a `KeyError`.
+- **Benchmarks** — a test at a prescribed pace is not a test.
+- **Sessions already scheduled on Garmin.** A pushed workout is a frozen copy on
+  the account and `garmin.py` has no endpoint to update or delete it, so
+  rewriting one locally would only desynchronise the plan from the watch. They
+  are counted as `frozen` and the renderer says so.
+- **Volume.** Intensity only — and this is *structurally forced*, not just
+  chosen: the template's `scale` dict is never persisted, so a stored session
+  knows its own size but not the rule that produced it. `_INTENSITY_PARAMS`
+  names the three params `_apply_target` writes, and
+  `test_retarget_never_changes_volume` holds the line.
+
+`workout_name` is regenerated whenever params change — it is derived from them,
+and a stale name would disagree with the payload that eventually gets pushed.
+Like `sync`, this mutates `plan["sessions"]` in place ("pure" here means no I/O,
+not no mutation) and `cli.py` writes the plan afterwards. `--dry-run` writes
+nothing, which matters more here than in `sync`: there is no backup of
+`plan.json` and this rewrites every future session at once.
 
 ### Sync, idempotency, and completion
 

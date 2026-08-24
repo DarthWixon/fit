@@ -35,8 +35,9 @@ extras:
 # week. `fit train show` reports what it measured.
 # volume: 70
 
-# Optional. Re-tests land on recovery weeks (a 3km run effort, a 20min FTP test)
-# so the plan can be rebuilt at your new fitness when you re-import. Default true.
+# Optional. Re-tests land on recovery weeks (a 5km run effort, a bare 20min FTP
+# test, a bare 1km swim) so `fit train retarget` can rebuild the remaining weeks
+# at your new fitness. Default true.
 # benchmarks: false
 
 # Optional overrides of the template's periodisation.

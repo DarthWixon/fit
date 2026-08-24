@@ -307,7 +307,9 @@ def test_cycle_watts_from_recent_rides():
         },  # no power: ignored
     ]
     recs = planner.recommend_defaults("cycle", "intervals", activities, [], REFERENCE)
-    assert recs["target_watts"]["default"] == 185  # 187 rounded to nearest 5
+    # 187W is treated as a 20-minute effort, so FTP is 95% of it: 177.65,
+    # rounded to the nearest 5.
+    assert recs["target_watts"]["default"] == 180
 
 
 def test_rep_progression_from_previous_plans():
@@ -417,4 +419,141 @@ def test_workout_name_matches_build_plan():
     assert (
         planner.workout_name("run", "long", params)
         == planner.build_plan("run", "long", params, "x")["workout_name"]
+    )
+
+
+# --- guarded derivations and benchmark payloads --------------------------------
+
+
+def test_swim_css_rejects_two_incomparable_efforts():
+    """The real bug: a 500m from a 2021 drill session (3:56/100m) against a 1k
+    from 2025 (2:15/100m) gave 35s/100m — faster than the world record. The
+    shorter effort must actually be faster per 100m for the model to mean
+    anything."""
+    swims = [
+        {
+            "type": "swim",
+            "date": "2022-05-01",
+            "distance_km": 0.81,
+            "duration_seconds": 2461,
+            "splits": {"500m_seconds": 1179.9},
+        },
+        {
+            "type": "swim",
+            "date": "2026-08-01",
+            "distance_km": 1.0,
+            "duration_seconds": 1355,
+        },
+    ]
+    css, why = planner.derive_swim_css(swims)
+    assert css == 136  # falls through to 1k pace
+    assert "1k pace" in why
+
+
+def test_swim_css_pair_must_be_close_in_time():
+    same_pair = lambda d1, d2: [
+        {"type": "swim", "date": d1, "distance_km": 0.5, "duration_seconds": 480},
+        {"type": "swim", "date": d2, "distance_km": 1.0, "duration_seconds": 1000},
+    ]
+    near = planner.derive_swim_css(same_pair("2026-08-01", "2026-08-08"))
+    far = planner.derive_swim_css(same_pair("2026-01-01", "2026-08-08"))
+    assert "CSS from" in near[1]
+    assert "CSS from" not in far[1]
+
+
+def test_derive_target_rejects_the_impossible_with_a_reason():
+    run = [
+        {
+            "type": "run",
+            "date": "2026-08-01",
+            "distance_km": 5.0,
+            "duration_seconds": 400,
+        }
+    ]
+    result = planner.derive_target("run", run)
+    assert result["value"] is None
+    assert "outside the plausible" in result["why"]
+
+
+def test_derive_target_passes_a_believable_measurement_through():
+    run = [
+        {
+            "type": "run",
+            "date": "2026-08-01",
+            "distance_km": 5.0,
+            "duration_seconds": 1500,
+        }
+    ]
+    assert planner.derive_target("run", run)["value"] == 1500
+
+
+def test_ftp_applies_the_twenty_minute_correction():
+    ride = [
+        {
+            "type": "cycle",
+            "date": "2026-08-01",
+            "avg_power": 200,
+            "duration_seconds": 1200,
+        }
+    ]
+    assert planner.derive_ride_watts(ride)[0] == 190  # 200 * 0.95
+
+
+@pytest.mark.parametrize("seconds,counts", [(1139, False), (1140, True), (1199, True)])
+def test_a_bare_twenty_minute_test_is_not_disqualified_by_a_second(seconds, counts):
+    """A watch stopped on the beep records 1199s, and rejecting a test that was
+    actually done is the worst failure available — retarget would report no
+    change and never say why."""
+    ride = [
+        {
+            "type": "cycle",
+            "date": "2026-08-01",
+            "avg_power": 200,
+            "duration_seconds": seconds,
+        }
+    ]
+    assert (planner.derive_ride_watts(ride) is not None) is counts
+
+
+@pytest.mark.parametrize(
+    "sport,bare,wrapped",
+    [
+        (
+            "cycle",
+            {"test_minutes": 20},
+            {"warmup_minutes": 20, "test_minutes": 20, "cooldown_minutes": 10},
+        ),
+        (
+            "swim",
+            {"test_distance_m": 1000},
+            {"warmup_m": 200, "test_distance_m": 1000, "cooldown_m": 100},
+        ),
+    ],
+)
+def test_bare_baselines_omit_warmup_and_cooldown(sport, bare, wrapped):
+    """A zero-length step is not a valid workout, so the wrapping is dropped
+    entirely — and the remaining steps stay contiguously numbered."""
+    bare_steps = planner.build_plan(sport, "baseline", bare, "x")["payload"][
+        "workoutSegments"
+    ][0]["workoutSteps"]
+    assert len(bare_steps) == 1
+    assert bare_steps[0]["stepOrder"] == 1
+    assert bare_steps[0]["targetType"]["workoutTargetTypeKey"] == "no.target"
+
+    full = planner.build_plan(sport, "baseline", wrapped, "x")["payload"][
+        "workoutSegments"
+    ][0]["workoutSteps"]
+    assert [s["stepOrder"] for s in full] == [1, 2, 3]
+
+
+def test_a_bare_test_carries_its_instruction_in_the_name():
+    """The name is what the athlete reads on the watch, and nothing else in the
+    payload can carry 'warm up before you start recording'."""
+    assert "warm up first" in planner.workout_name(
+        "cycle", "baseline", {"test_minutes": 20}
+    )
+    assert "warm up first" not in planner.workout_name(
+        "cycle",
+        "baseline",
+        {"warmup_minutes": 20, "test_minutes": 20, "cooldown_minutes": 10},
     )

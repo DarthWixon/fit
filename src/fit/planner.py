@@ -33,7 +33,7 @@ SPORT_TYPES = {
 
 WORKOUT_TYPES = {
     "run": ["intervals", "tempo", "hills", "baseline", "easy", "long"],
-    "swim": ["intervals", "continuous"],
+    "swim": ["intervals", "continuous", "baseline"],
     "cycle": ["intervals", "hills", "baseline", "endurance", "long"],
 }
 
@@ -75,6 +75,36 @@ ENDURANCE_FTP_FACTOR = 0.70
 # end. Longer reps stay at plain 5k pace, the bracket's safe end.
 SHORT_REP_MAX_M = 1000
 SHORT_REP_FACTOR = 0.97
+
+# Derived targets are sanity-checked before they become prescriptions. A
+# derivation built from mismatched efforts can produce a number no human
+# produces, and a plan built on it prescribes work nobody can complete.
+# Generous on purpose: these reject the impossible, not the merely unusual.
+# An explicit `targets:` in a plan description is the user's own word and is
+# NOT bounded by these.
+PLAUSIBLE_TARGETS = {
+    "run": (750, 3600),  # 5k seconds: 2:30/km world record .. 12:00/km walking
+    "swim": (60, 240),  # seconds per 100m: elite .. very slow
+    "cycle": (60, 500),  # watts: not a training target .. world class
+}
+
+# Guards on the two-point critical-speed model (derive_swim_css). The shorter
+# effort must actually be faster per 100m — if it is not, the two are not
+# comparable maximal efforts and the model extrapolates the wrong way, which
+# is how a 2021 drill 500m and a 2025 1k once produced a 35s/100m CSS. The
+# floor bounds the extrapolation the other way, so a sprint measured against a
+# steady swim cannot project far past either.
+CSS_PAIR_MIN_RATIO = 0.75
+CSS_PAIR_MAX_DAYS = 90
+
+# A 20-minute best effort is the standard field FTP test, and the conventional
+# correction is 95% of it. Only worth applying now that the plan's cycle
+# benchmark is a bare test whose avg_power really is that effort.
+FTP_FROM_20MIN = 0.95
+# Just under 20 minutes: a watch stopped on the beep can record 1199s, and
+# disqualifying a test that was actually done is the worst failure available —
+# `fit train retarget` would report no change and never say why.
+RIDE_POWER_MIN_SECONDS = 1140
 
 # Speeds assumed for estimatedDurationInSecs when a distance step has no
 # pace target to average (6:00/km run, 2:00/100m swim).
@@ -484,6 +514,26 @@ _PARAM_SPECS = {
             "parse": _positive_int,
         },
     ],
+    ("swim", "baseline"): [
+        {
+            "key": "warmup_m",
+            "label": "Warmup distance (m)",
+            "default": 200,
+            "parse": _positive_int,
+        },
+        {
+            "key": "test_distance_m",
+            "label": "Test distance (m)",
+            "default": 1000,
+            "parse": _positive_int,
+        },
+        {
+            "key": "cooldown_m",
+            "label": "Cooldown distance (m)",
+            "default": 100,
+            "parse": _positive_int,
+        },
+    ],
     ("swim", "continuous"): [
         {
             "key": "distance_m",
@@ -666,15 +716,53 @@ def _hills(sport_word: str, params: dict) -> tuple[str, list[dict]]:
     return name, steps
 
 
+def _baseline_steps(
+    warmup: float,
+    main_key: str,
+    main_value: float,
+    cooldown: float,
+    wrap_key: str = "time",
+) -> list[dict]:
+    """warmup -> best effort -> cooldown, with a zero-or-absent warmup or
+    cooldown omitted entirely rather than emitted as a zero-length step, and
+    the remaining steps left contiguously numbered.
+
+    Whether a benchmark can afford the wrapping depends on the sport, not on
+    taste: the recorded activity must BE the test unless the sport's split
+    machinery can isolate it from within. compute.fastest_split finds the
+    fastest window anywhere in a run's track, so a run test survives being
+    wrapped. avg_power is a whole-activity mean with no split analogue, and a
+    pool swim often carries no distance stream at all, so those must be bare."""
+    steps, order = [], 1
+    if warmup:
+        steps.append(_step(order, "warmup", wrap_key, warmup, _no_target()))
+        order += 1
+    steps.append(_step(order, "interval", main_key, main_value, _no_target()))
+    order += 1
+    if cooldown:
+        steps.append(_step(order, "cooldown", wrap_key, cooldown, _no_target()))
+    return steps
+
+
+def _bare_suffix(warmup: float) -> str:
+    """The instruction that has to travel with a bare test. The workout name is
+    what the athlete reads on the watch, and nothing else in the payload can
+    carry it — description is fixed at build_plan."""
+    return "" if warmup else " (warm up first)"
+
+
 def _run_baseline(params: dict) -> tuple[str, list[dict]]:
     # Runna-style benchmark: a best-effort fixed distance with an open
-    # target, used to (re)measure current pace baseline.
-    steps = [
-        _step(1, "warmup", "time", params["warmup_minutes"] * 60, _no_target()),
-        _step(2, "interval", "distance", params["test_distance_m"], _no_target()),
-        _step(3, "cooldown", "time", params["cooldown_minutes"] * 60, _no_target()),
-    ]
-    return f"Run baseline {_format_meters(params['test_distance_m'])} test", steps
+    # target, used to (re)measure current pace baseline. Keeps its warmup and
+    # cooldown — see _baseline_steps.
+    steps = _baseline_steps(
+        params.get("warmup_minutes", 0) * 60,
+        "distance",
+        params["test_distance_m"],
+        params.get("cooldown_minutes", 0) * 60,
+    )
+    name = f"Run baseline {_format_meters(params['test_distance_m'])} test"
+    return name + _bare_suffix(params.get("warmup_minutes", 0)), steps
 
 
 def _swim_intervals(params: dict) -> tuple[str, list[dict]]:
@@ -722,13 +810,32 @@ def _cycle_intervals(params: dict) -> tuple[str, list[dict]]:
 
 
 def _cycle_baseline(params: dict) -> tuple[str, list[dict]]:
-    # FTP-test shape: sustained best effort, open target.
-    steps = [
-        _step(1, "warmup", "time", params["warmup_minutes"] * 60, _no_target()),
-        _step(2, "interval", "time", params["test_minutes"] * 60, _no_target()),
-        _step(3, "cooldown", "time", params["cooldown_minutes"] * 60, _no_target()),
-    ]
-    return f"Cycle baseline {params['test_minutes']}min test", steps
+    # FTP-test shape: sustained best effort, open target. The plan's own
+    # benchmark passes no warmup/cooldown, because stored avg_power averages
+    # the whole recording — see _baseline_steps.
+    steps = _baseline_steps(
+        params.get("warmup_minutes", 0) * 60,
+        "time",
+        params["test_minutes"] * 60,
+        params.get("cooldown_minutes", 0) * 60,
+    )
+    name = f"Cycle baseline {params['test_minutes']}min test"
+    return name + _bare_suffix(params.get("warmup_minutes", 0)), steps
+
+
+def _swim_baseline(params: dict) -> tuple[str, list[dict]]:
+    # Pool time trial, open target. Bare when the plan schedules it: a pool
+    # swim often carries no cumulative-distance stream, so the whole-activity
+    # milestone is the only reliable measurement — see _baseline_steps.
+    steps = _baseline_steps(
+        params.get("warmup_m", 0),
+        "distance",
+        params["test_distance_m"],
+        params.get("cooldown_m", 0),
+        wrap_key="distance",
+    )
+    name = f"Swim baseline {_format_meters(params['test_distance_m'])} test"
+    return name + _bare_suffix(params.get("warmup_m", 0)), steps
 
 
 # --- steady sessions (single block, wide target band) ---------------------
@@ -824,6 +931,7 @@ _BUILDERS = {
     ("cycle", "intervals"): _cycle_intervals,
     ("cycle", "hills"): lambda params: _hills("Cycle", params),
     ("cycle", "baseline"): _cycle_baseline,
+    ("swim", "baseline"): _swim_baseline,
     ("cycle", "endurance"): _cycle_endurance,
     ("cycle", "long"): _cycle_long,
 }
@@ -1022,6 +1130,43 @@ def derive_run_5k(recent: list[dict]) -> tuple[int, str] | None:
     )
 
 
+def _two_point_css(
+    short: tuple | None, long: tuple | None, short_m: int, long_m: int
+) -> int | None:
+    """Seconds per 100m from two best efforts, or None when the pair is not
+    comparable. short/long are (seconds, date) as _best_of_keys returns.
+
+    css = (t_long - t_short) / ((long_m - short_m) / 100). The model assumes
+    both are maximal efforts from the same fitness, and says nothing sensible
+    when they are not — so the pair is rejected unless the shorter effort is
+    genuinely faster per 100m, by a believable margin, within
+    CSS_PAIR_MAX_DAYS of the other. A missing date counts as not comparable:
+    unknown provenance is the conservative reading."""
+    if not short or not long:
+        return None
+    short_seconds, short_date = short
+    long_seconds, long_date = long
+
+    short_pace = short_seconds / (short_m / 100)
+    long_pace = long_seconds / (long_m / 100)
+    ratio = short_pace / long_pace
+    if not CSS_PAIR_MIN_RATIO <= ratio < 1:
+        return None
+
+    if not short_date or not long_date:
+        return None
+    try:
+        apart = abs(
+            (date.fromisoformat(long_date) - date.fromisoformat(short_date)).days
+        )
+    except ValueError:
+        return None
+    if apart > CSS_PAIR_MAX_DAYS:
+        return None
+
+    return round((long_seconds - short_seconds) / ((long_m - short_m) / 100))
+
+
 def derive_swim_css(recent: list[dict]) -> tuple[int, str] | None:
     """(seconds per 100m, why) — two-point critical-speed model over the
     best recent 500m and 1k times (same math as the classic 400/200 CSS
@@ -1030,8 +1175,8 @@ def derive_swim_css(recent: list[dict]) -> tuple[int, str] | None:
     pbs = compute.all_personal_bests(recent).get("swim", {})
     t500 = _best_of_keys(pbs, ["fastest_500m_seconds", "fastest_500m_split_seconds"])
     t1k = _best_of_keys(pbs, ["fastest_1k_seconds", "fastest_1k_split_seconds"])
-    if t500 and t1k and t1k[0] > t500[0]:
-        css = round((t1k[0] - t500[0]) / 5)
+    css = _two_point_css(t500, t1k, 500, 1000)
+    if css is not None:
         return (
             css,
             f"CSS from best recent 500m ({_format_mmss(t500[0])}) and 1k ({_format_mmss(t1k[0])})",
@@ -1057,23 +1202,78 @@ def derive_swim_css(recent: list[dict]) -> tuple[int, str] | None:
 
 
 def derive_ride_watts(recent: list[dict]) -> tuple[int, str] | None:
-    """(watts, why) — max avg_power over recent rides of >=20 minutes, a
-    coarse FTP proxy (only session averages are stored)."""
+    """(watts, why) — FTP proxied from the max avg_power over recent sustained
+    rides, at the conventional 95% of a 20-minute effort.
+
+    Still coarse: only session averages are stored, so the best figure may come
+    from a long steady ride rather than the test, in which case the correction
+    compounds an already-conservative reading. That errs toward slightly-easy
+    targets, which is the trade this project takes everywhere."""
     rides = [
         a
         for a in recent
         if a.get("type") == "cycle"
         and a.get("avg_power")
-        and (a.get("duration_seconds") or 0) >= 1200
+        and (a.get("duration_seconds") or 0) >= RIDE_POWER_MIN_SECONDS
     ]
     if not rides:
         return None
     best = max(rides, key=lambda a: a["avg_power"])
-    watts = _round_to(best["avg_power"], 5)
+    watts = _round_to(best["avg_power"] * FTP_FROM_20MIN, 5)
     return (
         watts,
-        f"best avg power of recent 20min+ rides ({best['avg_power']}W, {best.get('date')})",
+        f"95% of the best avg power of recent sustained rides "
+        f"({best['avg_power']}W, {best.get('date')})",
     )
+
+
+_DERIVERS = {
+    "run": derive_run_5k,
+    "swim": derive_swim_css,
+    "cycle": derive_ride_watts,
+}
+
+# How each sport's target reads back in a rejection message.
+_TARGET_UNITS = {
+    "run": lambda v: _format_mmss(v),
+    "swim": lambda v: f"{_format_mmss(v)}/100m",
+    "cycle": lambda v: f"{v}W",
+}
+
+
+def derive_target(sport: str, recent: list[dict]) -> dict:
+    """{"value": int | None, "why": str} — the plausibility-guarded front door
+    to the three derive_* helpers, and the one callers should use.
+
+    value is None both when there was nothing to derive from and when what was
+    derived falls outside PLAUSIBLE_TARGETS; why says which, so a rejected
+    measurement is never silently swapped for a default. Callers substitute
+    their own documented fallback."""
+    derived = _DERIVERS[sport](recent)
+    if derived is None:
+        return {"value": None, "why": "no recent history to derive from"}
+
+    value, why = derived
+    value = int(round(value))
+    low, high = PLAUSIBLE_TARGETS[sport]
+    if not low <= value <= high:
+        unit = _TARGET_UNITS[sport]
+        return {
+            "value": None,
+            "why": (
+                f"{why} gave {unit(value)}, outside the plausible "
+                f"{unit(low)}–{unit(high)} — ignored"
+            ),
+        }
+    return {"value": value, "why": why}
+
+
+def _guarded(derived: dict) -> tuple[int, str] | None:
+    """derive_target's dict back in the (value, why) shape recommend_defaults
+    reads, or None when the measurement was missing or rejected."""
+    if derived["value"] is None:
+        return None
+    return derived["value"], derived["why"]
 
 
 def recommend_defaults(
@@ -1098,7 +1298,7 @@ def recommend_defaults(
     recs: dict = {}
 
     if sport == "run" and workout_type in ("intervals", "tempo", "easy", "long"):
-        run_ref = derive_run_5k(recent)
+        run_ref = _guarded(derive_target("run", recent))
         if run_ref:
             five_k_seconds, why = run_ref
             if workout_type in ("easy", "long"):
@@ -1125,12 +1325,12 @@ def recommend_defaults(
                     "why": f"~7% slower than 5k race pace — {why}",
                 }
     elif sport == "swim" and workout_type in ("intervals", "continuous"):
-        swim_ref = derive_swim_css(recent)
+        swim_ref = _guarded(derive_target("swim", recent))
         if swim_ref:
             css, why = swim_ref
             recs["target_pace_100m"] = {"default": _format_mmss(css), "why": why}
     elif sport == "cycle" and workout_type in ("intervals", "endurance", "long"):
-        ride_ref = derive_ride_watts(recent)
+        ride_ref = _guarded(derive_target("cycle", recent))
         if ride_ref:
             watts, why = ride_ref
             if workout_type in ("endurance", "long"):

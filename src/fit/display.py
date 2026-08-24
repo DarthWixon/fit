@@ -506,20 +506,24 @@ _TARGET_LABELS = {
 }
 
 
+def _format_target_value(key: str, value) -> str:
+    """One target in its own units: '22:30', '1:45/100m', '245W'."""
+    _, kind = _TARGET_LABELS[key]
+    if kind == "time":
+        return _format_seconds_colon(value)
+    if kind == "pace":
+        return f"{_format_seconds_colon(value)}/100m"
+    return f"{value}W"
+
+
 def _format_targets(targets: dict) -> str:
     """'Run 5k 22:30 · Swim CSS 1:45/100m · Bike FTP 245W' from
     training.derive_targets' dict."""
-    parts = []
-    for key, (label, kind) in _TARGET_LABELS.items():
-        if targets.get(key) is None:
-            continue
-        if kind == "time":
-            parts.append(f"{label} {_format_seconds_colon(targets[key])}")
-        elif kind == "pace":
-            parts.append(f"{label} {_format_seconds_colon(targets[key])}/100m")
-        else:
-            parts.append(f"{label} {targets[key]}W")
-    return " · ".join(parts)
+    return " · ".join(
+        f"{label} {_format_target_value(key, targets[key])}"
+        for key, (label, _) in _TARGET_LABELS.items()
+        if targets.get(key) is not None
+    )
 
 
 def render_training_plan(summary: dict, weeks: list[dict]) -> None:
@@ -548,12 +552,15 @@ def render_training_plan(summary: dict, weeks: list[dict]) -> None:
     if volume.get("why"):
         scale = round(volume.get("start_scale", 1) * 100)
         console.print(f"[dim]Starting volume: {scale}% — {volume['why']}[/dim]")
-    weeks = summary.get("benchmark_weeks") or []
-    if weeks:
+    # Not `weeks` — that is the parameter holding the grouped session weeks the
+    # table below iterates, and shadowing it here made this function raise on
+    # every plan that schedules a re-test.
+    benchmark_weeks = summary.get("benchmark_weeks") or []
+    if benchmark_weeks:
         console.print(
-            f"[dim]Re-test weeks: {', '.join(str(w) for w in weeks)} — do the test, "
-            "sync it back, then re-import to rebuild the rest at your new "
-            "fitness.[/dim]"
+            f"[dim]Re-test weeks: {', '.join(str(w) for w in benchmark_weeks)} — "
+            "do the test, sync it back, then `fit train retarget` to rebuild "
+            "the rest at your new fitness.[/dim]"
         )
     for warning in summary.get("warnings", []):
         console.print(f"[yellow]note:[/yellow] {warning}")
@@ -626,6 +633,55 @@ def render_training_synced(summary: dict) -> None:
             "[dim]They will appear in the Garmin Connect calendar on the "
             "watch's next sync.[/dim]"
         )
+
+
+def render_training_retargeted(summary: dict, dry_run: bool = False) -> None:
+    """summary: training.retarget_sessions' dict. Follows render_fitness_reset's
+    old -> new shape. One line per target that actually moved, never one per
+    session: intensity is a pure function of the target, so eighty session
+    lines would carry nothing the two target lines do not."""
+    old, new = summary["old_targets"], summary["new_targets"]
+    moved = [
+        key
+        for key, _ in _TARGET_LABELS.items()
+        if new.get(key) is not None and old.get(key) != new.get(key)
+    ]
+
+    if not moved:
+        console.print(
+            "Targets unchanged — nothing to rewrite. "
+            "[dim]Your latest history derives the same numbers the plan already has.[/dim]"
+        )
+        return
+
+    verb = "Would retarget" if dry_run else "Retargeted"
+    console.print(
+        f"{verb} {summary['retargeted']} future session(s) · "
+        f"{summary['unchanged']} already on target · "
+        f"{summary['frozen']} left scheduled on Garmin · {summary['past']} in the past"
+    )
+    for key in moved:
+        label = _TARGET_LABELS[key][0]
+        was = (
+            _format_target_value(key, old[key])
+            if old.get(key) is not None
+            else "not set"
+        )
+        console.print(
+            f"  [bold]{label}[/bold] {was} → {_format_target_value(key, new[key])}"
+        )
+        why = (new.get("why") or {}).get(key)
+        if why:
+            console.print(f"    [dim]{why}[/dim]")
+
+    if summary["frozen"]:
+        console.print(
+            f"[dim]note: {summary['frozen']} session(s) already on your Garmin "
+            "calendar keep their old targets — a pushed workout can't be edited. "
+            "Run `fit train clear` first if you want those rewritten too.[/dim]"
+        )
+    if dry_run:
+        console.print("[dim](dry run — nothing written)[/dim]")
 
 
 def render_training_cleared(summary: dict) -> None:
