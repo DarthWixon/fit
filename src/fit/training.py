@@ -87,10 +87,14 @@ BENCHMARK_SESSIONS = {
             "cooldown_minutes": 10,
         },
     },
-    # Bare. Stored avg_power is the whole-activity mean with no split analogue,
-    # so anything else in the recording dilutes the result — a 20+20+10 session
-    # reads roughly 40% easy riding into the FTP estimate.
-    "cycle": {"session_type": "baseline", "params": {"test_minutes": 20}},
+    # A normal workout again. It was briefly bare, because stored avg_power is
+    # a whole-activity mean and a warmup in the same recording diluted it —
+    # compute.best_power_window now recovers the 20-minute effort from wherever
+    # it sits in the ride, so the test no longer has to be the whole recording.
+    "cycle": {
+        "session_type": "baseline",
+        "params": {"warmup_minutes": 20, "test_minutes": 20, "cooldown_minutes": 10},
+    },
     # Bare, and 1km: a whole swim of 1.000-1.060km lands in the existing
     # fastest_1k milestone, which derive_swim_css already reads. Pool swims
     # often carry no cumulative-distance stream, so the milestone — computed

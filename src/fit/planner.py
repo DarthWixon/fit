@@ -455,15 +455,14 @@ _PARAM_SPECS = {
             "parse": _positive_int,
         },
     ],
-    # Bare by default: stored avg_power is the whole-activity mean, so a warmup
-    # inside the same recording makes the test unreadable. Warm up first, then
-    # start recording — the workout name says so. Type a number to wrap it
-    # anyway.
+    # compute.best_power_window finds the 20-minute effort wherever it sits in
+    # the recording, so this is a normal warmup/test/cooldown workout. Blank
+    # still means "no step", for anyone who prefers to record the test alone.
     ("cycle", "baseline"): [
         {
             "key": "warmup_minutes",
             "label": "Warmup (minutes, blank for none)",
-            "default": "",
+            "default": 20,
             "parse": _optional_int,
         },
         {
@@ -475,7 +474,7 @@ _PARAM_SPECS = {
         {
             "key": "cooldown_minutes",
             "label": "Cooldown (minutes, blank for none)",
-            "default": "",
+            "default": 10,
             "parse": _optional_int,
         },
     ],
@@ -535,8 +534,9 @@ _PARAM_SPECS = {
             "parse": _positive_int,
         },
     ],
-    # Bare by default, as cycle: the whole-swim milestone is the measurement,
-    # and pool swims often carry no distance stream for splits to come from.
+    # Still bare, unlike cycle: there is no power-window equivalent for
+    # swimming, so the whole-swim milestone is the measurement, and pool swims
+    # often carry no distance stream for splits to come from either.
     ("swim", "baseline"): [
         {
             "key": "warmup_m",
@@ -1225,13 +1225,27 @@ def derive_swim_css(recent: list[dict]) -> tuple[int, str] | None:
 
 
 def derive_ride_watts(recent: list[dict]) -> tuple[int, str] | None:
-    """(watts, why) — FTP proxied from the max avg_power over recent sustained
-    rides, at the conventional 95% of a 20-minute effort.
+    """(watts, why) — FTP, from the best 20-minute power across recent rides
+    where that is available, at the conventional 95% of it.
 
-    Still coarse: only session averages are stored, so the best figure may come
-    from a long steady ride rather than the test, in which case the correction
-    compounds an already-conservative reading. That errs toward slightly-easy
-    targets, which is the trade this project takes everywhere."""
+    Falls back to whole-activity avg_power for rides imported before power
+    windows were extracted, or from a format that carries no per-point power.
+    That fallback is used **unadjusted**: a long ride's average already sits
+    well below threshold, and discounting it again would stack two
+    conservative estimates. The 95% belongs only to a genuine 20-minute
+    effort."""
+    windowed = [
+        (a["best_power"]["20min"], a)
+        for a in recent
+        if a.get("type") == "cycle" and (a.get("best_power") or {}).get("20min")
+    ]
+    if windowed:
+        watts, best = max(windowed, key=lambda pair: pair[0])
+        return (
+            _round_to(watts * FTP_FROM_20MIN, 5),
+            f"95% of your best recent 20min power ({watts}W, {best.get('date')})",
+        )
+
     rides = [
         a
         for a in recent
@@ -1242,11 +1256,10 @@ def derive_ride_watts(recent: list[dict]) -> tuple[int, str] | None:
     if not rides:
         return None
     best = max(rides, key=lambda a: a["avg_power"])
-    watts = _round_to(best["avg_power"] * FTP_FROM_20MIN, 5)
     return (
-        watts,
-        f"95% of the best avg power of recent sustained rides "
-        f"({best['avg_power']}W, {best.get('date')})",
+        _round_to(best["avg_power"], 5),
+        f"best whole-ride average of recent sustained rides "
+        f"({best['avg_power']}W, {best.get('date')}) — no 20min power recorded",
     )
 
 

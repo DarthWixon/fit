@@ -161,3 +161,54 @@ def test_import_strava_csv_maps_and_drops_types(tmp_path):
     assert len(warnings) == 1
     assert "Workout" in warnings[0]
     assert "Kayaking" in warnings[0]
+
+
+# --- power windows -------------------------------------------------------------
+#
+# The FIT fixture carries only distance and timestamp per record, and the repo
+# deliberately ships no FIT-generation tooling, so these exercise the attach
+# logic over a synthetic point stream. The records-to-stream mapping itself was
+# verified against a real power-meter ride: 4,658 samples, best 20min 141W
+# against a stored avg_power of 128W.
+
+
+def _stream(samples, distance=True):
+    return [
+        {
+            "elapsed_seconds": i,
+            "distance_km": (i * 0.005) if distance else None,
+            "hr": 140,
+            "power": w,
+        }
+        for i, w in enumerate(samples)
+    ]
+
+
+def test_attach_best_power_stores_the_curve():
+    activity = importers._attach_best_power({}, _stream([200] * 2000))
+    assert activity["best_power"] == {"1min": 200, "5min": 200, "20min": 200}
+
+
+def test_attach_best_power_omits_the_key_when_there_is_no_power():
+    stream = [{"elapsed_seconds": i, "distance_km": i * 0.005} for i in range(2000)]
+    assert "best_power" not in importers._attach_best_power({}, stream)
+
+
+def test_attach_best_power_keeps_only_the_windows_the_ride_covers():
+    """A ten-minute ride has a 1min and 5min figure but no 20min one."""
+    assert set(
+        importers._attach_best_power({}, _stream([200] * 600))["best_power"]
+    ) == {
+        "1min",
+        "5min",
+    }
+
+
+def test_an_indoor_ride_with_no_distance_still_yields_power():
+    """Points without distance are meaningful to power and HR even though a
+    split cannot use them — an indoor trainer is exactly where an FTP test
+    happens."""
+    stream = _stream([250] * 2000, distance=False)
+    assert importers._attach_best_power({}, stream)["best_power"]["20min"] == 250
+    # ...and the split path drops them rather than raising on a None distance.
+    assert importers._compute_splits("cycle", stream) == {}

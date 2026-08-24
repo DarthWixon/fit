@@ -257,6 +257,12 @@ Key functions:
   [3, 5, 12]}, ...]`. `weeks` comes from stdlib `calendar.monthcalendar`
   (Monday-first rows, 0 = padding cell); grid layout lives here so
   `display.render_calendar` stays computation-free. Powers `fit calendar`
+- `best_power_window(points: list[dict], window_seconds: int) -> int | None` —
+  highest average power sustained over any window of that length in one
+  activity's point stream; the time-axis counterpart to `fastest_split`'s
+  distance axis, maximising a mean rather than minimising a duration. Integrates
+  over elapsed time rather than per sample, because FIT records are not reliably
+  one per second. See "Power windows"
 - `fastest_split(points: list[dict], target_distance_km: float) -> dict | None` — best
   continuous segment of a given distance within one activity's (elapsed_seconds,
   distance_km) point stream; see "Split PBs" below
@@ -307,6 +313,9 @@ Key functions:
 Key constants:
 - `MILESTONES_KM` / `MILESTONE_TOLERANCE` — "dedicated effort" distances per type
   (a whole activity within `[D, D*MILESTONE_TOLERANCE]` counts as a "D-distance effort")
+- `POWER_WINDOWS_S` — durations-of-interest for the power-duration curve
+  (`[(60, "1min"), (300, "5min"), (1200, "20min")]`), the time-axis sibling of
+  `SPLIT_DISTANCES_KM`
 - `SPLIT_DISTANCES_KM` — distances-of-interest per type for best-split extraction
 - `MET_TABLE` — coarse per-type MET values, banded by pace/speed for most types
   (`cycle` and `canoe` band by km/h, matching their `SPEED_TYPES` display), or
@@ -729,6 +738,7 @@ decisions) or a private helper (which would just relocate the same branches).
     "avg_heart_rate": 152,             # optional
     "max_heart_rate": 171,             # optional
     "avg_power": 187,                  # optional, watts; TCX (lap AvgWatts) / FIT (session avg_power) only
+    "best_power": {"1min": 304, "5min": 227, "20min": 141},  # optional, FIT only, see "Power windows"
     "source": "garmin",                # "garmin" | "strava"
     "splits": {"5k_seconds": 1423, "10k_seconds": 2950},  # optional, see "Split PBs"
     "hr_zones": {"zone1_seconds": 120.0, "zone2_seconds": 340.5, "zone3_seconds": 890.0,
@@ -818,6 +828,38 @@ list only affects activities imported afterwards. Recomputing it for existing
 history means re-importing from wherever the originals still live — a Garmin
 export, the watch, Strava. This is the cost of not keeping originals, and it is
 the same going-forward-only rule `hr_zones` follows.
+
+---
+
+## Power windows
+
+`best_power` stores the highest average power sustained over each of
+`compute.POWER_WINDOWS_S` — 1, 5 and 20 minutes — computed once at import from
+the same transient point stream splits and HR zones use, then discarded with it.
+Same going-forward-only rule: an activity imported before this existed simply
+has no `best_power`, and there is no backfill.
+
+**Why it exists.** Stored `avg_power` is a whole-activity mean, so a 20-minute
+effort inside a longer ride is invisible in it — on a real ride, a 141W best
+20-minute window sat behind a 128W activity average, and an FTP test's warmup
+and cooldown drag the mean down much harder than that. `planner.derive_ride_watts`
+reads `best_power["20min"]` as its FTP proxy, at the conventional 95%, and only
+falls back to `avg_power` (**unadjusted** — a long ride's average is already
+sub-threshold, so discounting it again would stack two conservative estimates)
+when no window was recorded.
+
+1min and 5min come free from the same sweep and are what a rider actually reads
+a ride by; only the 20min figure has a consumer today.
+
+**FIT only.** TCX would need a namespace-tolerant `Watts` extractor plus a
+change to how its stream handles position-less trackpoints, for a format
+nothing in practice feeds — `garmin-sync` pulls FIT and Strava supplies CSV.
+
+**Points without distance are kept.** The FIT record loop used to require a
+`distance` field, which would have dropped every record of an indoor trainer
+ride — exactly where an FTP test happens. It now keeps a record carrying either
+distance or power, `distance_km` is `None` when absent, and `_compute_splits`
+filters those out since only it needs distance.
 
 ---
 
@@ -1502,21 +1544,21 @@ defines a re-test per sport, and each one's *shape* follows a single rule:
   5k window containing it necessarily dragged in 2km of warmup, and that branch
   takes precedence over the fallback. The old 3km test made the estimate worse
   than not testing.
-- **cycle: a bare 20-minute test, no warmup or cooldown steps.** Stored
-  `avg_power` is a whole-activity mean with no split analogue (FIT session
-  field; TCX an unweighted mean of lap `AvgWatts`), so a 20+20+10 session read
-  roughly 40% easy riding into the FTP estimate and the test's own output was
-  unrecoverable.
+- **cycle: a normal 20-minute test with warmup and cooldown.** It was briefly
+  bare, because stored `avg_power` is a whole-activity mean and the wrapping
+  diluted it — `compute.best_power_window` now recovers the 20-minute effort
+  from wherever it sits in the recording, so the constraint is gone. See
+  "Power windows".
 - **swim: a bare 1km test.** A whole swim of 1.000–1.060km lands in the existing
   `fastest_1k` milestone, which `derive_swim_css` already reads — so this needed
   no `compute.py` change at all. Milestones are computed from `distance_km` and
   `duration_seconds` on every read, which matters because pool swims frequently
   carry no cumulative-distance stream for `splits` to be derived from.
 
-A bare test instructs no warmup, and nothing in the payload can carry that
-instruction — `build_plan` hard-codes `description`. So `planner._bare_suffix`
-puts it in the **workout name** ("Cycle baseline 20min test (warm up first)"),
-which is what the athlete actually reads on the watch.
+Only the swim test is bare now, and a bare test instructs no warmup with nothing
+in the payload able to carry that — `build_plan` hard-codes `description`. So
+`planner._bare_suffix` puts it in the **workout name** ("Swim baseline 1km test
+(warm up first)"), which is what the athlete actually reads on the watch.
 
 **`fit plan --type baseline` produces the same test.** The interactive prompt
 defaults in `_PARAM_SPECS` mirror `BENCHMARK_SESSIONS` exactly, so planning a

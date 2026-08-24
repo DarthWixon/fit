@@ -150,10 +150,15 @@ def _haversine_km(lat1, lon1, lat2, lon2) -> float:
 def _compute_splits(activity_type: str, points: list[dict]) -> dict:
     """Best-effort split times from a transient (elapsed_seconds, distance_km)
     point stream. Returns {} if none of the type's configured distances were
-    reached. Pure — the caller decides whether/how to attach the result."""
+    reached. Pure — the caller decides whether/how to attach the result.
+
+    Points without a distance are dropped first: an indoor ride can carry power
+    and heart rate with no distance at all, and those points are meaningful to
+    the other consumers even though a split cannot use them."""
+    located = [p for p in points if p.get("distance_km") is not None]
     splits = {}
     for target_km, label in compute.SPLIT_DISTANCES_KM.get(activity_type, []):
-        result = compute.fastest_split(points, target_km)
+        result = compute.fastest_split(located, target_km)
         if result is not None:
             splits[f"{label}_seconds"] = result["duration_seconds"]
     return splits
@@ -185,6 +190,23 @@ def _attach_splits(activity: dict, points: list[dict]) -> dict:
     splits = _compute_splits(activity["type"], points)
     if splits:
         activity["splits"] = splits
+    return activity
+
+
+def _attach_best_power(activity: dict, points: list[dict]) -> dict:
+    """Attach the best-power-per-duration curve from the transient point
+    stream; the key is omitted entirely (never an empty dict) when the format
+    carries no per-point power or the ride is shorter than every window.
+
+    Stored because it cannot be recovered later: the point stream is discarded
+    at import, exactly like splits and hr_zones."""
+    best = {}
+    for window_seconds, label in compute.POWER_WINDOWS_S:
+        watts = compute.best_power_window(points, window_seconds)
+        if watts is not None:
+            best[label] = watts
+    if best:
+        activity["best_power"] = best
     return activity
 
 
@@ -449,17 +471,27 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
         record_fields = {field.name: field.value for field in record}
         record_distance_m = record_fields.get("distance")
         record_timestamp = record_fields.get("timestamp")
-        if record_distance_m is None or record_timestamp is None:
+        record_power = record_fields.get("power")
+        # Distance is no longer required: an indoor ride may report power and
+        # heart rate with none at all, and dropping those records would lose
+        # the FTP signal entirely. _compute_splits filters for what it needs.
+        if record_timestamp is None or (
+            record_distance_m is None and record_power is None
+        ):
             continue
         points.append(
             {
                 "elapsed_seconds": (record_timestamp - start_time).total_seconds(),
-                "distance_km": record_distance_m / 1000,
+                "distance_km": (
+                    None if record_distance_m is None else record_distance_m / 1000
+                ),
                 "hr": record_fields.get("heart_rate"),
+                "power": record_power,
             }
         )
 
     activity = _attach_splits(activity, points)
+    activity = _attach_best_power(activity, points)
     return _attach_hr_zones(activity, points, max_heart_rate)
 
 

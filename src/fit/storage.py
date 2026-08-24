@@ -11,6 +11,7 @@ Activity dicts have the shape:
         "avg_heart_rate": 152,             # optional
         "max_heart_rate": 171,             # optional
         "avg_power": 187,                  # optional, watts; TCX/FIT only
+        "best_power": {"20min": 241, ...}, # optional, watts; FIT only, see "Power windows"
         "hr_zones": {"zone1_seconds": 120.0, ...},  # optional, see "HR zones"
         "splits": {"5k_seconds": 1423, ...},  # optional, see "Split PBs"
         "source": "garmin",                # "garmin" | "strava"

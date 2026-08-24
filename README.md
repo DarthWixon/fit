@@ -180,15 +180,15 @@ and they stay put — the sessions get longer, not faster. A plan that assumed y
 would improve on schedule would start prescribing work you cannot finish.
 
 Instead every plan schedules **re-tests** on its recovery weeks, when you are
-rested: a 5km best effort for running, a bare 20-minute FTP test for cycling, a
-bare 1km time trial for swimming, taking turns between whichever the goal trains.
-Each one replaces that week's quality session rather than adding to it.
+rested: a 5km best effort for running, a 20-minute FTP test for cycling, a 1km
+time trial for swimming, taking turns between whichever the goal trains. Each
+one replaces that week's quality session rather than adding to it.
 
-The cycle and swim tests are deliberately bare — no warmup or cooldown in the
-workout — because for those sports the recorded activity has to *be* the test:
-average power and pool-swim pace are whole-activity figures with nothing to
-isolate an effort from within them. Warm up first, then start recording. (The
-run test keeps its warmup: fit finds the fastest 5km anywhere in the track.)
+Run and cycle tests are normal workouts — warm up, test, cool down, all in one
+recording — because fit finds the effort inside it: the fastest 5km anywhere in
+the track, and the best 20 minutes of power anywhere in the ride. The swim test
+is bare, and its name says "warm up first", because there is no equivalent way
+to isolate a swim effort from the rest of a session.
 
 ```
 Re-test weeks: 4, 8, 12 — do the test, sync it back, then re-import to

@@ -307,9 +307,10 @@ def test_cycle_watts_from_recent_rides():
         },  # no power: ignored
     ]
     recs = planner.recommend_defaults("cycle", "intervals", activities, [], REFERENCE)
-    # 187W is treated as a 20-minute effort, so FTP is 95% of it: 177.65,
-    # rounded to the nearest 5.
-    assert recs["target_watts"]["default"] == 180
+    # No best_power on these rides, so the whole-ride average stands
+    # unadjusted — 187 to the nearest 5. The 95% correction belongs to a real
+    # 20-minute effort, not to a ride average that is already sub-threshold.
+    assert recs["target_watts"]["default"] == 185
 
 
 def test_rep_progression_from_previous_plans():
@@ -487,7 +488,24 @@ def test_derive_target_passes_a_believable_measurement_through():
     assert planner.derive_target("run", run)["value"] == 1500
 
 
-def test_ftp_applies_the_twenty_minute_correction():
+def test_ftp_applies_the_twenty_minute_correction_to_a_real_window():
+    """95% is the convention for a 20-minute best effort, so it applies to
+    best_power's 20min figure and not to a whole-ride average."""
+    windowed = [
+        {
+            "type": "cycle",
+            "date": "2026-08-01",
+            "avg_power": 150,
+            "duration_seconds": 4000,
+            "best_power": {"20min": 200},
+        }
+    ]
+    watts, why = planner.derive_ride_watts(windowed)
+    assert watts == 190  # 200 * 0.95
+    assert "20min power" in why
+
+
+def test_a_ride_average_is_used_unadjusted_when_no_window_exists():
     ride = [
         {
             "type": "cycle",
@@ -496,7 +514,32 @@ def test_ftp_applies_the_twenty_minute_correction():
             "duration_seconds": 1200,
         }
     ]
-    assert planner.derive_ride_watts(ride)[0] == 190  # 200 * 0.95
+    watts, why = planner.derive_ride_watts(ride)
+    assert watts == 200
+    assert "no 20min power recorded" in why
+
+
+def test_a_recorded_window_beats_a_higher_ride_average():
+    """A 20-minute effort is the better measurement even when another ride
+    posted a higher whole-ride average."""
+    activities = [
+        {
+            "type": "cycle",
+            "date": "2026-08-01",
+            "avg_power": 260,
+            "duration_seconds": 4000,
+        },
+        {
+            "type": "cycle",
+            "date": "2026-08-05",
+            "avg_power": 150,
+            "duration_seconds": 4000,
+            "best_power": {"20min": 200},
+        },
+    ]
+    watts, why = planner.derive_ride_watts(activities)
+    assert watts == 190
+    assert "20min power" in why
 
 
 @pytest.mark.parametrize("seconds,counts", [(1139, False), (1140, True), (1199, True)])
