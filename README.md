@@ -65,6 +65,12 @@ Supported `--sport` / `--type` combinations:
 - **run** — `intervals`, `tempo`, `hills`, `baseline` (a best-effort benchmark
   test to re-measure your pace), `easy`, `long`
 - **swim** — `intervals`, `continuous`, `baseline` (a 1km time trial)
+
+The three `baseline` types are the benchmark tests, and you can plan one on its
+own — `fit plan --sport swim --type baseline` — as well as letting a training
+block schedule them. Either way you get the same test, and the cycle and swim
+ones default to no warmup in the workout itself: warm up first, then start
+recording, because those measurements span the whole activity.
 - **cycle** — `intervals`, `hills`, `baseline` (an FTP-test shape), `endurance`,
   `long`
 

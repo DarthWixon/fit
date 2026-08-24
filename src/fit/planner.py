@@ -191,6 +191,15 @@ def _positive_int(text: str) -> int:
     return value
 
 
+def _optional_int(text: str) -> int:
+    """Blank -> 0, meaning "omit this step entirely" rather than emit a
+    zero-length one (see _baseline_steps). Used for a baseline's warmup and
+    cooldown, which have to be absent for the sports whose measurement spans
+    the whole recording."""
+    text = str(text).strip()
+    return _positive_int(text) if text else 0
+
+
 def _optional_pace(text: str) -> int | None:
     return parse_pace(text) if str(text).strip() else None
 
@@ -314,24 +323,28 @@ _PARAM_SPECS = {
             "parse": _positive_int,
         },
     ],
+    # Keeps its warmup and cooldown: compute.fastest_split isolates the fastest
+    # 5k window from whatever surrounds it. 5000 because 3km appears in neither
+    # SPLIT_DISTANCES_KM nor MILESTONES_KM, so a 3km effort is measurable
+    # nowhere — see training.BENCHMARK_SESSIONS.
     ("run", "baseline"): [
         {
             "key": "warmup_minutes",
             "label": "Warmup (minutes)",
             "default": 10,
-            "parse": _positive_int,
+            "parse": _optional_int,
         },
         {
             "key": "test_distance_m",
             "label": "Test distance (m)",
-            "default": 3000,
+            "default": 5000,
             "parse": _positive_int,
         },
         {
             "key": "cooldown_minutes",
             "label": "Cooldown (minutes)",
             "default": 10,
-            "parse": _positive_int,
+            "parse": _optional_int,
         },
     ],
     ("swim", "intervals"): [
@@ -442,12 +455,16 @@ _PARAM_SPECS = {
             "parse": _positive_int,
         },
     ],
+    # Bare by default: stored avg_power is the whole-activity mean, so a warmup
+    # inside the same recording makes the test unreadable. Warm up first, then
+    # start recording — the workout name says so. Type a number to wrap it
+    # anyway.
     ("cycle", "baseline"): [
         {
             "key": "warmup_minutes",
-            "label": "Warmup (minutes)",
-            "default": 20,
-            "parse": _positive_int,
+            "label": "Warmup (minutes, blank for none)",
+            "default": "",
+            "parse": _optional_int,
         },
         {
             "key": "test_minutes",
@@ -457,9 +474,9 @@ _PARAM_SPECS = {
         },
         {
             "key": "cooldown_minutes",
-            "label": "Cooldown (minutes)",
-            "default": 10,
-            "parse": _positive_int,
+            "label": "Cooldown (minutes, blank for none)",
+            "default": "",
+            "parse": _optional_int,
         },
     ],
     ("run", "easy"): [
@@ -518,12 +535,14 @@ _PARAM_SPECS = {
             "parse": _positive_int,
         },
     ],
+    # Bare by default, as cycle: the whole-swim milestone is the measurement,
+    # and pool swims often carry no distance stream for splits to come from.
     ("swim", "baseline"): [
         {
             "key": "warmup_m",
-            "label": "Warmup distance (m)",
-            "default": 200,
-            "parse": _positive_int,
+            "label": "Warmup distance (m, blank for none)",
+            "default": "",
+            "parse": _optional_int,
         },
         {
             "key": "test_distance_m",
@@ -533,9 +552,9 @@ _PARAM_SPECS = {
         },
         {
             "key": "cooldown_m",
-            "label": "Cooldown distance (m)",
-            "default": 100,
-            "parse": _positive_int,
+            "label": "Cooldown distance (m, blank for none)",
+            "default": "",
+            "parse": _optional_int,
         },
     ],
     ("swim", "continuous"): [

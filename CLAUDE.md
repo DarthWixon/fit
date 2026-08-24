@@ -1518,6 +1518,14 @@ instruction — `build_plan` hard-codes `description`. So `planner._bare_suffix`
 puts it in the **workout name** ("Cycle baseline 20min test (warm up first)"),
 which is what the athlete actually reads on the watch.
 
+**`fit plan --type baseline` produces the same test.** The interactive prompt
+defaults in `_PARAM_SPECS` mirror `BENCHMARK_SESSIONS` exactly, so planning a
+baseline by hand gives a measurable test too — cycle and swim default to a blank
+warmup/cooldown (`_optional_int`, blank → 0 → the step is omitted), and run keeps
+its 10-minute wrap. The two drifted once already, when the plan's run benchmark
+moved 3km → 5km and the prompt default stayed at 3km; `test_planning_a_baseline_
+by_hand_gives_the_same_test_the_plan_schedules` now holds them together.
+
 `expand_plan` then places them:
 
 - **On recovery weeks only**, never in the taper — you test rested, which is
