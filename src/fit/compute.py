@@ -15,6 +15,7 @@ MILESTONES_KM = {
     "walk": [(5.0, "5k"), (10.0, "10k")],
     "hike": [],
     "swim": [(0.5, "500m"), (1.0, "1k"), (1.5, "1.5k"), (2.0, "2k")],
+    "canoe": [(5.0, "5k"), (10.0, "10k")],
 }
 
 # An activity within [D, D*MILESTONE_TOLERANCE] counts as a "D-distance effort".
@@ -39,6 +40,7 @@ SPLIT_DISTANCES_KM = {
         (160.0, "160k"),
     ],
     "swim": [(0.5, "500m"), (1.0, "1k"), (1.5, "1.5k"), (2.0, "2k")],
+    "canoe": [(1.0, "1k"), (5.0, "5k")],
 }
 
 # Coarse, Compendium-of-Physical-Activities-style approximate MET values for
@@ -46,9 +48,9 @@ SPLIT_DISTANCES_KM = {
 # specific citation, just directionally consistent with commonly-published
 # MET-vs-speed tables. run/walk: banded by pace in seconds/km, ascending
 # threshold (smaller = faster, matched first). swim: banded by seconds/100m,
-# same shape. cycle: banded by speed in km/h, descending threshold (larger =
-# faster, matched first) to match calc_pace's existing km/h convention for
-# cycle. hike and squash are single flat values, not banded by pace/speed —
+# same shape. cycle and canoe: banded by speed in km/h, descending threshold
+# (larger = faster, matched first) to match calc_pace's km/h convention for the
+# SPEED_TYPES. hike and squash are single flat values, not banded by pace/speed —
 # hike because trail pace is a poor intensity signal given terrain/elevation
 # variance; squash because it has no meaningful distance/pace at all (an
 # indoor court sport with no GPS track — see NO_DISTANCE_TYPES below). Any
@@ -62,6 +64,7 @@ MET_TABLE = {
     "walk": [(560, 5.4), (650, 4.3), (float("inf"), 3.3)],
     "swim": [(105, 10.0), (135, 8.3), (float("inf"), 5.8)],
     "cycle": [(32, 14.0), (23, 9.0), (16, 6.8), (0, 4.0)],
+    "canoe": [(11.0, 12.5), (7.0, 5.8), (0, 2.8)],
     "hike": 6.0,
     "squash": 12.0,
 }
@@ -76,6 +79,7 @@ _MET_FALLBACK_ZERO_DISTANCE = {
     "walk": 4.3,
     "swim": 8.3,
     "cycle": 6.8,
+    "canoe": 5.8,
     "hike": 6.0,
 }
 _MET_DEFAULT_UNKNOWN_TYPE = 6.0
@@ -99,8 +103,9 @@ NO_DISTANCE_TYPES = {"squash"}
 
 # Activity types shown as speed (km/h) rather than pace (min/km). Cycling effort
 # is conventionally read as speed; hiking is slow and gradient-driven, so a
-# min/km pace reads awkwardly where km/h is the natural sense of progress.
-SPEED_TYPES = {"cycle", "hike"}
+# min/km pace reads awkwardly where km/h is the natural sense of progress; canoe
+# (paddling) likewise reads more naturally as km/h than a min/km pace.
+SPEED_TYPES = {"cycle", "hike", "canoe"}
 
 # Fraction-of-max-heart-rate lower bounds for the 5 standard HR training zones
 # (Z1 50-60%, Z2 60-70%, Z3 70-80%, Z4 80-90%, Z5 90-100%+ of max_heart_rate).
@@ -642,9 +647,9 @@ def met_for_activity(activity: dict) -> float:
     if not distance_km or not duration_seconds:
         return _MET_FALLBACK_ZERO_DISTANCE[activity_type]
 
-    if activity_type == "cycle":
+    if activity_type in ("cycle", "canoe"):
         return _met_from_speed_bands(
-            _speed_kmh(distance_km, duration_seconds), MET_TABLE["cycle"]
+            _speed_kmh(distance_km, duration_seconds), MET_TABLE[activity_type]
         )
     if activity_type == "swim":
         return _met_from_pace_bands(

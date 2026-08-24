@@ -31,6 +31,10 @@ GPX_TYPE_MAP = {
     "hike": "hike",
     "swimming": "swim",
     "swim": "swim",
+    "canoeing": "canoe",
+    "canoe": "canoe",
+    "kayaking": "canoe",
+    "paddling": "canoe",
 }
 
 # Per the Garmin TCX schema, Sport is only ever Running/Biking/Other — there's no
@@ -48,6 +52,12 @@ FIT_SPORT_MAP = {
     "walking": "walk",
     "hiking": "hike",
     "swimming": "swim",
+    # No canoe-specific FIT sport exists; paddling activities decode (when they
+    # decode to a string at all) as one of these. Folded to "canoe" because this
+    # is a canoe-only setup -- revisit if kayaking is later split out.
+    "paddling": "canoe",
+    "kayaking": "canoe",
+    "canoeing": "canoe",
 }
 
 # Some FIT sport enum codes aren't decoded to a string name by fitparse==1.2.0's
@@ -57,8 +67,13 @@ FIT_SPORT_MAP = {
 # checks this table when the sport field isn't a string. Any int not listed here
 # (now, or from a future firmware/profile version) falls through to the same
 # "run" default an unrecognized string sport already gets -- see import_fit.
+# There is no canoe-specific FIT sport code: Garmin records paddling as 19
+# (paddling) or 41 (kayaking), both folded to "canoe" here since this is a
+# canoe-only setup (revisit the 41 mapping if kayaking is later split out).
 FIT_SPORT_CODE_MAP = {
     64: "squash",
+    19: "canoe",
+    41: "canoe",
 }
 
 # Deliberately no "squash" entry: no Strava CSV/bulk-export fixture exists to
@@ -75,6 +90,10 @@ STRAVA_TYPE_MAP = {
     "walk": "walk",
     "hike": "hike",
     "swim": "swim",
+    # Strava's "Canoeing" type (lowercased by _parse_strava_row). Kayaking,
+    # Rowing and Stand Up Paddling are deliberately left unmapped -- they
+    # drop-with-warning, matching this setup's canoe-only scope.
+    "canoeing": "canoe",
 }
 
 DISTANCE_COLUMNS = ["Distance"]

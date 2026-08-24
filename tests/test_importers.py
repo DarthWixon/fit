@@ -116,6 +116,8 @@ STRAVA_CSV_FIXTURE = (
     "Activity Date,Activity Type,Distance,Elapsed Time,Filename\n"
     '"Jan 15, 2024, 8:30:00 AM",Run,10200,3120,\n'
     '"Jan 16, 2024, 7:00:00 AM",Workout,0,1800,\n'
+    '"Jan 17, 2024, 9:00:00 AM",Canoeing,8400,3600,\n'
+    '"Jan 18, 2024, 9:00:00 AM",Kayaking,5000,2400,\n'
 )
 
 
@@ -212,7 +214,7 @@ def test_import_strava_csv_maps_and_drops_types(tmp_path):
     path.write_text(STRAVA_CSV_FIXTURE)
     activities, warnings = importers.import_strava_csv(str(path))
 
-    assert len(activities) == 1  # Workout row dropped
+    assert len(activities) == 2  # Workout and Kayaking rows dropped
     assert activities[0] == {
         "id": "2024-01-15T08:30:00",
         "type": "run",
@@ -221,7 +223,11 @@ def test_import_strava_csv_maps_and_drops_types(tmp_path):
         "duration_seconds": 3120,
         "source": "strava",
     }
+    # Canoeing maps to canoe; Kayaking deliberately does not (canoe-only scope).
+    assert activities[1]["type"] == "canoe"
+    assert activities[1]["distance_km"] == pytest.approx(8.4)
 
-    # The dropped Workout row is reported, not silent.
+    # The dropped Workout and Kayaking rows are reported, not silent.
     assert len(warnings) == 1
     assert "Workout" in warnings[0]
+    assert "Kayaking" in warnings[0]

@@ -21,6 +21,10 @@ def test_calc_pace_cycle_speed():
     assert compute.calc_pace(30.0, 3600, "cycle") == "30.0km/h"
 
 
+def test_calc_pace_canoe_speed():
+    assert compute.calc_pace(8.4, 3600, "canoe") == "8.4km/h"
+
+
 def test_calc_pace_no_distance_type_and_zero_distance():
     assert compute.calc_pace(0.07, 3600, "squash") == "—"
     assert compute.calc_pace(0, 3000, "run") == "—"
@@ -305,3 +309,19 @@ def test_activity_load_hr_multiplier_clamped():
     cold = dict(activity, avg_heart_rate=50)
     assert compute.activity_load(hot, {"run": 100}) == pytest.approx(base * 1.25)
     assert compute.activity_load(cold, {"run": 100}) == pytest.approx(base * 0.8)
+
+
+def test_met_for_activity_canoe_speed_banded():
+    def canoe(distance_km, duration_seconds):
+        return compute.met_for_activity(
+            {
+                "type": "canoe",
+                "distance_km": distance_km,
+                "duration_seconds": duration_seconds,
+            }
+        )
+
+    assert canoe(12.0, 3600) == 12.5  # racing, >= 11 km/h
+    assert canoe(9.0, 3600) == 5.8  # moderate, >= 7 km/h
+    assert canoe(5.0, 3600) == 2.8  # recreational
+    assert canoe(0, 3600) == 5.8  # no distance -> moderate fallback

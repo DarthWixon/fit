@@ -3,7 +3,7 @@
 Activity dicts have the shape:
     {
         "id": "2024-01-15T08:30:00",      # ISO 8601, used as filename key
-        "type": "run",                     # "run" | "cycle" | "walk" | "hike" | "swim" | "squash"
+        "type": "run",                     # "run" | "cycle" | "walk" | "hike" | "swim" | "squash" | "canoe"
         "date": "2024-01-15",
         "distance_km": 10.2,
         "duration_seconds": 3120,

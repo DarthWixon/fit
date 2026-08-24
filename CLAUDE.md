@@ -180,10 +180,10 @@ Pure functions. Takes lists of dicts, returns derived data. Never reads files.
 
 Key functions:
 - `calc_pace(distance_km: float, duration_seconds: int, activity_type: str = "") -> str` —
-  per-km except `"swim"` (per 100m) and the `SPEED_TYPES` set — `"cycle"` and
-  `"hike"` — (speed in km/h, e.g. `"24.3km/h"`, since bike effort is
-  conventionally read as speed rather than pace, and hiking pace reads more
-  naturally as km/h). Always
+  per-km except `"swim"` (per 100m) and the `SPEED_TYPES` set — `"cycle"`,
+  `"hike"`, and `"canoe"` — (speed in km/h, e.g. `"24.3km/h"`, since bike effort
+  is conventionally read as speed rather than pace, and hiking/paddling pace both
+  read more naturally as km/h). Always
   returns `"—"` for any type in `NO_DISTANCE_TYPES` (currently `"squash"`),
   regardless of `distance_km` — its nonzero distance is never a real pace signal
 - `weekly_volumes(activities: list[dict], through: date | None = None) -> list[dict]` —
@@ -284,9 +284,12 @@ Key constants:
 - `MILESTONES_KM` / `MILESTONE_TOLERANCE` — "dedicated effort" distances per type
   (a whole activity within `[D, D*MILESTONE_TOLERANCE]` counts as a "D-distance effort")
 - `SPLIT_DISTANCES_KM` — distances-of-interest per type for best-split extraction
-- `MET_TABLE` — coarse per-type MET values, banded by pace/speed for most types, or
+- `MET_TABLE` — coarse per-type MET values, banded by pace/speed for most types
+  (`cycle` and `canoe` band by km/h, matching their `SPEED_TYPES` display), or
   a single flat value for types with no meaningful pace/speed signal (`hike`,
   `squash`); see "Fitness index"
+- `SPEED_TYPES` — types shown/banded by km/h speed rather than min/km pace
+  (`cycle`, `hike`, `canoe`); `calc_pace` and `met_for_activity` both branch on it
 - `NO_DISTANCE_TYPES` — activity types (currently just `squash`) whose
   `distance_km` is present but never meaningful (e.g. accelerometer noise from
   an indoor court sport with no GPS track); `calc_pace` and `_candidate_pbs`
@@ -465,11 +468,20 @@ Not fixed as part of adding swim support — a separate, independent concern.
 name — e.g. it jumps straight from 48 (`floor_climbing`) to 254 (`all`), so
 codes Garmin added in between (64 = squash) come back from the FIT session
 message as a raw, undecoded int rather than a string. `import_fit` checks
-`FIT_SPORT_CODE_MAP` for these raw ints (currently just `{64: "squash"}`),
-falling back to `"run"` for any other undecoded code — the same default an
-unrecognized *string* sport already gets via `FIT_SPORT_MAP`. Extend
+`FIT_SPORT_CODE_MAP` for these raw ints (`{64: "squash", 19: "canoe",
+41: "canoe"}`), falling back to `"run"` for any other undecoded code — the same
+default an unrecognized *string* sport already gets via `FIT_SPORT_MAP`. Extend
 `FIT_SPORT_CODE_MAP` if a future fixture surfaces another undecoded code
 worth naming.
+
+**Canoe mapping assumption**: there is no canoe-specific FIT `sport` — Garmin
+records paddling as `19` (paddling) or `41` (kayaking). Both are folded to
+`"canoe"` (in `FIT_SPORT_CODE_MAP`/`FIT_SPORT_MAP`), and Strava's `"Canoeing"`
+maps to `"canoe"` too, because this is a canoe-only setup; Strava
+Kayaking/Rowing/SUP are left to drop-with-warning. Revisit the `41 → canoe`
+mapping if kayaking is ever split into its own type. TCX can't represent canoe
+at all (Running/Biking/Other only), so canoe TCX imports hit the `"run"`
+default noted above.
 
 ### `planner.py`
 Pure functions building Garmin Connect workout-service payloads as plain dicts.
@@ -574,7 +586,7 @@ decisions) or a private helper (which would just relocate the same branches).
 ```python
 {
     "id": "2024-01-15T08:30:00",      # ISO 8601, used as filename key
-    "type": "run",                     # "run" | "cycle" | "walk" | "hike" | "swim" | "squash"
+    "type": "run",                     # "run" | "cycle" | "walk" | "hike" | "swim" | "squash" | "canoe"
     "date": "2024-01-15",
     "distance_km": 10.2,
     "duration_seconds": 3120,
