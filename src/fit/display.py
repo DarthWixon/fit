@@ -33,9 +33,13 @@ def render_usage() -> None:
         "fit stats [--week|--month|--year]           totals + breakdown by type\n"
         "fit fitness                                 current fitness index + trend\n"
         "fit fitness-reset                           re-anchor fitness baseline to today\n"
-        "fit import <path>                           GPX/TCX/FIT or Strava export\n"
+        "fit import <path>                           TCX/FIT file or Strava export\n"
         "fit garmin-sync [--days N]                  pull recent Garmin activities\n"
         "fit plan --sport S --type T [--no-push]     build a workout, push to Garmin\n"
+        "fit train import <plan.yaml>                expand a goal into a full plan\n"
+        "fit train show [--weeks N]                  the plan, with what's done\n"
+        "fit train sync [--days N] [--dry-run]       schedule the next sessions\n"
+        "fit train clear                             unschedule future sessions\n"
         "fit history [N]                             last N activities (default 10)\n"
         "fit calendar                                active days, last 2 months\n"
         "fit usage                                   this screen\n"
@@ -490,4 +494,205 @@ def render_plan_scheduled(plan: dict) -> None:
     console.print(
         f"Scheduled for {plan.get('scheduled_date')} — it will appear on that "
         "date in the Garmin Connect calendar on the watch's next sync"
+    )
+
+
+# --- training plans (fit train) -------------------------------------------
+
+_TARGET_LABELS = {
+    "run_5k_seconds": ("Run 5k", "time"),
+    "swim_css_100m": ("Swim CSS", "pace"),
+    "bike_ftp": ("Bike FTP", "watts"),
+}
+
+
+def _format_target_value(key: str, value) -> str:
+    """One target in its own units: '22:30', '1:45/100m', '245W'."""
+    _, kind = _TARGET_LABELS[key]
+    if kind == "time":
+        return _format_seconds_colon(value)
+    if kind == "pace":
+        return f"{_format_seconds_colon(value)}/100m"
+    return f"{value}W"
+
+
+def _format_targets(targets: dict) -> str:
+    """'Run 5k 22:30 · Swim CSS 1:45/100m · Bike FTP 245W' from
+    training.derive_targets' dict."""
+    return " · ".join(
+        f"{label} {_format_target_value(key, targets[key])}"
+        for key, (label, _) in _TARGET_LABELS.items()
+        if targets.get(key) is not None
+    )
+
+
+def render_training_plan(summary: dict, weeks: list[dict]) -> None:
+    """summary: training.plan_summary's dict. weeks: training.group_by_week's
+    output, its sessions already run through training.match_completion. All
+    the grouping and counting happens there — this only prints."""
+    console.print(f"[bold]{summary['label']}[/bold] — {summary['description']}")
+
+    days = summary["days_to_go"]
+    when = (
+        f"in {days} days" if days > 0 else "today" if days == 0 else f"{-days} days ago"
+    )
+    console.print(
+        f"Event {summary['event_date']} ({when}) · "
+        f"{summary['weeks']} weeks from {summary['start_date']}"
+    )
+    console.print(
+        f"{summary['completed']}/{summary['sessions'] - summary['extras']} sessions "
+        f"done · {summary['scheduled']} scheduled on Garmin · "
+        f"{summary['extras']} extras (tracked locally)"
+    )
+    targets = _format_targets(summary.get("targets", {}))
+    if targets:
+        console.print(f"[dim]Targets: {targets}[/dim]")
+    volume = summary.get("volume") or {}
+    if volume.get("why"):
+        scale = round(volume.get("start_scale", 1) * 100)
+        console.print(f"[dim]Starting volume: {scale}% — {volume['why']}[/dim]")
+    # Not `weeks` — that is the parameter holding the grouped session weeks the
+    # table below iterates, and shadowing it here made this function raise on
+    # every plan that schedules a re-test.
+    benchmark_weeks = summary.get("benchmark_weeks") or []
+    if benchmark_weeks:
+        console.print(
+            f"[dim]Re-test weeks: {', '.join(str(w) for w in benchmark_weeks)} — "
+            "do the test, sync it back, then `fit train retarget` to rebuild "
+            "the rest at your new fitness.[/dim]"
+        )
+    for warning in summary.get("warnings", []):
+        console.print(f"[yellow]note:[/yellow] {warning}")
+
+    table = Table(title="Training Plan")
+    table.add_column("Week")
+    table.add_column("Date")
+    table.add_column("Session")
+    table.add_column("Garmin")
+    table.add_column("Done", justify="center")
+
+    for week in weeks:
+        table.add_section()
+        for index, session in enumerate(week["sessions"]):
+            when_label = "" if index else f"{week['week']} [dim]{week['phase']}[/dim]"
+            day = date.fromisoformat(session["date"])
+            name = _format_session_name(session)
+            table.add_row(
+                when_label,
+                f"{day.strftime('%a')} {session['date'][5:]}",
+                name,
+                _format_session_garmin(session),
+                _format_session_done(session),
+            )
+    console.print(table)
+
+
+def _format_session_name(session: dict) -> str:
+    text = session.get("description", session.get("workout_name", ""))
+    return f"[dim]{text}[/dim]" if session.get("is_extra") else text
+
+
+def _format_session_garmin(session: dict) -> str:
+    if session.get("is_extra"):
+        return "[dim]—[/dim]"
+    if session.get("status") == "scheduled":
+        return "[green]scheduled[/green]"
+    return "[dim]planned[/dim]"
+
+
+def _format_session_done(session: dict) -> str:
+    if session.get("is_extra"):
+        return "[dim]—[/dim]"
+    return "[green]✓[/green]" if session.get("completed") else "[dim]·[/dim]"
+
+
+def render_training_sync_preview(sessions: list[dict]) -> None:
+    """What `fit train sync` is about to push, printed before it asks to go
+    ahead. Each line is one workout that will be created on Garmin Connect and
+    placed on the calendar."""
+    console.print(
+        f"[bold]About to push {len(sessions)} workout(s) to Garmin Connect[/bold] "
+        f"({sessions[0]['date']} to {sessions[-1]['date']}):"
+    )
+    for session in sessions:
+        console.print(f"  {session['date']}  {session.get('workout_name', '')}")
+
+
+def render_training_synced(summary: dict) -> None:
+    """summary: {"scheduled": n, "already": n, "window_days": n, "failed": [...]}."""
+    console.print(
+        f"Scheduled {summary['scheduled']} session(s) on the Garmin calendar "
+        f"for the next {summary['window_days']} days "
+        f"({summary['already']} already scheduled)"
+    )
+    for failure in summary.get("failed", []):
+        console.print(f"warning: {failure}")
+    if summary["scheduled"]:
+        console.print(
+            "[dim]They will appear in the Garmin Connect calendar on the "
+            "watch's next sync.[/dim]"
+        )
+
+
+def render_training_retargeted(summary: dict, dry_run: bool = False) -> None:
+    """summary: training.retarget_sessions' dict. Follows render_fitness_reset's
+    old -> new shape. One line per target that actually moved, never one per
+    session: intensity is a pure function of the target, so eighty session
+    lines would carry nothing the two target lines do not."""
+    old, new = summary["old_targets"], summary["new_targets"]
+    moved = [
+        key
+        for key, _ in _TARGET_LABELS.items()
+        if new.get(key) is not None and old.get(key) != new.get(key)
+    ]
+
+    if not moved:
+        console.print(
+            "Targets unchanged — nothing to rewrite. "
+            "[dim]Your latest history derives the same numbers the plan already has.[/dim]"
+        )
+        return
+
+    verb = "Would retarget" if dry_run else "Retargeted"
+    console.print(
+        f"{verb} {summary['retargeted']} future session(s) · "
+        f"{summary['unchanged']} already on target · "
+        f"{summary['frozen']} left scheduled on Garmin · {summary['past']} in the past"
+    )
+    for key in moved:
+        label = _TARGET_LABELS[key][0]
+        was = (
+            _format_target_value(key, old[key])
+            if old.get(key) is not None
+            else "not set"
+        )
+        console.print(
+            f"  [bold]{label}[/bold] {was} → {_format_target_value(key, new[key])}"
+        )
+        why = (new.get("why") or {}).get(key)
+        if why:
+            console.print(f"    [dim]{why}[/dim]")
+
+    if summary["frozen"]:
+        console.print(
+            f"[dim]note: {summary['frozen']} session(s) already on your Garmin "
+            "calendar keep their old targets — a pushed workout can't be edited. "
+            "Run `fit train clear` first if you want those rewritten too.[/dim]"
+        )
+    if dry_run:
+        console.print("[dim](dry run — nothing written)[/dim]")
+
+
+def render_training_cleared(summary: dict) -> None:
+    console.print(
+        f"Unscheduled {summary['cleared']} future session(s) from the Garmin calendar"
+    )
+    for failure in summary.get("failed", []):
+        console.print(f"warning: {failure}")
+
+
+def render_training_missing() -> None:
+    console.print(
+        "No active training plan. Create one with:\n" "  fit train import <plan.yaml>"
     )

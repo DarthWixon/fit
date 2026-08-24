@@ -1,0 +1,47 @@
+# Example plan description for `fit train import` — the contract between an AI
+# assistant and fit. Only `goal` and `event_date` are required; everything else
+# falls back to the goal template's own defaults.
+#
+#   fit train import examples/training-plan.yaml
+
+goal: sprint_triathlon        # see `fit train import` errors for the available goals
+event_date: 2026-11-15        # the plan counts back from here
+
+# start_date: 2026-08-24      # optional; sets the plan's length (4 weeks minimum).
+                              # Default = event_date - the template's own length.
+                              # The weekly ramp is solved from whatever you pick,
+                              # so a longer block climbs more gently to the same peak.
+days_per_week: 6              # optional; sessions are trimmed lowest-priority first.
+                              # Use a range - [2, 4] - to build frequency across
+                              # the plan instead of holding it fixed.
+rest_day: Mon                 # optional; rotates the whole week
+
+# Tracked in fit only, never pushed to the watch — Garmin has no calendar-note
+# endpoint. Placed automatically on the easiest days of each week.
+extras:
+  strength: 2
+  yoga: 1
+
+# Optional. Without these, every target is derived from your last six months of
+# activities (and `fit train show` tells you where each one came from).
+# targets:
+#   run_5k: "24:00"
+#   bike_ftp: 250
+#   swim_css_100m: "1:45"
+
+# Optional. Percent of the template's opening week. Without it, fit measures your
+# average weekly training in this goal's sports over the last 8 weeks and sizes
+# the opening week to match, converging back to the template by the last build
+# week. `fit train show` reports what it measured.
+# volume: 70
+
+# Optional. Re-tests land on recovery weeks (a 5km run effort, a bare 20min FTP
+# test, a bare 1km swim) so `fit train retarget` can rebuild the remaining weeks
+# at your new fitness. Default true.
+# benchmarks: false
+
+# Optional overrides of the template's periodisation.
+# progression:
+#   build_recover: [3, 1]     # three build weeks, then one recovery week
+#   weekly_ramp_pct: 8        # pin the ramp; omit to solve it from the plan's length
+#   taper_weeks: 2            # weeks of shedding volume into the event

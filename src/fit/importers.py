@@ -1,7 +1,7 @@
-"""Parses external activity formats (GPX, TCX, FIT, Strava exports) into the
+"""Parses external activity formats (TCX, FIT, Strava exports) into the
 standard activity dict shape (see storage.py's module docstring).
 
-Uses stdlib xml.etree.ElementTree for GPX/TCX (no lxml). FIT is a binary format
+Uses stdlib xml.etree.ElementTree for TCX (no lxml). FIT is a binary format
 parsed via the fitparse library.
 """
 
@@ -16,26 +16,6 @@ from datetime import datetime
 from pathlib import Path
 
 from fit import compute
-
-GPXTPX_NS = "http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
-
-GPX_TYPE_MAP = {
-    "running": "run",
-    "run": "run",
-    "cycling": "cycle",
-    "biking": "cycle",
-    "ride": "cycle",
-    "walking": "walk",
-    "walk": "walk",
-    "hiking": "hike",
-    "hike": "hike",
-    "swimming": "swim",
-    "swim": "swim",
-    "canoeing": "canoe",
-    "canoe": "canoe",
-    "kayaking": "canoe",
-    "paddling": "canoe",
-}
 
 # Per the Garmin TCX schema, Sport is only ever Running/Biking/Other — there's no
 # native Swimming value. Anything outside Running/Biking (walk, hike, swim) falls
@@ -104,13 +84,13 @@ FILENAME_COLUMNS = ["Filename"]
 
 
 # --- namespace-tolerant XML helpers ------------------------------------------------
-# GPX/TCX are namespaced XML, so ElementTree tags come back as "{uri}localname".
+# TCX is namespaced XML, so ElementTree tags come back as "{uri}localname".
 # Some exporters (older Garmin, some phone apps) emit no namespace at all, so
 # every lookup tries the namespaced tag first and falls back to the bare tag.
 
 
 def _parse_xml_root(path: str):
-    """Root element of a GPX/TCX file, tolerating leading whitespace before
+    """Root element of a TCX file, tolerating leading whitespace before
     the <?xml?> declaration. Strava's exported TCX files are padded with
     spaces, which ElementTree otherwise rejects ('XML or text declaration not
     at start of entity'). Reading raw bytes and lstrip-ing keeps the file's
@@ -167,30 +147,18 @@ def _haversine_km(lat1, lon1, lat2, lon2) -> float:
     return 2 * earth_radius_km * math.asin(math.sqrt(a))
 
 
-def _gpx_heart_rate(trkpt, ns_uri):
-    extensions = _find(trkpt, "extensions", ns_uri)
-    if extensions is None:
-        return None
-    tpx = None
-    for child in extensions:
-        if child.tag.endswith("TrackPointExtension"):
-            tpx = child
-            break
-    if tpx is None:
-        return None
-    for child in tpx:
-        if child.tag.endswith("hr"):
-            return int(child.text)
-    return None
-
-
 def _compute_splits(activity_type: str, points: list[dict]) -> dict:
     """Best-effort split times from a transient (elapsed_seconds, distance_km)
     point stream. Returns {} if none of the type's configured distances were
-    reached. Pure — the caller decides whether/how to attach the result."""
+    reached. Pure — the caller decides whether/how to attach the result.
+
+    Points without a distance are dropped first: an indoor ride can carry power
+    and heart rate with no distance at all, and those points are meaningful to
+    the other consumers even though a split cannot use them."""
+    located = [p for p in points if p.get("distance_km") is not None]
     splits = {}
     for target_km, label in compute.SPLIT_DISTANCES_KM.get(activity_type, []):
-        result = compute.fastest_split(points, target_km)
+        result = compute.fastest_split(located, target_km)
         if result is not None:
             splits[f"{label}_seconds"] = result["duration_seconds"]
     return splits
@@ -225,6 +193,23 @@ def _attach_splits(activity: dict, points: list[dict]) -> dict:
     return activity
 
 
+def _attach_best_power(activity: dict, points: list[dict]) -> dict:
+    """Attach the best-power-per-duration curve from the transient point
+    stream; the key is omitted entirely (never an empty dict) when the format
+    carries no per-point power or the ride is shorter than every window.
+
+    Stored because it cannot be recovered later: the point stream is discarded
+    at import, exactly like splits and hr_zones."""
+    best = {}
+    for window_seconds, label in compute.POWER_WINDOWS_S:
+        watts = compute.best_power_window(points, window_seconds)
+        if watts is not None:
+            best[label] = watts
+    if best:
+        activity["best_power"] = best
+    return activity
+
+
 def _attach_hr_zones(activity: dict, points: list[dict], max_heart_rate: int) -> dict:
     """Attach HR zone-seconds from the transient point stream; the key is
     omitted entirely (never an empty dict) when zones can't be computed (no
@@ -233,151 +218,6 @@ def _attach_hr_zones(activity: dict, points: list[dict], max_heart_rate: int) ->
     if hr_zones:
         activity["hr_zones"] = hr_zones
     return activity
-
-
-# --- GPX ----------------------------------------------------------------------------
-
-
-def _gpx_raw_points(trkpts, ns_uri) -> list[dict]:
-    """One dict per trkpt: {"lat", "lon", "ele" (float | None), "time"
-    (datetime | None), "hr" (int | None)} — a single XML pass that every other
-    _gpx_* helper below then derives its metric from."""
-    raw_points = []
-    for trkpt in trkpts:
-        ele_elem = _find(trkpt, "ele", ns_uri)
-        time_elem = _find(trkpt, "time", ns_uri)
-        raw_points.append(
-            {
-                "lat": float(trkpt.get("lat")),
-                "lon": float(trkpt.get("lon")),
-                "ele": float(ele_elem.text) if ele_elem is not None else None,
-                "time": (
-                    _parse_iso_time(time_elem.text) if time_elem is not None else None
-                ),
-                "hr": _gpx_heart_rate(trkpt, ns_uri),
-            }
-        )
-    return raw_points
-
-
-def _gpx_total_distance_km(raw_points: list[dict]) -> float:
-    total = 0.0
-    prev_point = None
-    for point in raw_points:
-        if prev_point is not None:
-            total += _haversine_km(
-                prev_point[0], prev_point[1], point["lat"], point["lon"]
-            )
-        prev_point = (point["lat"], point["lon"])
-    return total
-
-
-def _gpx_elevation_gain_m(raw_points: list[dict]) -> float:
-    gain = 0.0
-    prev_ele = None
-    for point in raw_points:
-        if point["ele"] is not None:
-            if prev_ele is not None and point["ele"] > prev_ele:
-                gain += point["ele"] - prev_ele
-            prev_ele = point["ele"]
-    return gain
-
-
-def _gpx_heart_rate_stats(raw_points: list[dict]) -> tuple[int | None, int | None]:
-    heart_rates = [point["hr"] for point in raw_points if point["hr"] is not None]
-    if not heart_rates:
-        return None, None
-    return round(sum(heart_rates) / len(heart_rates)), max(heart_rates)
-
-
-def _gpx_point_stream(raw_points: list[dict], start_time) -> list[dict]:
-    """Cumulative distance stream, gated on time presence: distance accumulates
-    over every point (matching _gpx_total_distance_km's accumulation exactly),
-    but a stream entry is only recorded for points that carry a <time>."""
-    points = []
-    distance_km = 0.0
-    prev_point = None
-    for point in raw_points:
-        if prev_point is not None:
-            distance_km += _haversine_km(
-                prev_point[0], prev_point[1], point["lat"], point["lon"]
-            )
-        prev_point = (point["lat"], point["lon"])
-        if point["time"] is not None:
-            points.append(
-                {
-                    "elapsed_seconds": (point["time"] - start_time).total_seconds(),
-                    "distance_km": distance_km,
-                    "hr": point["hr"],
-                }
-            )
-    return points
-
-
-def _gpx_last_time(raw_points: list[dict], start_time):
-    last_time = start_time
-    for point in raw_points:
-        if point["time"] is not None:
-            last_time = point["time"]
-    return last_time
-
-
-def _gpx_activity_type(trk, ns_uri) -> str:
-    type_elem = _find(trk, "type", ns_uri) if trk is not None else None
-    if type_elem is None:
-        return "run"
-    return GPX_TYPE_MAP.get((type_elem.text or "").lower(), "run")
-
-
-def import_gpx(path: str, max_heart_rate: int = 0) -> dict:
-    root = _parse_xml_root(path)
-    ns_uri = _namespace(root.tag)
-
-    trk = _find(root, "trk", ns_uri)
-    trkpts = []
-    if trk is not None:
-        for trkseg in _findall(trk, "trkseg", ns_uri):
-            trkpts.extend(_findall(trkseg, "trkpt", ns_uri))
-
-    start_time_elem = _find_path(root, "metadata/time", ns_uri)
-    if start_time_elem is not None:
-        start_time = _parse_iso_time(start_time_elem.text)
-    elif trkpts:
-        first_time_elem = _find(trkpts[0], "time", ns_uri)
-        start_time = _parse_iso_time(first_time_elem.text)
-    else:
-        raise ValueError(f"no start time found in {path}")
-
-    raw_points = _gpx_raw_points(trkpts, ns_uri)
-    distance_km = _gpx_total_distance_km(raw_points)
-    elevation_gain_m = _gpx_elevation_gain_m(raw_points)
-    avg_hr, max_hr = _gpx_heart_rate_stats(raw_points)
-    points = _gpx_point_stream(raw_points, start_time)
-    last_time = _gpx_last_time(raw_points, start_time)
-
-    activity = _base_activity(
-        start_time,
-        _gpx_activity_type(trk, ns_uri),
-        distance_km,
-        (last_time - start_time).total_seconds(),
-        "gpx",
-    )
-    if elevation_gain_m:
-        activity["elevation_gain_m"] = round(elevation_gain_m)
-    if avg_hr is not None:
-        activity["avg_heart_rate"] = avg_hr
-        activity["max_heart_rate"] = max_hr
-    activity = _attach_splits(activity, points)
-    return _attach_hr_zones(activity, points, max_heart_rate)
-
-
-# --- TCX ------------------------------------------------------------------------------
-# Same shape as GPX above: start_time is resolved first (<Id>, else the first
-# lap's StartTime attribute), then each metric gets its own single-purpose pass
-# over the laps. In the pathological case of a TCX with no <Id> whose first lap
-# also lacks StartTime, trackpoints before the StartTime-carrying lap get a
-# negative elapsed offset in the point stream — harmless, since fastest_split
-# only ever uses elapsed-time differences.
 
 
 def _tcx_start_time(activity_elem, laps, ns_uri):
@@ -414,7 +254,7 @@ def _tcx_lap_power(lap, ns_uri) -> float | None:
     <Extensions><LX><AvgWatts> block. That block lives in a different XML
     namespace than the rest of the TCX doc, so (unlike _tcx_lap_totals/
     _tcx_lap_heart_rate, which use ns_uri-scoped _find_path) it's matched by
-    tag suffix, the same trick _gpx_heart_rate uses for GPX extensions."""
+    tag suffix, matching how the TrackPointExtension namespace nests them."""
     extensions = _find(lap, "Extensions", ns_uri)
     if extensions is None:
         return None
@@ -451,7 +291,7 @@ def _tcx_trackpoint_position(trackpoint, ns_uri):
     Trackpoint-level DistanceMeters varies by exporter (sometimes cumulative from
     activity start, sometimes reset per lap) with no reliable way to tell which —
     so the split stream is always derived from GPS position via haversine
-    instead, exactly like GPX, carried across laps rather than reset per lap."""
+    instead carried across laps rather than reset per lap."""
     position_elem = _find(trackpoint, "Position", ns_uri)
     time_elem = _find(trackpoint, "Time", ns_uri)
     if position_elem is None or time_elem is None:
@@ -631,17 +471,27 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
         record_fields = {field.name: field.value for field in record}
         record_distance_m = record_fields.get("distance")
         record_timestamp = record_fields.get("timestamp")
-        if record_distance_m is None or record_timestamp is None:
+        record_power = record_fields.get("power")
+        # Distance is no longer required: an indoor ride may report power and
+        # heart rate with none at all, and dropping those records would lose
+        # the FTP signal entirely. _compute_splits filters for what it needs.
+        if record_timestamp is None or (
+            record_distance_m is None and record_power is None
+        ):
             continue
         points.append(
             {
                 "elapsed_seconds": (record_timestamp - start_time).total_seconds(),
-                "distance_km": record_distance_m / 1000,
+                "distance_km": (
+                    None if record_distance_m is None else record_distance_m / 1000
+                ),
                 "hr": record_fields.get("heart_rate"),
+                "power": record_power,
             }
         )
 
     activity = _attach_splits(activity, points)
+    activity = _attach_best_power(activity, points)
     return _attach_hr_zones(activity, points, max_heart_rate)
 
 
@@ -717,8 +567,6 @@ def import_strava_csv(path: str) -> tuple[list[dict], list[str]]:
 
 
 def import_by_extension(path: str, suffix: str, max_heart_rate: int = 0) -> dict:
-    if suffix == ".gpx":
-        return import_gpx(path, max_heart_rate)
     if suffix == ".tcx":
         return import_tcx(path, max_heart_rate)
     if suffix == ".fit":
@@ -741,20 +589,15 @@ def _import_strava_linked_file(file_path: Path, max_heart_rate: int = 0) -> dict
 
 
 def import_directory(dir_path: str, max_heart_rate: int = 0) -> list[dict]:
-    """A loose folder of .gpx/.tcx/.fit files - e.g. a Garmin watch's mounted
+    """A loose folder of .tcx/.fit files - e.g. a Garmin watch's mounted
     GARMIN/ACTIVITY folder - NOT a Strava bulk export (see import_strava_export
-    for that; cli.py tells the two apart by checking for activities.csv).
-    Each returned dict carries a transient "_source_path" key (the absolute
-    path of the file it came from) that only cli.py reads, to decide what to
-    copy into gpx/ - never persisted to the activity JSON."""
+    for that; cli.py tells the two apart by checking for activities.csv)."""
     activities = []
     for file_path in sorted(Path(dir_path).iterdir()):
         suffix = file_path.suffix.lower()
-        if suffix not in (".gpx", ".tcx", ".fit"):
+        if suffix not in (".tcx", ".fit"):
             continue
-        activity = import_by_extension(str(file_path), suffix, max_heart_rate)
-        activity["_source_path"] = str(file_path)
-        activities.append(activity)
+        activities.append(import_by_extension(str(file_path), suffix, max_heart_rate))
     return activities
 
 

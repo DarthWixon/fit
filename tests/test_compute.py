@@ -325,3 +325,51 @@ def test_met_for_activity_canoe_speed_banded():
     assert canoe(9.0, 3600) == 5.8  # moderate, >= 7 km/h
     assert canoe(5.0, 3600) == 2.8  # recreational
     assert canoe(0, 3600) == 5.8  # no distance -> moderate fallback
+
+
+# --- best power windows --------------------------------------------------------
+
+
+def _power_stream(samples, step=1):
+    """[(seconds, watts)] as a point stream, one sample every `step` seconds."""
+    return [
+        {"elapsed_seconds": i * step, "power": w, "distance_km": i * step * 0.005}
+        for i, w in enumerate(samples)
+    ]
+
+
+def test_best_power_window_finds_the_effort_inside_a_longer_ride():
+    """The whole point: a 20-minute effort buried in an easy ride is invisible
+    in avg_power and has to be recovered by window."""
+    ride = _power_stream([100] * 600 + [250] * 1200 + [100] * 600)
+    assert compute.best_power_window(ride, 1200) == 250
+    # ...while the whole-ride mean is nowhere near it.
+    mean = sum(p["power"] for p in ride) / len(ride)
+    assert 160 < mean < 180
+
+
+def test_best_power_window_returns_none_when_the_ride_is_too_short():
+    assert compute.best_power_window(_power_stream([200] * 300), 1200) is None
+
+
+def test_best_power_window_needs_power_data():
+    no_power = [{"elapsed_seconds": i, "distance_km": i * 0.005} for i in range(2000)]
+    assert compute.best_power_window(no_power, 60) is None
+    assert compute.best_power_window([], 60) is None
+
+
+def test_best_power_window_integrates_over_time_not_samples():
+    """FIT records are not reliably one per second. A sparse stretch must not
+    weigh as heavily as a dense one, so the window integrates elapsed time."""
+    dense = _power_stream([300] * 61, step=1)  # 60s at 300W, sampled every 1s
+    sparse = _power_stream([300] * 7, step=10)  # 60s at 300W, sampled every 10s
+    assert compute.best_power_window(dense, 60) == compute.best_power_window(sparse, 60)
+
+
+def test_shorter_windows_are_never_lower_than_longer_ones():
+    ride = _power_stream([120] * 300 + [400] * 60 + [120] * 300 + [220] * 1200)
+    one = compute.best_power_window(ride, 60)
+    five = compute.best_power_window(ride, 300)
+    twenty = compute.best_power_window(ride, 1200)
+    assert one >= five >= twenty
+    assert one == 400  # the one-minute spike

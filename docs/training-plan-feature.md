@@ -1,6 +1,16 @@
 # Long-term training plans (`fit train`) — implementation plan + reference
 
-> **Status:** APPROVED DESIGN, NOT YET IMPLEMENTED. This document is the durable,
+> **Status:** IMPLEMENTED 2026-08-24 — all eight goal templates. This document
+> is kept as the *design* record and reconnaissance appendix; for what the code
+> actually does now, read CLAUDE.md's "Training plans" section. Three places the
+> build knowingly departed from this plan, each documented there: session sizing
+> uses the weekly multiplier alone rather than multiplier + a separate per-week
+> growth increment (which compounds into nonsense over 12+ weeks); template
+> session priorities interleave the sports so trimming a week never drops a whole
+> discipline; and `fit train sync` confirms before pushing (added after an
+> accidental 14-workout push during development).
+>
+> Original status line: APPROVED DESIGN, NOT YET IMPLEMENTED. This document is the durable,
 > in-repo record of the `fit train` feature design (moved here from a planning-session
 > scratch file so a future session can find it). It is self-contained: full design
 > decisions AND a reconnaissance appendix (exact `file:line` anchors, signatures, data

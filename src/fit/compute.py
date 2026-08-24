@@ -27,9 +27,15 @@ MILESTONE_TOLERANCE = 1.06
 # Distances-of-interest for "best split" extraction: the fastest continuous
 # segment of this length found anywhere within an activity's track, regardless
 # of the activity's total distance (e.g. the fastest 5k inside a 10k run).
-# Only activities imported from GPX/TCX/FIT carry the per-point stream needed
+# Only activities imported from TCX/FIT carry the per-point stream needed
 # to compute this (see importers.py) — CSV-only activities never contribute
 # here.
+# Durations of interest for the power-duration curve, the time-axis sibling of
+# SPLIT_DISTANCES_KM. 20min is the one with a consumer (planner.derive_ride_watts
+# reads it as the FTP proxy); 1 and 5 minutes come free from the same sweep and
+# are what a rider actually reads a ride by.
+POWER_WINDOWS_S = [(60, "1min"), (300, "5min"), (1200, "20min")]
+
 SPLIT_DISTANCES_KM = {
     "run": [(5.0, "5k"), (10.0, "10k")],
     "cycle": [
@@ -228,8 +234,9 @@ def _iso_week_key(date_iso: str) -> str:
     return f"{year}-W{week:02d}"
 
 
-def _week_start(date_iso: str) -> date:
-    """Monday of the ISO week containing date_iso."""
+def week_start(date_iso: str) -> date:
+    """Monday of the ISO week containing date_iso. Public because training.py
+    lays a plan's weekly cadence out from it (week N = week_start + N weeks)."""
     day = date.fromisoformat(date_iso)
     return day - timedelta(days=day.weekday())
 
@@ -271,10 +278,10 @@ def weekly_volumes(activities: list[dict], through: date | None = None) -> list[
     if not dates:
         return []
 
-    monday = _week_start(min(dates))
-    last_monday = _week_start(max(dates))
+    monday = week_start(min(dates))
+    last_monday = week_start(max(dates))
     if through is not None:
-        last_monday = max(last_monday, _week_start(through.isoformat()))
+        last_monday = max(last_monday, week_start(through.isoformat()))
 
     series = []
     while monday <= last_monday:
@@ -358,6 +365,55 @@ def _crossing_time(points: list[dict], j: int, needed_distance: float) -> float:
         return t_after
     frac = (needed_distance - d_before) / (d_after - d_before)
     return t_before + frac * (t_after - t_before)
+
+
+def best_power_window(points: list[dict], window_seconds: int) -> int | None:
+    """Highest average power sustained over any `window_seconds` window within
+    one activity's point stream, or None if the ride never covers that long
+    with power data. points: [{"elapsed_seconds": float, "power": int|None}, ...].
+
+    The time-axis counterpart to fastest_split's distance axis: same O(n)
+    two-pointer sweep, maximising a mean rather than minimising a duration.
+    Power is integrated over real elapsed time rather than averaged per sample,
+    because FIT records are not reliably one per second — a stretch of sparse
+    samples must not count as heavily as a dense one.
+
+    This is what makes an FTP test readable. The stored avg_power is a
+    whole-activity mean, so a 20-minute effort inside a longer ride is
+    invisible in it; the best 20-minute window recovers it wherever it sits."""
+    stream = [
+        p
+        for p in _dedupe_by_time(points)
+        if p.get("power") is not None and p.get("elapsed_seconds") is not None
+    ]
+    if len(stream) < 2:
+        return None
+    if stream[-1]["elapsed_seconds"] - stream[0]["elapsed_seconds"] < window_seconds:
+        return None
+
+    best = None
+    area = 0.0
+    start = 0
+    for end in range(1, len(stream)):
+        # Each sample's power is held until the next one.
+        area += stream[end - 1]["power"] * (
+            stream[end]["elapsed_seconds"] - stream[end - 1]["elapsed_seconds"]
+        )
+        while (
+            stream[end]["elapsed_seconds"] - stream[start]["elapsed_seconds"]
+            > window_seconds
+        ):
+            area -= stream[start]["power"] * (
+                stream[start + 1]["elapsed_seconds"] - stream[start]["elapsed_seconds"]
+            )
+            start += 1
+        span = stream[end]["elapsed_seconds"] - stream[start]["elapsed_seconds"]
+        # A gap in recording can leave the window short even at the far end;
+        # only score it once it genuinely spans the requested time.
+        if span >= window_seconds:
+            average = area / span
+            best = average if best is None else max(best, average)
+    return round(best) if best is not None else None
 
 
 def fastest_split(points: list[dict], target_distance_km: float) -> dict | None:
@@ -662,7 +718,7 @@ def met_for_activity(activity: dict) -> float:
 
 def median_hr_by_type(activities: list[dict]) -> dict[str, float]:
     """Median avg_heart_rate across all HR-tagged activities, grouped by type.
-    Only activities with avg_heart_rate present contribute (GPX/TCX/FIT
+    Only activities with avg_heart_rate present contribute (TCX/FIT
     imports only — bare Strava CSV rows never set this
     field). Inclusive of whichever activity is later being scored against it:
     for the very first HR-tagged activity of a type, its own median (of a
