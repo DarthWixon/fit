@@ -97,6 +97,11 @@ _EWMA_WINDOW_DAYS = 42  # Coggan's CTL/"Fitness" smoothing window
 # with the same characteristic.
 NO_DISTANCE_TYPES = {"squash"}
 
+# Activity types shown as speed (km/h) rather than pace (min/km). Cycling effort
+# is conventionally read as speed; hiking is slow and gradient-driven, so a
+# min/km pace reads awkwardly where km/h is the natural sense of progress.
+SPEED_TYPES = {"cycle", "hike"}
+
 # Fraction-of-max-heart-rate lower bounds for the 5 standard HR training zones
 # (Z1 50-60%, Z2 60-70%, Z3 70-80%, Z4 80-90%, Z5 90-100%+ of max_heart_rate).
 # A ratio below the first boundary still counts as zone 1 (no "zone 0" bucket).
@@ -125,7 +130,7 @@ def calc_pace(
             round(_seconds_per_100m(distance_km, duration_seconds)), 60
         )
         return f"{minutes}:{seconds:02d}/100m"
-    if activity_type == "cycle":
+    if activity_type in SPEED_TYPES:
         if not duration_seconds:
             return "—"
         return f"{_speed_kmh(distance_km, duration_seconds):.1f}km/h"
@@ -434,7 +439,9 @@ def hr_zone_seconds(points: list[dict], max_heart_rate: int) -> dict:
 
     if sum(totals) == 0:
         return {}
-    return {f"zone{i + 1}_seconds": round(seconds, 1) for i, seconds in enumerate(totals)}
+    return {
+        f"zone{i + 1}_seconds": round(seconds, 1) for i, seconds in enumerate(totals)
+    }
 
 
 def hr_zone_percentages(hr_zones: dict | None) -> dict | None:
@@ -447,7 +454,10 @@ def hr_zone_percentages(hr_zones: dict | None) -> dict | None:
     total = sum(hr_zones.get(f"zone{i}_seconds", 0) for i in range(1, 6))
     if total <= 0:
         return None
-    return {f"zone{i}": 100 * hr_zones.get(f"zone{i}_seconds", 0) / total for i in range(1, 6)}
+    return {
+        f"zone{i}": 100 * hr_zones.get(f"zone{i}_seconds", 0) / total
+        for i in range(1, 6)
+    }
 
 
 def _longest_distance_pb(activities: list[dict]) -> dict:
@@ -469,7 +479,9 @@ def _milestone_pbs(activities: list[dict], activity_type: str) -> dict:
             for a in activities
             if a.get("distance_km") is not None
             and a.get("duration_seconds") is not None
-            and milestone_km <= a.get("distance_km") <= milestone_km * MILESTONE_TOLERANCE
+            and milestone_km
+            <= a.get("distance_km")
+            <= milestone_km * MILESTONE_TOLERANCE
         ]
         if matching:
             fastest = min(matching, key=lambda a: a.get("duration_seconds"))

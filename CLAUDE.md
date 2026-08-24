@@ -179,8 +179,10 @@ Pure functions. Takes lists of dicts, returns derived data. Never reads files.
 
 Key functions:
 - `calc_pace(distance_km: float, duration_seconds: int, activity_type: str = "") -> str` —
-  per-km except `"swim"` (per 100m) and `"cycle"` (speed in km/h, e.g. `"24.3km/h"`,
-  since bike effort is conventionally read as speed rather than pace). Always
+  per-km except `"swim"` (per 100m) and the `SPEED_TYPES` set — `"cycle"` and
+  `"hike"` — (speed in km/h, e.g. `"24.3km/h"`, since bike effort is
+  conventionally read as speed rather than pace, and hiking pace reads more
+  naturally as km/h). Always
   returns `"—"` for any type in `NO_DISTANCE_TYPES` (currently `"squash"`),
   regardless of `distance_km` — its nonzero distance is never a real pace signal
 - `weekly_volumes(activities: list[dict], through: date | None = None) -> list[dict]` —
