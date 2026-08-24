@@ -261,26 +261,17 @@ def stats(week: bool = False, month: bool = False, year: bool = False) -> None:
     display.render_stats(activities, today)
 
 
-def _import_and_report(
-    new_activities: list[dict], save_original: bool, fallback_source: str | None = None
-) -> None:
-    """Shared tail of every import path: dedupe, write, save the original
-    file into gpx/, print new-PB messages, recompute the PB cache, and print
-    the imported/skipped summary. Each activity's transient "_source_path"
-    key (set by importers.import_directory / garmin_sync) is popped here even
-    for skipped duplicates so it is never persisted; single-file imports pass
-    fallback_source instead."""
+def _import_and_report(new_activities: list[dict]) -> None:
+    """Shared tail of every import path: dedupe, write, print new-PB messages,
+    recompute the PB cache, and print the imported/skipped summary."""
     pbs_before_import = storage.read_pbs()
 
     imported, skipped = 0, 0
     for activity in new_activities:
-        source_path = activity.pop("_source_path", None) or fallback_source
         if storage.activity_exists(activity["id"]):
             skipped += 1
             continue
         storage.write_activity(activity)
-        if save_original:
-            storage.save_gpx_file(source_path, activity["id"])
         imported += 1
         display.render_new_pb_messages(
             compute.detect_new_pbs(activity, pbs_before_import)
@@ -304,25 +295,22 @@ def import_activity(path: str) -> None:
             new_activities, import_warnings = importers.import_strava_export(
                 str(source), max_hr
             )
-            save_original = False
         else:
             new_activities = importers.import_directory(str(source), max_hr)
-            save_original = True
     else:
         suffix = source.suffix.lower()
         if suffix == ".csv":
             new_activities, import_warnings = importers.import_strava_csv(str(source))
-        elif suffix in (".gpx", ".tcx", ".fit"):
+        elif suffix in (".tcx", ".fit"):
             new_activities = [
                 importers.import_by_extension(str(source), suffix, max_hr)
             ]
         else:
             typer.echo(f"Unsupported file type: {suffix}", err=True)
             raise typer.Exit(code=1)
-        save_original = suffix in (".gpx", ".tcx", ".fit")
 
     display.render_warnings(import_warnings)
-    _import_and_report(new_activities, save_original, fallback_source=str(source))
+    _import_and_report(new_activities)
 
 
 @app.command()
@@ -360,11 +348,9 @@ def garmin_sync(
             with tempfile.NamedTemporaryFile(suffix=".fit", delete=False) as tmp:
                 tmp.write(fit_bytes)
                 tmp_paths.append(tmp.name)
-            activity = importers.import_fit(tmp_paths[-1], max_hr)
-            activity["_source_path"] = tmp_paths[-1]
-            new_activities.append(activity)
+            new_activities.append(importers.import_fit(tmp_paths[-1], max_hr))
 
-        _import_and_report(new_activities, save_original=True)
+        _import_and_report(new_activities)
     finally:
         for tmp_path in tmp_paths:
             Path(tmp_path).unlink(missing_ok=True)

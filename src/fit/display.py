@@ -33,7 +33,7 @@ def render_usage() -> None:
         "fit stats [--week|--month|--year]           totals + breakdown by type\n"
         "fit fitness                                 current fitness index + trend\n"
         "fit fitness-reset                           re-anchor fitness baseline to today\n"
-        "fit import <path>                           GPX/TCX/FIT or Strava export\n"
+        "fit import <path>                           TCX/FIT file or Strava export\n"
         "fit garmin-sync [--days N]                  pull recent Garmin activities\n"
         "fit plan --sport S --type T [--no-push]     build a workout, push to Garmin\n"
         "fit train import <plan.yaml>                expand a goal into a full plan\n"

@@ -1,6 +1,6 @@
 """Characterization tests for the importers.
 
-GPX/TCX use small inline fixture strings; FIT uses the synthetic capture in
+TCX uses a small inline fixture string; FIT uses the synthetic capture in
 tests/data/test_run.fit (a constant-pace fake run — like everything under
 examples/, generated data, not a real recording). Latitude steps of 0.009
 degrees are ~1.0008km apart by haversine, which keeps expected distances easy
@@ -12,41 +12,6 @@ from pathlib import Path
 import pytest
 
 from fit import importers
-
-GPX_FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
-<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1" creator="test">
-  <metadata><time>2024-01-15T08:30:00Z</time></metadata>
-  <trk>
-    <type>running</type>
-    <trkseg>
-      <trkpt lat="0.000" lon="0.0">
-        <ele>10</ele><time>2024-01-15T08:30:00Z</time>
-        <extensions>
-          <gpxtpx:TrackPointExtension xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1">
-            <gpxtpx:hr>140</gpxtpx:hr>
-          </gpxtpx:TrackPointExtension>
-        </extensions>
-      </trkpt>
-      <trkpt lat="0.009" lon="0.0">
-        <ele>20</ele><time>2024-01-15T08:35:00Z</time>
-        <extensions>
-          <gpxtpx:TrackPointExtension xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1">
-            <gpxtpx:hr>150</gpxtpx:hr>
-          </gpxtpx:TrackPointExtension>
-        </extensions>
-      </trkpt>
-      <trkpt lat="0.018" lon="0.0">
-        <ele>15</ele><time>2024-01-15T08:40:00Z</time>
-        <extensions>
-          <gpxtpx:TrackPointExtension xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1">
-            <gpxtpx:hr>160</gpxtpx:hr>
-          </gpxtpx:TrackPointExtension>
-        </extensions>
-      </trkpt>
-    </trkseg>
-  </trk>
-</gpx>
-"""
 
 # Leading whitespace before the declaration is deliberate: Strava pads its TCX
 # exports this way and _parse_xml_root must tolerate it. Lap 2 starts at a
@@ -119,41 +84,6 @@ STRAVA_CSV_FIXTURE = (
     '"Jan 17, 2024, 9:00:00 AM",Canoeing,8400,3600,\n'
     '"Jan 18, 2024, 9:00:00 AM",Kayaking,5000,2400,\n'
 )
-
-
-def test_import_gpx(tmp_path):
-    path = tmp_path / "run.gpx"
-    path.write_text(GPX_FIXTURE)
-    activity = importers.import_gpx(str(path))
-
-    assert activity["id"] == "2024-01-15T08:30:00"
-    assert activity["type"] == "run"
-    assert activity["date"] == "2024-01-15"
-    assert activity["distance_km"] == pytest.approx(2.0, abs=0.01)
-    assert activity["duration_seconds"] == 600
-    assert activity["elevation_gain_m"] == 10  # 10->20 up, 20->15 down
-    assert activity["avg_heart_rate"] == 150
-    assert activity["max_heart_rate"] == 160
-    assert activity["source"] == "gpx"
-    assert "splits" not in activity  # 2km run, no 5k to find
-    assert "hr_zones" not in activity  # max_heart_rate not passed, defaults to 0
-
-
-def test_import_gpx_with_max_heart_rate(tmp_path):
-    path = tmp_path / "run.gpx"
-    path.write_text(GPX_FIXTURE)
-    activity = importers.import_gpx(str(path), max_heart_rate=200)
-
-    # 140bpm (0->300s) and 150bpm (300->600s) both fall in zone3 (ratio 0.7/0.75,
-    # i.e. 3 boundaries met -> 0-based index 2); the final sample (160bpm) has
-    # no following gap to attribute.
-    assert activity["hr_zones"] == {
-        "zone1_seconds": 0.0,
-        "zone2_seconds": 0.0,
-        "zone3_seconds": 600.0,
-        "zone4_seconds": 0.0,
-        "zone5_seconds": 0.0,
-    }
 
 
 def test_import_tcx(tmp_path):

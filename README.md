@@ -49,7 +49,7 @@ uv pip install -e '.[train]'
 
 ```bash
 fit usage        # command cheat sheet
-fit import ./run.gpx
+fit import ./run.fit
 fit dashboard
 fit plan --sport run --type intervals   # generate a workout, push to your watch
 ```

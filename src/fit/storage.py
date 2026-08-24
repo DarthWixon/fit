@@ -13,8 +13,7 @@ Activity dicts have the shape:
         "avg_power": 187,                  # optional, watts; TCX/FIT only
         "hr_zones": {"zone1_seconds": 120.0, ...},  # optional, see "HR zones"
         "splits": {"5k_seconds": 1423, ...},  # optional, see "Split PBs"
-        "source": "gpx",                   # "gpx" | "garmin" | "strava"
-        "gpx_file": "gpx/2024-01-15T08:30:00.gpx"  # optional, relative path
+        "source": "garmin",                # "garmin" | "strava"
     }
 
 pbs.json has the shape:
@@ -36,7 +35,6 @@ auto-invalidated by new activities, only replaced by an explicit reset
 
 import json
 import os
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -92,10 +90,6 @@ def fitness_path() -> Path:
     return resolve_data_dir() / "fitness.json"
 
 
-def gpx_dir() -> Path:
-    return resolve_data_dir() / "gpx"
-
-
 def plans_dir() -> Path:
     return resolve_data_dir() / "plans"
 
@@ -105,7 +99,7 @@ def train_dir() -> Path:
 
 
 def ensure_data_dir() -> None:
-    for path in (activities_dir(), gpx_dir(), plans_dir(), train_dir()):
+    for path in (activities_dir(), plans_dir(), train_dir()):
         path.mkdir(parents=True, exist_ok=True)
     if not config_path().exists():
         _write_atomic(config_path(), _serialize_config_text(DEFAULTS))
@@ -259,10 +253,3 @@ def read_fitness_baseline() -> dict:
 
 def write_fitness_baseline(baseline: dict) -> None:
     _write_json_atomic(fitness_path(), baseline)
-
-
-def save_gpx_file(source_path: str, activity_id: str) -> Path:
-    gpx_dir().mkdir(parents=True, exist_ok=True)
-    dest = gpx_dir() / f"{activity_id}{Path(source_path).suffix}"
-    shutil.copyfile(source_path, dest)
-    return dest

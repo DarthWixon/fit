@@ -52,7 +52,7 @@ def test_activity_and_pbs_write_read_round_trip(tmp_path, monkeypatch):
         "date": "2024-01-15",
         "distance_km": 10.2,
         "duration_seconds": 3120,
-        "source": "gpx",
+        "source": "garmin",
     }
     storage.write_activity(activity)
     assert storage.activity_exists("2024-01-15T08:30:00")

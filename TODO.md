@@ -42,5 +42,7 @@ Ordered by priority (importance x ease). Work top to bottom.
      fitness.json are the ones that should win — the primary's copies
      overwrite the remote (and then the Mac) from the first sync onward.
    - Run ~/bin/fit-sync, then `fit dashboard` to confirm the merged history
-     renders. Optionally trash the stale gpx/ and pbs.json leftovers in
-     /my-files/.fit afterwards.
+     renders. Trash the stale pbs.json leftovers in /my-files/.fit afterwards,
+     and the gpx/ directory too — fit no longer keeps original files, so
+     nothing writes or reads it (the ~9MB already in ~/.fit/gpx on the Mac is
+     likewise now inert; delete it whenever you like).

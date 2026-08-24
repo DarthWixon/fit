@@ -27,7 +27,7 @@ MILESTONE_TOLERANCE = 1.06
 # Distances-of-interest for "best split" extraction: the fastest continuous
 # segment of this length found anywhere within an activity's track, regardless
 # of the activity's total distance (e.g. the fastest 5k inside a 10k run).
-# Only activities imported from GPX/TCX/FIT carry the per-point stream needed
+# Only activities imported from TCX/FIT carry the per-point stream needed
 # to compute this (see importers.py) — CSV-only activities never contribute
 # here.
 SPLIT_DISTANCES_KM = {
@@ -663,7 +663,7 @@ def met_for_activity(activity: dict) -> float:
 
 def median_hr_by_type(activities: list[dict]) -> dict[str, float]:
     """Median avg_heart_rate across all HR-tagged activities, grouped by type.
-    Only activities with avg_heart_rate present contribute (GPX/TCX/FIT
+    Only activities with avg_heart_rate present contribute (TCX/FIT
     imports only — bare Strava CSV rows never set this
     field). Inclusive of whichever activity is later being scored against it:
     for the very first HR-tagged activity of a type, its own median (of a

@@ -19,7 +19,7 @@ moved to a new machine.
 - **Python 3.11+**
 - `typer` — CLI flag parsing and help text
 - `rich` — all terminal output: tables, coloured text, Unicode sparklines
-- Standard library `xml.etree.ElementTree` for GPX/TCX parsing (no lxml)
+- Standard library `xml.etree.ElementTree` for TCX parsing (no lxml)
 - `fitparse` — required, for FIT file parsing (`importers.import_fit`); pinned
   `fitparse>=1.2,<2.0` (see importers.py's "Known limitation" on undecoded sport
   codes). The `garmin` extra (`garminconnect`) is the only genuinely optional
@@ -69,7 +69,7 @@ fit pbs --months 3           # personal bests over just the last N months (overr
 fit stats                    # breakdown, accepts --week / --month / --year
 fit fitness                  # current fitness index (baseline 100) + trend sparkline
 fit fitness-reset            # re-anchor the fitness index baseline to today
-fit import ./run.gpx         # import a file, folder of files, or Strava export
+fit import ./run.fit         # import a file, folder of files, or Strava export
 fit garmin-sync --days 14    # pull recent activities from Garmin Connect (see "Garmin integration")
 fit plan --sport run --type intervals  # generate a workout interactively, push to the watch (see "Workout planner")
 fit plan --sport run --type intervals --schedule 2026-08-28  # also place it on that date in the Garmin calendar
@@ -102,11 +102,13 @@ display in sequence. No business logic lives in `cli.py`.
 ├── pbs.json                 ← cached personal bests (recomputed when stale)
 ├── plans/                   ← generated workouts (fit plan), one JSON file each (see "Workout planner")
 │   └── 2026-07-03T09:15:02.json
-├── train/                   ← the single active training plan (see "Training plans")
-│   └── plan.json
-└── gpx/                     ← original imported GPX/TCX files kept for reference
-    └── 2024-01-17T07:15:00.gpx
+└── train/                   ← the single active training plan (see "Training plans")
+    └── plan.json
 ```
+
+**Original files are not kept.** An import parses what it needs — splits, HR
+zones, totals — and the source file is not copied anywhere. See "Split PBs" for
+what that costs.
 
 ### One file per activity
 
@@ -133,8 +135,8 @@ FIT_DATA_DIR=./examples/data fit dashboard   # safe for development
 All other path helpers (`activities_dir()`, `config_path()`, etc.) build on top of
 `resolve_data_dir()`. No other module hardcodes a path.
 
-Paths stored inside activity dicts (e.g. `gpx_file`) are relative to the data directory,
-not absolute, so the folder stays portable across machines.
+Any path stored inside an activity dict is relative to the data directory, not
+absolute, so the folder stays portable across machines.
 
 ### Atomic writes
 
@@ -159,7 +161,7 @@ The **only** module that touches the filesystem. Pure I/O, no logic.
 Key functions:
 - `resolve_data_dir() -> Path`
 - `ensure_data_dir() -> None` — creates folder structure on first run
-- `activities_dir() -> Path`, `config_path() -> Path`, `pbs_path() -> Path`, `fitness_path() -> Path`, `gpx_dir() -> Path`, `plans_dir() -> Path`
+- `activities_dir() -> Path`, `config_path() -> Path`, `pbs_path() -> Path`, `fitness_path() -> Path`, `plans_dir() -> Path`
 - `read_activities_with_warnings() -> tuple[list[dict], list[str]]` — reads all
   activity files, skipping any that fail to parse, and returns one warning string
   per skipped file instead of printing; `cli.py` passes these to
@@ -173,7 +175,6 @@ Key functions:
 - `write_pbs(pbs: dict) -> None`
 - `read_fitness_baseline() -> dict` — `{}` if never initialized; see "Fitness index"
 - `write_fitness_baseline(baseline: dict) -> None`
-- `save_gpx_file(source_path: str, activity_id: str) -> Path`
 - `train_dir() -> Path`, `training_plan_path() -> Path`
 - `write_plan(plan: dict) -> None` — writes single plan file atomically, named by
   the plan's `id` (mirrors `write_activity`)
@@ -439,24 +440,21 @@ Key functions:
 
 ### `importers.py`
 Parses external formats and returns a correctly-shaped activity dict. Uses stdlib
-`xml.etree.ElementTree` for GPX/TCX (no external XML library) and `fitparse` for FIT.
+`xml.etree.ElementTree` for TCX (no external XML library) and `fitparse` for FIT.
 
 Key functions:
-- `import_gpx(path: str, max_heart_rate: int = 0) -> dict`
 - `import_tcx(path: str, max_heart_rate: int = 0) -> dict`
 - `import_fit(path: str, max_heart_rate: int = 0) -> dict`
 - `import_strava_csv(path: str) -> tuple[list[dict], list[str]]` — a single bare
   Strava `activities.csv`; second element is warning strings (see below)
 - `import_strava_export(export_dir: str, max_heart_rate: int = 0) -> tuple[list[dict], list[str]]` —
   a full Strava bulk-export archive (`activities.csv` + linked, possibly gzipped,
-  GPX/TCX/FIT files); second element is warning strings (see below)
+  TCX/FIT files); second element is warning strings (see below)
 - `import_directory(dir_path: str, max_heart_rate: int = 0) -> list[dict]` — a
-  loose folder of `.gpx`/`.tcx`/`.fit` files (e.g. a mounted Garmin watch's
-  `GARMIN/ACTIVITY` folder), not a Strava bulk export; each returned dict
-  carries a transient `"_source_path"` key `cli.py` uses to copy the original
-  into `gpx/`
+  loose folder of `.tcx`/`.fit` files (e.g. a mounted Garmin watch's
+  `GARMIN/ACTIVITY` folder), not a Strava bulk export
 - `import_by_extension(path: str, suffix: str, max_heart_rate: int = 0) -> dict` —
-  dispatches to `import_gpx`/`import_tcx`/`import_fit` by suffix, raising
+  dispatches to `import_tcx`/`import_fit` by suffix, raising
   `ValueError` for anything else; the single source of truth for extension
   dispatch, used by both `cli.py`'s `import` command and
   `_import_strava_linked_file` (for linked/gzipped files inside a bulk export)
@@ -483,12 +481,12 @@ x99, Surfing x1"`) in their second return value. `cli.py` passes these through
 are always surfaced. This is the single reason `import_strava_csv`/
 `import_strava_export` return `(activities, warnings)` tuples rather than bare lists.
 
-`import_gpx`/`import_tcx`/`import_fit` each also build a transient (elapsed_seconds,
+`import_tcx`/`import_fit` each also build a transient (elapsed_seconds,
 distance_km) point stream while parsing, purely in memory, and use it to compute
 best-effort split times (see "Split PBs" below) before attaching the result to the
 returned dict's `splits` field and discarding the raw stream — it is never persisted.
-The same point stream also carries `hr` where the format provides it (GPX's
-already-parsed per-point `<gpxtpx:hr>`; TCX's per-trackpoint `<HeartRateBpm>`, read
+The same point stream also carries `hr` where the format provides it (TCX's
+per-trackpoint `<HeartRateBpm>`, read
 by `_tcx_trackpoint_heart_rate` — a new extractor alongside the existing
 `_tcx_trackpoint_elevation`, since only lap-level HR was read before; FIT's
 per-record `heart_rate` field, already decoded by `fitparse` but previously
@@ -692,11 +690,10 @@ few intentionally compose one another, noted below):
   resolves the dashboard's `--timerange` / `pbs_window_months` / all-time precedence
   into `{"activities", "pbs", "window_months", "window_label", "date_window"}`,
   via `_pbs_for_window`
-- `_import_and_report(new_activities, save_original, fallback_source=None) -> None` —
-  the shared tail of every import path (dedupe via `storage.activity_exists`,
-  write, save the original into `gpx/`, print new-PB messages, recompute the
-  PB cache, print the imported/skipped summary); used by both `import_activity`
-  and `garmin_sync`
+- `_import_and_report(new_activities) -> None` — the shared tail of every
+  import path (dedupe via `storage.activity_exists`, write, print new-PB
+  messages, recompute the PB cache, print the imported/skipped summary); used
+  by both `import_activity` and `garmin_sync`
 - `_require_training_plan() -> dict` — the active plan, or the
   render-and-exit "no active plan" path
 - `_show_plan(plan, activities, weeks) -> None` — the shared `train import`/`train
@@ -732,8 +729,7 @@ decisions) or a private helper (which would just relocate the same branches).
     "avg_heart_rate": 152,             # optional
     "max_heart_rate": 171,             # optional
     "avg_power": 187,                  # optional, watts; TCX (lap AvgWatts) / FIT (session avg_power) only
-    "source": "gpx",                   # "gpx" | "garmin" | "strava"
-    "gpx_file": "gpx/2024-01-15T08:30:00.gpx",  # optional, relative path
+    "source": "garmin",                # "garmin" | "strava"
     "splits": {"5k_seconds": 1423, "10k_seconds": 2950},  # optional, see "Split PBs"
     "hr_zones": {"zone1_seconds": 120.0, "zone2_seconds": 340.5, "zone3_seconds": 890.0,
                  "zone4_seconds": 210.0, "zone5_seconds": 40.0}  # optional, see "HR zones"
@@ -784,7 +780,7 @@ a given distance *within* any activity's track — e.g. the fastest 5k hidden in
 10k run. This is the same thing Strava calls "Best Efforts".
 
 There is no persisted stream of trackpoint data anywhere in this app. Instead,
-`import_gpx`/`import_tcx`/`import_fit` compute split times once, at import time,
+`import_tcx`/`import_fit` compute split times once, at import time,
 against `compute.SPLIT_DISTANCES_KM` for that activity's type, using a transient
 in-memory (elapsed_seconds, distance_km) point stream that is discarded immediately
 after — only the resulting numbers are stored, as the activity dict's optional
@@ -816,9 +812,12 @@ table shows one row per label, not two — `pbs.json` itself still stores both k
 independently, exactly as above, since `detect_new_pbs` needs to track each category
 separately.
 
-If a distance isn't in `SPLIT_DISTANCES_KM`, it isn't instantly queryable after the
-fact — recomputing it means re-importing from the original file (kept in `gpx/` for
-exactly this kind of reference).
+If a distance isn't in `SPLIT_DISTANCES_KM`, it is **gone**, not merely
+unqueryable: fit keeps no copy of the source file, so adding a distance to the
+list only affects activities imported afterwards. Recomputing it for existing
+history means re-importing from wherever the originals still live — a Garmin
+export, the watch, Strava. This is the cost of not keeping originals, and it is
+the same going-forward-only rule `hr_zones` follows.
 
 ---
 
@@ -835,11 +834,11 @@ Z3 70-80%, Z4 80-90%, Z5 90-100%+ of `max_heart_rate` (`compute.HR_ZONE_BOUNDARI
 not derived or calibrated from activity data (unlike the fitness index's
 self-calibrating HR multiplier).
 
-Like split PBs, there is no persisted stream of trackpoint data. `import_gpx`/
+Like split PBs, there is no persisted stream of trackpoint data.
 `import_tcx`/`import_fit` compute HR zone-seconds once, at import time, from the
 same transient (elapsed_seconds, distance_km, ...) point stream used for splits,
-now also carrying `hr` where the format provides it — GPX's already-parsed
-per-point `<gpxtpx:hr>`, TCX's per-trackpoint `<HeartRateBpm>` (a new extractor,
+now also carrying `hr` where the format provides it — TCX's per-trackpoint
+`<HeartRateBpm>` (a new extractor,
 `_tcx_trackpoint_heart_rate`, since previously only lap-level HR was read), and
 FIT's per-record `heart_rate` field (already decoded by `fitparse`, previously
 unread). `compute.hr_zone_seconds` attributes each gap between samples to the
@@ -874,7 +873,7 @@ physiological model — a "don't need it to be perfect" stretch goal.
 duration_hours`) — the Ainsworth Compendium-of-Physical-Activities-style public-
 health unit, using `compute.MET_TABLE`'s small, coarse, pace/speed-banded values
 per type. This is the *only* base that works for every activity regardless of
-source, since `avg_heart_rate`/`avg_power` are only populated from GPX/TCX/FIT
+source, since `avg_heart_rate`/`avg_power` are only populated from TCX/FIT
 imports (confirmed via `importers.py`) — never bare Strava-CSV rows — while
 `type`/`distance_km`/`duration_seconds` are always
 present. No FTP/threshold-pace/resting-HR calibration is required from the user.
@@ -989,8 +988,8 @@ Consumers:
   There is deliberately no CLI flag for this. `--timerange` takes priority: when
   it's driving the dashboard window, this cap is skipped so the explicit flag's
   range wins (same precedence as `pbs_window_months`).
-- `max_heart_rate` — used only at import time (`importers.import_gpx`/
-  `import_tcx`/`import_fit`, threaded down from `cli.py`) to compute each
+- `max_heart_rate` — used only at import time (`importers.import_tcx`/
+  `import_fit`, threaded down from `cli.py`) to compute each
   newly-imported activity's `hr_zones` breakdown (see "HR zones"). Changing it
   later has no effect on already-imported activities — no backfill, no silent
   recompute, same "explicit only" precedent as `fitness.json`'s baseline
