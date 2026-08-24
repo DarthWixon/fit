@@ -140,7 +140,8 @@ def dashboard(
     sport: str = typer.Option(
         None,
         "--sport",
-        help="Only show this sport for this run (overrides the sports config)",
+        help="Only show this sport for this run: run, cycle, walk, hike, swim, "
+        "squash, canoe (overrides the sports config)",
     ),
     timerange: str = typer.Option(
         None,
@@ -193,7 +194,8 @@ def dash(
     sport: str = typer.Option(
         None,
         "--sport",
-        help="Only show this sport for this run (overrides the sports config)",
+        help="Only show this sport for this run: run, cycle, walk, hike, swim, "
+        "squash, canoe (overrides the sports config)",
     ),
     timerange: str = typer.Option(
         None,
