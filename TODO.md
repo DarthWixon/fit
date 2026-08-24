@@ -16,11 +16,19 @@ Ordered by priority (importance x ease). Work top to bottom.
      (import/show/sync/clear; engine in src/fit/training.py; all eight goal
      templates). Design reference: docs/training-plan-feature.md; behaviour:
      CLAUDE.md "Training plans". Still to do:
-     (a) verify the four new steady workout payloads against a live push with
-         scripts/diff_workout.py — they are fit's first single-step workouts,
-         so run it on e.g. a `run`/`long` before trusting a whole train sync;
+     (a) verify the newer workout payloads against a live push with
+         scripts/diff_workout.py: the four steady types (fit's first
+         single-step workouts) and the bare cycle/swim baselines (first to
+         omit warmup/cooldown and renumber the remaining steps). Run it on at
+         least one of each before trusting a whole train sync;
      (b) a real `fit train sync` + `fit train clear` round-trip against Garmin
          (sync now confirms before pushing; --dry-run previews it).
+   - `fit train retarget` is DONE (re-derives intensity, rewrites the sessions
+     still ahead in place, no login). Benchmarks now feed the derivations they
+     exist for, and derived targets are plausibility-guarded — see CLAUDE.md
+     "Benchmarks and why pace does not drift" / "Retargeting". Still open:
+     swim stays the least-measured discipline (Strava-CSV swims carry no
+     splits, and importers.import_tcx still files swims as runs).
 3. Set up fit-sync on the Linux machine (Mac side done 2026-07-04; script,
    data, and usage guide all live in /my-files/.fit on Proton Drive):
    - Download the official proton-drive CLI (linux-x64 build, v0.4.6+) from

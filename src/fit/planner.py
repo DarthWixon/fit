@@ -17,7 +17,11 @@ that order under those exact names, endCondition/step numbering intact (see
 scripts/diff_workout.py). This confirms the target-value and step-numbering
 machinery every sport/type combo shares; the other combos reuse the same
 builders but have not each been individually round-tripped, so re-run the
-diff after first pushing an unverified combo.
+diff after first pushing an unverified combo. Two shapes are newer than that
+verification and worth the diff first: the steady types (easy/long/endurance/
+continuous), which are fit's first single-step workouts, and the bare
+baselines (cycle/swim), which are the first to omit warmup and cooldown steps
+entirely and renumber what remains.
 """
 
 import statistics
