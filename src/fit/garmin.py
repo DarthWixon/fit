@@ -73,6 +73,25 @@ def push_workout(client, workout_payload: dict) -> dict:
     return client.upload_workout(workout_payload)
 
 
+def get_workout(client, workout_id) -> dict:
+    """Fetch one workout back from Garmin Connect as its stored workout-service
+    dict. Counterpart to push_workout: diffing this against the payload that
+    was pushed is how planner.py's not-yet-verified schema note gets confirmed
+    (see planner.py's module docstring and scripts/diff_workout.py)."""
+    return client.get_workout_by_id(workout_id)
+
+
+def schedule_workout(client, workout_id, date_str: str) -> dict:
+    """Place an already-pushed workout onto a single date (YYYY-MM-DD) in the
+    Garmin calendar; returns the raw response dict. Deliberately atomic — one
+    workout, one date — so a future multi-week planner schedules a whole
+    progression by calling this once per session rather than needing a
+    different, batch-shaped entry point. date_str must be pre-validated by the
+    caller (planner.parse_schedule_date); this module stays a thin API
+    boundary and does no date logic of its own."""
+    return client.schedule_workout(workout_id, date_str)
+
+
 def list_recent_activities(client, start_date: date, end_date: date) -> list[dict]:
     """Raw Garmin Connect activity summaries (activityId, activityType,
     startTimeLocal, ...) in [start_date, end_date] - NOT yet in fit's

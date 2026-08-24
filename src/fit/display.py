@@ -484,3 +484,10 @@ def render_plan_pushed(plan: dict) -> None:
         f"Pushed to Garmin Connect (workout id {plan.get('garmin_workout_id')}) — "
         "it will appear under Training > Workouts on the watch's next sync"
     )
+
+
+def render_plan_scheduled(plan: dict) -> None:
+    console.print(
+        f"Scheduled for {plan.get('scheduled_date')} — it will appear on that "
+        "date in the Garmin Connect calendar on the watch's next sync"
+    )

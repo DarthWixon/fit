@@ -32,6 +32,19 @@ def test_parse_duration_rejects(bad):
         planner.parse_duration(bad)
 
 
+def test_parse_schedule_date():
+    assert planner.parse_schedule_date("2026-08-28") == "2026-08-28"
+    assert planner.parse_schedule_date(" 2026-08-28 ") == "2026-08-28"
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "2026-8-28", "28-08-2026", "2026/08/28", "2026-13-01", "2026-02-30"]
+)
+def test_parse_schedule_date_rejects(bad):
+    with pytest.raises(ValueError):
+        planner.parse_schedule_date(bad)
+
+
 def test_pace_zone_mps_bounds_ordered():
     low, high = planner.pace_zone_mps(270, tolerance_s=10)
     assert low == 1000 / 280

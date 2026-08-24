@@ -67,6 +67,7 @@ fit fitness-reset            # re-anchor the fitness index baseline to today
 fit import ./run.gpx         # import a file, folder of files, or Strava export
 fit garmin-sync --days 14    # pull recent activities from Garmin Connect (see "Garmin integration")
 fit plan --sport run --type intervals  # generate a workout interactively, push to the watch (see "Workout planner")
+fit plan --sport run --type intervals --schedule 2026-08-28  # also place it on that date in the Garmin calendar
 fit history 10               # last N activities as a table (default 10)
 fit calendar                 # active days in the last 2 calendar months, marked on a text calendar
 fit usage                    # short command cheat sheet (man-page substitute)
@@ -391,6 +392,9 @@ Key functions:
   happens in planner, not here)
 - `render_plan_pushed(plan: dict) -> None` — one-line Garmin push confirmation
   with the workout id
+- `render_plan_scheduled(plan: dict) -> None` — one-line confirmation that the
+  workout was placed on its `scheduled_date` in the Garmin calendar (only
+  printed when `fit plan --schedule DATE` was used)
 
 ### `importers.py`
 Parses external formats and returns a correctly-shaped activity dict. Uses stdlib
@@ -477,6 +481,12 @@ Key functions:
 - `parse_pace(text: str) -> int` — `"4:30"` → 270 seconds (per km or per 100m,
   caller's unit); strict m:ss, raises `ValueError` otherwise
 - `parse_duration(text: str) -> int` — `"90"` → 90, `"2:00"` → 120; raises `ValueError`
+- `parse_schedule_date(text: str) -> str` — validates a `YYYY-MM-DD` calendar
+  date and returns it normalized; raises `ValueError` otherwise. The single
+  scheduling primitive today (the pure seam a future multi-week planner's
+  day-picking logic will build on and route each computed date through);
+  imposes no past/future policy — see `fit plan --schedule` under "Workout
+  planner"
 - `pace_zone_mps(seconds_per_km, tolerance_s) -> tuple[float, float]` /
   `swim_pace_zone_mps(seconds_per_100m, tolerance_s)` — (low, high) m/s bounds for
   a pace ± tolerance band
@@ -862,8 +872,12 @@ Consumers:
 ## Stretch features (not yet implemented)
 
 - Multi-week periodised training plans built on top of `fit plan` — adaptive
-  progressions across sessions, calendar scheduling (`client.schedule_workout`
-  exists in the garminconnect library, unused so far).
+  progressions across sessions that schedule a whole block onto the calendar.
+  Single-workout calendar scheduling already exists (`fit plan --schedule DATE`
+  → `garmin.schedule_workout`); what's deferred is the periodisation on top —
+  generating a *run* of sessions with progressive overload and scheduling each.
+  Build it on the existing atomic `garmin.schedule_workout` /
+  `planner.parse_schedule_date` seam rather than replacing them.
 - USB workout delivery — encode a workout .FIT file (needs a FIT *encoder*
   dependency, e.g. `fit-tool`; fitparse only reads) and copy it to a mounted
   watch's `GARMIN/NEWFILES/`, for pushing without a Garmin Connect login.
@@ -901,8 +915,19 @@ Key functions:
 - `push_workout(client, workout_payload: dict) -> dict` — uploads one
   workout-service payload (built by `planner.py` — this module never shapes
   workout dicts itself) and returns the raw response dict (contains
-  `"workoutId"`). The one garmin.py function that *sends* rather than fetches;
-  used by `fit plan` (see "Workout planner").
+  `"workoutId"`). Sends rather than fetches; used by `fit plan` (see "Workout
+  planner").
+- `get_workout(client, workout_id) -> dict` — fetches one workout back as its
+  stored workout-service dict; counterpart to `push_workout`, used by
+  `scripts/diff_workout.py` to verify `planner.py`'s payload schema against a
+  live round-trip (see "Workout planner" / that module's docstring).
+- `schedule_workout(client, workout_id, date_str) -> dict` — places an
+  already-pushed workout onto a single `YYYY-MM-DD` date in the Garmin
+  calendar. Deliberately atomic (one workout, one date) so a future multi-week
+  planner schedules a whole progression by calling it once per session rather
+  than needing a batch-shaped entry point. `date_str` is pre-validated by
+  `planner.parse_schedule_date` — garmin.py stays a thin API boundary and does
+  no date logic. Used by `fit plan --schedule DATE` (see "Workout planner").
 
 `fit garmin-sync --days N` (default 14, `cli.py`) logs in, lists recent
 activities, downloads each as FIT bytes to a temp file, imports it via
@@ -914,12 +939,24 @@ PBs, recompute PB cache). Temp files are cleaned up in a `finally` block.
 
 ## Workout planner
 
-`fit plan --sport run --type intervals [--no-push]` generates a structured
-workout interactively (typer prompts, Enter accepts each default), saves it to
-`~/.fit/plans/<created-timestamp>.json`, and pushes it to Garmin Connect via
-`garmin.push_workout` — the workout appears under Training > Workouts on the
-watch's next sync. Delivery is Connect-only: no route data, no calendar
-scheduling, no USB path (all deliberately deferred — see "Stretch features").
+`fit plan --sport run --type intervals [--no-push] [--schedule DATE]` generates a
+structured workout interactively (typer prompts, Enter accepts each default),
+saves it to `~/.fit/plans/<created-timestamp>.json`, and pushes it to Garmin
+Connect via `garmin.push_workout` — the workout appears under Training >
+Workouts on the watch's next sync. Delivery is Connect-only: no route data, no
+USB path (deliberately deferred — see "Stretch features").
+
+`--schedule DATE` (`YYYY-MM-DD`) additionally places the pushed workout on that
+date in the Garmin calendar via `garmin.schedule_workout`, writing the date back
+into the plan file as `scheduled_date`. The date is validated up front by
+`planner.parse_schedule_date` — before the interactive prompts and the push — so
+a typo fails fast and offline. Scheduling needs a pushed workout to attach to,
+so `--schedule` with `--no-push` is rejected rather than silently ignored. This
+is single-workout scheduling only; the full multi-week periodised planner that
+would schedule a whole progression stays deferred (see "Stretch features"), but
+the atomic `garmin.schedule_workout` wrapper and the pure
+`planner.parse_schedule_date` primitive are shaped so that planner composes on
+top of them rather than replacing them.
 
 **Sport/type matrix** (`planner.WORKOUT_TYPES`): run has `intervals` (N × distance
 reps at a pace target with timed recoveries), `tempo` (sustained block at pace),
@@ -970,16 +1007,23 @@ warmup=1/cooldown=2/interval=3/recovery=4/rest=5/repeat=6; end conditions
 time=2 (seconds)/distance=3 (meters)/iterations=7; targets no.target=1/
 power.zone=2 (watts)/pace.zone=6 (m/s, low bound first as
 `targetValueOne`/`targetValueTwo`). Repeats are `RepeatGroupDTO` steps with
-nested `workoutSteps`; absent fields are omitted, not null. **Not yet verified
-against a live upload** — the target-value field names and step numbering follow
-community-consensus workout-service JSON, not the installed models (which never
-set target values). After the first real push, diff `client.get_workout_by_id()`
-against a generated payload and update the note in `planner.py`'s docstring.
+nested `workoutSteps`; absent fields are omitted, not null. **Verified against a
+live upload on 2026-08-24**: a real `run`/`intervals` push round-tripped through
+`client.get_workout_by_id()` unchanged — `targetValueOne`/`targetValueTwo` came
+back as the low/high m/s bounds in that order, with step numbering intact,
+confirming the target-value and step-numbering machinery every combo shares. The
+other sport/type combos reuse the same builders but haven't each been
+round-tripped individually; `scripts/diff_workout.py` performs the check (a
+one-directional payload-vs-stored diff via `garmin.get_workout`), so re-run it
+after first pushing an as-yet-unverified combo and update this note.
 
 **Save-before-push is deliberate**: the plan file is written before `garmin.login`
 is attempted, so a failed push (no `garminconnect` installed, bad credentials,
 network down) never loses the generated workout. On success the Garmin
-`workoutId` is written back into the plan file as `garmin_workout_id`.
+`workoutId` is written back into the plan file as `garmin_workout_id`, and (if
+`--schedule DATE` was passed) the calendar date as `scheduled_date` after the
+scheduling call succeeds — so the plan file, not Garmin, stays the
+reconstructable record of what fit put on the calendar.
 
 Plan file shape (`plans/<id>.json`):
 
@@ -992,7 +1036,8 @@ Plan file shape (`plans/<id>.json`):
                 "target_pace": 268, "recovery": 120, "cooldown_minutes": 10},
     "workout_name": "Run intervals 6x800m @ 4:28/km",
     "payload": {...},                   # full Garmin workout-service dict
-    "garmin_workout_id": 123456789      # present only after a successful push
+    "garmin_workout_id": 123456789,     # present only after a successful push
+    "scheduled_date": "2026-08-28"      # present only after a successful --schedule
 }
 ```
 

@@ -8,9 +8,16 @@ replicated from the reference models in garminconnect 0.3.6's workout.py
 rather than imported from it, which would drag in the optional pydantic
 extra fit doesn't carry. The target-value field names (targetValueOne /
 targetValueTwo, low m/s bound first) and global step numbering follow the
-workout-service JSON as served by Garmin Connect. Not yet verified against
-a live upload — after the first real push, diff get_workout_by_id() output
-against a payload from here and update this note with the verified date.
+workout-service JSON as served by Garmin Connect.
+
+Verified against a live upload on 2026-08-24: a real `run`/`intervals` push
+round-tripped through get_workout_by_id() with every field fit sent coming
+back unchanged — targetValueOne/Two stored as the low/high m/s bounds in
+that order under those exact names, endCondition/step numbering intact (see
+scripts/diff_workout.py). This confirms the target-value and step-numbering
+machinery every sport/type combo shares; the other combos reuse the same
+builders but have not each been individually round-tripped, so re-run the
+diff after first pushing an unverified combo.
 """
 
 import statistics
@@ -90,6 +97,24 @@ def parse_duration(text: str) -> int:
             f"invalid duration '{text}': expected seconds or m:ss, e.g. '90' or '1:30'"
         )
     return int(text)
+
+
+def parse_schedule_date(text: str) -> str:
+    """Validate a calendar date for scheduling a workout and return it as a
+    normalized ISO 'YYYY-MM-DD' string. Raises ValueError on anything that
+    isn't a real date in that format. The single scheduling primitive today;
+    a future multi-week planner will compute a run of session dates itself
+    (that day-picking logic belongs here, pure, alongside this) and each
+    still passes through here before reaching garmin.schedule_workout. No
+    past/future policy is imposed — Garmin accepts any real date, and a
+    scheduler may legitimately (re)place a session in the past."""
+    text = text.strip()
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError as exc:
+        raise ValueError(
+            f"invalid schedule date '{text}': expected YYYY-MM-DD, e.g. '2026-08-28'"
+        ) from exc
 
 
 def _positive_int(text: str) -> int:

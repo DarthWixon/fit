@@ -397,12 +397,33 @@ def plan(
     push: bool = typer.Option(
         True, "--push/--no-push", help="Push to Garmin Connect after saving locally"
     ),
+    schedule: str = typer.Option(
+        None,
+        "--schedule",
+        metavar="DATE",
+        help="Also place the workout on this date (YYYY-MM-DD) in the Garmin calendar",
+    ),
 ) -> None:
     try:
         specs = planner.workout_params(sport, type)
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
+
+    # Validate --schedule up front: fail fast and offline, before the interactive
+    # prompts and the Garmin push, so a typo'd date never wastes either. Scheduling
+    # needs a pushed workout to attach to, so --schedule with --no-push is a
+    # contradiction rather than a silent no-op.
+    schedule_date = None
+    if schedule is not None:
+        if not push:
+            typer.echo("--schedule cannot be combined with --no-push", err=True)
+            raise typer.Exit(code=1)
+        try:
+            schedule_date = planner.parse_schedule_date(schedule)
+        except ValueError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1)
 
     activities = _load_activities()
     recs = planner.recommend_defaults(
@@ -436,6 +457,20 @@ def plan(
     plan_dict["garmin_workout_id"] = response.get("workoutId")
     storage.write_plan(plan_dict)
     display.render_plan_pushed(plan_dict)
+
+    if schedule_date is None:
+        return
+    workout_id = plan_dict["garmin_workout_id"]
+    if workout_id is None:
+        typer.echo(
+            "Pushed, but Garmin returned no workout id, so it can't be scheduled.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    garmin.schedule_workout(client, workout_id, schedule_date)
+    plan_dict["scheduled_date"] = schedule_date
+    storage.write_plan(plan_dict)
+    display.render_plan_scheduled(plan_dict)
 
 
 @app.command()
