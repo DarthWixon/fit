@@ -91,3 +91,23 @@ def test_plan_write_read_round_trip(tmp_path, monkeypatch):
     (storage.plans_dir() / "bad.json").write_text("{not json")
 
     assert storage.read_plans() == [plan]
+
+
+def test_training_plan_write_read_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIT_DATA_DIR", str(tmp_path))
+    storage.ensure_data_dir()
+    assert storage.train_dir().is_dir()
+    # One active plan at a time, so there is nothing to read before the first write.
+    assert storage.read_training_plan() is None
+
+    plan = {
+        "goal": "sprint_triathlon",
+        "event_date": "2026-11-15",
+        "sessions": [{"date": "2026-09-01", "sport": "run", "status": "planned"}],
+    }
+    storage.write_training_plan(plan)
+    assert storage.read_training_plan() == plan
+
+    # Re-importing replaces rather than accumulating.
+    storage.write_training_plan({**plan, "goal": "run_half"})
+    assert storage.read_training_plan()["goal"] == "run_half"

@@ -228,8 +228,9 @@ def _iso_week_key(date_iso: str) -> str:
     return f"{year}-W{week:02d}"
 
 
-def _week_start(date_iso: str) -> date:
-    """Monday of the ISO week containing date_iso."""
+def week_start(date_iso: str) -> date:
+    """Monday of the ISO week containing date_iso. Public because training.py
+    lays a plan's weekly cadence out from it (week N = week_start + N weeks)."""
     day = date.fromisoformat(date_iso)
     return day - timedelta(days=day.weekday())
 
@@ -271,10 +272,10 @@ def weekly_volumes(activities: list[dict], through: date | None = None) -> list[
     if not dates:
         return []
 
-    monday = _week_start(min(dates))
-    last_monday = _week_start(max(dates))
+    monday = week_start(min(dates))
+    last_monday = week_start(max(dates))
     if through is not None:
-        last_monday = max(last_monday, _week_start(through.isoformat()))
+        last_monday = max(last_monday, week_start(through.isoformat()))
 
     series = []
     while monday <= last_monday:

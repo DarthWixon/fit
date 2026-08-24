@@ -46,6 +46,7 @@ DEFAULTS = {
     "history_count": 5,  # rows in the dashboard's embedded history table
     "dashboard_weeks": 12,  # weeks shown in dashboard volume/fitness sparklines (0 = all)
     "max_heart_rate": 0,  # bpm, 0 = unset (HR zone breakdown column shows "—" until set)
+    "train_sync_window_days": 14,  # how far ahead `fit train sync` schedules sessions
     "show_sparkline": True,  # weekly volume (hours) sparkline block
     "show_pbs": True,  # personal bests block
     "show_sports_summary": True,  # sports summary block (all types, count + time + distance)
@@ -59,6 +60,7 @@ _CONFIG_COMMENTS = {
     "history_count": "rows in the dashboard's recent-activity table",
     "dashboard_weeks": "weeks shown in dashboard volume/fitness sparklines (0 = all)",
     "max_heart_rate": "your max heart rate in bpm, used to compute HR zone % breakdowns (0 = unset)",
+    "train_sync_window_days": "how many days ahead `fit train sync` pushes training-plan sessions",
     "show_sparkline": "weekly volume (hours) sparkline block",
     "show_pbs": "personal bests block",
     "show_sports_summary": "sports summary block (all types, count + time + distance)",
@@ -98,8 +100,12 @@ def plans_dir() -> Path:
     return resolve_data_dir() / "plans"
 
 
+def train_dir() -> Path:
+    return resolve_data_dir() / "train"
+
+
 def ensure_data_dir() -> None:
-    for path in (activities_dir(), gpx_dir(), plans_dir()):
+    for path in (activities_dir(), gpx_dir(), plans_dir(), train_dir()):
         path.mkdir(parents=True, exist_ok=True)
     if not config_path().exists():
         _write_atomic(config_path(), _serialize_config_text(DEFAULTS))
@@ -172,6 +178,24 @@ def read_plans() -> list[dict]:
         except (json.JSONDecodeError, OSError):
             continue
     return plans
+
+
+def training_plan_path() -> Path:
+    return train_dir() / "plan.json"
+
+
+def write_training_plan(plan: dict) -> None:
+    """The single active training plan (see training.py). One plan at a time,
+    so unlike write_plan there is no per-id filename."""
+    _write_json_atomic(training_plan_path(), plan)
+
+
+def read_training_plan() -> dict | None:
+    """The active training plan, or None if there isn't one. A corrupt file
+    raises rather than being skipped: unlike a single dropped plan file in
+    read_plans, this is the whole feature's state and silently losing it would
+    quietly unschedule nothing while claiming success."""
+    return _read_json(training_plan_path(), default=None)
 
 
 def _parse_config_text(text: str) -> dict:

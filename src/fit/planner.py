@@ -32,16 +32,27 @@ SPORT_TYPES = {
 }
 
 WORKOUT_TYPES = {
-    "run": ["intervals", "tempo", "hills", "baseline"],
-    "swim": ["intervals"],
-    "cycle": ["intervals", "hills", "baseline"],
+    "run": ["intervals", "tempo", "hills", "baseline", "easy", "long"],
+    "swim": ["intervals", "continuous"],
+    "cycle": ["intervals", "hills", "baseline", "endurance", "long"],
 }
+
+# Quality workouts (intervals/tempo/hills/baseline) are warmup -> main ->
+# cooldown. The steady types above (easy/long/endurance/continuous) are a
+# single block instead: a warmup inside an easy run is just more easy running,
+# and splitting it only makes the watch beep for no reason.
+STEADY_TYPES = {"easy", "long", "endurance", "continuous"}
 
 # Target zones are a band around the single value the user gives, so the
 # watch has a realistic corridor to beep against rather than a knife edge.
 PACE_TOLERANCE_S_PER_KM = 10
 SWIM_PACE_TOLERANCE_S_PER_100M = 5
 POWER_TOLERANCE_W = 10
+
+# Steady sessions get a wider corridor than quality work: the point of an easy
+# run is to stay comfortable over a range, not to hold one pace to the second.
+EASY_PACE_TOLERANCE_S_PER_KM = 20
+ENDURANCE_POWER_TOLERANCE_W = 25
 
 # History-derived defaults (recommend_defaults): how far back "recent
 # performance" looks, how much slower tempo pace is than 5k race pace
@@ -50,6 +61,12 @@ POWER_TOLERANCE_W = 10
 RECENT_MONTHS = 6
 TEMPO_FACTOR = 1.07
 REPS_CAP = 10
+
+# Easy and long runs are both run at Daniels' "E" pace, ~30% slower than 5k
+# race pace (E is 59-74% vVO2max against I's 95-100%). Endurance riding sits
+# at ~70% of FTP, the middle of the conventional 65-75% "zone 2" band.
+EASY_FACTOR = 1.3
+ENDURANCE_FTP_FACTOR = 0.70
 
 # Run intervals of SHORT_REP_MAX_M or less default to 5k pace * SHORT_REP_FACTOR
 # (~3% faster). The reference 5k is a *training* best, not a race result, so it
@@ -115,6 +132,22 @@ def parse_schedule_date(text: str) -> str:
         raise ValueError(
             f"invalid schedule date '{text}': expected YYYY-MM-DD, e.g. '2026-08-28'"
         ) from exc
+
+
+def parse_distance_km(text: str) -> int:
+    """'16' or '16.5' -> 16000/16500 metres. Prompts for steady sessions ask in
+    km (nobody thinks of a long run as '16000'), but every payload endCondition
+    is in metres, so the parse converts. Raises ValueError on anything that
+    isn't a positive number."""
+    try:
+        km = float(str(text).strip())
+    except ValueError as exc:
+        raise ValueError(
+            f"invalid distance '{text}': expected km, e.g. '16' or '16.5'"
+        ) from exc
+    if km <= 0:
+        raise ValueError(f"invalid distance '{text}': must be greater than zero")
+    return round(km * 1000)
 
 
 def _positive_int(text: str) -> int:
@@ -395,6 +428,76 @@ _PARAM_SPECS = {
             "parse": _positive_int,
         },
     ],
+    ("run", "easy"): [
+        {
+            "key": "duration_minutes",
+            "label": "Duration (minutes)",
+            "default": 40,
+            "parse": _positive_int,
+        },
+        {
+            "key": "target_pace",
+            "label": "Easy pace (min:sec per km)",
+            "default": "6:00",
+            "parse": parse_pace,
+        },
+    ],
+    ("run", "long"): [
+        {
+            "key": "distance_m",
+            "label": "Distance (km)",
+            "default": 16,
+            "parse": parse_distance_km,
+        },
+        {
+            "key": "target_pace",
+            "label": "Long-run pace (min:sec per km)",
+            "default": "5:45",
+            "parse": parse_pace,
+        },
+    ],
+    ("cycle", "endurance"): [
+        {
+            "key": "duration_minutes",
+            "label": "Duration (minutes)",
+            "default": 90,
+            "parse": _positive_int,
+        },
+        {
+            "key": "target_watts",
+            "label": "Target power (watts)",
+            "default": 150,
+            "parse": _positive_int,
+        },
+    ],
+    ("cycle", "long"): [
+        {
+            "key": "distance_m",
+            "label": "Distance (km)",
+            "default": 60,
+            "parse": parse_distance_km,
+        },
+        {
+            "key": "target_watts",
+            "label": "Target power (watts)",
+            "default": 150,
+            "parse": _positive_int,
+        },
+    ],
+    ("swim", "continuous"): [
+        {
+            "key": "distance_m",
+            "label": "Distance (m)",
+            "default": 1500,
+            "parse": _positive_int,
+        },
+        {
+            "key": "target_pace_100m",
+            "label": "Target pace per 100m (min:sec, blank for none)",
+            "default": "",
+            "parse": _optional_pace,
+        },
+    ],
 }
 
 
@@ -628,15 +731,101 @@ def _cycle_baseline(params: dict) -> tuple[str, list[dict]]:
     return f"Cycle baseline {params['test_minutes']}min test", steps
 
 
+# --- steady sessions (single block, wide target band) ---------------------
+
+
+def _run_easy(params: dict) -> tuple[str, list[dict]]:
+    steps = [
+        _step(
+            1,
+            "interval",
+            "time",
+            params["duration_minutes"] * 60,
+            _pace_target(
+                *pace_zone_mps(params["target_pace"], EASY_PACE_TOLERANCE_S_PER_KM)
+            ),
+        )
+    ]
+    name = f"Run easy {params['duration_minutes']}min @ {_format_mmss(params['target_pace'])}/km"
+    return name, steps
+
+
+def _run_long(params: dict) -> tuple[str, list[dict]]:
+    steps = [
+        _step(
+            1,
+            "interval",
+            "distance",
+            params["distance_m"],
+            _pace_target(
+                *pace_zone_mps(params["target_pace"], EASY_PACE_TOLERANCE_S_PER_KM)
+            ),
+        )
+    ]
+    name = (
+        f"Run long {_format_meters(params['distance_m'])}"
+        f" @ {_format_mmss(params['target_pace'])}/km"
+    )
+    return name, steps
+
+
+def _cycle_endurance(params: dict) -> tuple[str, list[dict]]:
+    steps = [
+        _step(
+            1,
+            "interval",
+            "time",
+            params["duration_minutes"] * 60,
+            _power_target(params["target_watts"], ENDURANCE_POWER_TOLERANCE_W),
+        )
+    ]
+    name = (
+        f"Cycle endurance {params['duration_minutes']}min @ {params['target_watts']}W"
+    )
+    return name, steps
+
+
+def _cycle_long(params: dict) -> tuple[str, list[dict]]:
+    steps = [
+        _step(
+            1,
+            "interval",
+            "distance",
+            params["distance_m"],
+            _power_target(params["target_watts"], ENDURANCE_POWER_TOLERANCE_W),
+        )
+    ]
+    name = (
+        f"Cycle long {_format_meters(params['distance_m'])}"
+        f" @ {params['target_watts']}W"
+    )
+    return name, steps
+
+
+def _swim_continuous(params: dict) -> tuple[str, list[dict]]:
+    pace = params.get("target_pace_100m")
+    target = _pace_target(*swim_pace_zone_mps(pace)) if pace else _no_target()
+    steps = [_step(1, "interval", "distance", params["distance_m"], target)]
+    name = f"Swim continuous {_format_meters(params['distance_m'])}"
+    if pace:
+        name += f" @ {_format_mmss(pace)}/100m"
+    return name, steps
+
+
 _BUILDERS = {
     ("run", "intervals"): _run_intervals,
     ("run", "tempo"): _run_tempo,
     ("run", "hills"): lambda params: _hills("Run", params),
     ("run", "baseline"): _run_baseline,
+    ("run", "easy"): _run_easy,
+    ("run", "long"): _run_long,
     ("swim", "intervals"): _swim_intervals,
+    ("swim", "continuous"): _swim_continuous,
     ("cycle", "intervals"): _cycle_intervals,
     ("cycle", "hills"): lambda params: _hills("Cycle", params),
     ("cycle", "baseline"): _cycle_baseline,
+    ("cycle", "endurance"): _cycle_endurance,
+    ("cycle", "long"): _cycle_long,
 }
 
 
@@ -656,6 +845,25 @@ def _estimate_seconds(steps: list[dict], sport: str) -> float:
                 speed = _FALLBACK_SPEED_MPS[sport]
             total += step["endConditionValue"] / speed
     return total
+
+
+def workout_name(sport: str, workout_type: str, params: dict) -> str:
+    """The human workout name for a sport/type/params combo, without building
+    the payload around it. training.py stores this on each expanded session so
+    `fit train show` reads well without carrying ~80 full payloads in the plan
+    file — the payload is rebuilt from params at sync time instead."""
+    workout_params(sport, workout_type)  # reuse its ValueError on bad combos
+    name, _ = _BUILDERS[(sport, workout_type)](params)
+    return name
+
+
+def estimate_seconds(sport: str, workout_type: str, params: dict) -> int:
+    """How long one workout is expected to take, without building the payload
+    around it. training.py sums these to measure a planned week against what
+    the user is actually training now (see "Starting volume")."""
+    workout_params(sport, workout_type)  # reuse its ValueError on bad combos
+    _, steps = _BUILDERS[(sport, workout_type)](params)
+    return round(_estimate_seconds(steps, sport))
 
 
 def build_plan(sport: str, workout_type: str, params: dict, created: str) -> dict:
@@ -744,6 +952,30 @@ def _round_to(value: float, step: int) -> int:
     return int(round(value / step) * step)
 
 
+def recent_activities(activities: list[dict], reference: date) -> list[dict]:
+    """The last RECENT_MONTHS of activities — the window every derive_* helper
+    expects. Exposed so training.py windows history the same way rather than
+    re-deriving the same two compute calls."""
+    return compute.filter_by_date(
+        activities, compute.months_ago(reference, RECENT_MONTHS), reference.isoformat()
+    )
+
+
+def easy_pace_from_5k(five_k_seconds: int) -> int:
+    """Seconds/km for easy and long running, from a 5k time (see EASY_FACTOR)."""
+    return _round_to(five_k_seconds / 5 * EASY_FACTOR, 5)
+
+
+def tempo_pace_from_5k(five_k_seconds: int) -> int:
+    """Seconds/km for a tempo block, from a 5k time (see TEMPO_FACTOR)."""
+    return _round_to(five_k_seconds / 5 * TEMPO_FACTOR, 5)
+
+
+def endurance_watts_from_ftp(ftp_watts: int) -> int:
+    """Target watts for steady endurance riding (see ENDURANCE_FTP_FACTOR)."""
+    return _round_to(ftp_watts * ENDURANCE_FTP_FACTOR, 5)
+
+
 def recommended_interval_pace(five_k_seconds: int, rep_distance_m: int) -> int:
     """Seconds/km to target for run intervals of the given rep length, from a
     recent 5k time: 5k pace, discounted by SHORT_REP_FACTOR for reps of
@@ -764,7 +996,7 @@ def _best_of_keys(pbs: dict, keys: list[str]) -> tuple[int, str] | None:
     return min(candidates) if candidates else None
 
 
-def _recent_run_5k(recent: list[dict]) -> tuple[int, str] | None:
+def derive_run_5k(recent: list[dict]) -> tuple[int, str] | None:
     """(seconds, why) for the best recent 5k — dedicated or split — falling
     back to the fastest average pace of any recent >=3km run treated as 5k
     pace."""
@@ -790,7 +1022,7 @@ def _recent_run_5k(recent: list[dict]) -> tuple[int, str] | None:
     )
 
 
-def _recent_swim_css(recent: list[dict]) -> tuple[int, str] | None:
+def derive_swim_css(recent: list[dict]) -> tuple[int, str] | None:
     """(seconds per 100m, why) — two-point critical-speed model over the
     best recent 500m and 1k times (same math as the classic 400/200 CSS
     test), falling back to 1k pace, then to the median pace of recent
@@ -824,7 +1056,7 @@ def _recent_swim_css(recent: list[dict]) -> tuple[int, str] | None:
     return round(median), "median pace of recent swims"
 
 
-def _recent_ride_watts(recent: list[dict]) -> tuple[int, str] | None:
+def derive_ride_watts(recent: list[dict]) -> tuple[int, str] | None:
     """(watts, why) — max avg_power over recent rides of >=20 minutes, a
     coarse FTP proxy (only session averages are stored)."""
     rides = [
@@ -862,16 +1094,19 @@ def recommend_defaults(
     static "default", because its value depends on the rep distance the
     user hasn't been asked yet — cli._prompt_params resolves it at prompt
     time."""
-    recent = compute.filter_by_date(
-        activities, compute.months_ago(reference, RECENT_MONTHS), reference.isoformat()
-    )
+    recent = recent_activities(activities, reference)
     recs: dict = {}
 
-    if sport == "run" and workout_type in ("intervals", "tempo"):
-        run_ref = _recent_run_5k(recent)
+    if sport == "run" and workout_type in ("intervals", "tempo", "easy", "long"):
+        run_ref = derive_run_5k(recent)
         if run_ref:
             five_k_seconds, why = run_ref
-            if workout_type == "intervals":
+            if workout_type in ("easy", "long"):
+                recs["target_pace"] = {
+                    "default": _format_mmss(easy_pace_from_5k(five_k_seconds)),
+                    "why": f"~30% slower than 5k race pace — {why}",
+                }
+            elif workout_type == "intervals":
                 # Daniels "I" pace ~ 3k-5k race pace; short reps get the
                 # SHORT_REP_FACTOR discount (see recommended_interval_pace)
                 def _interval_pace_default(params_so_far: dict) -> str:
@@ -885,21 +1120,26 @@ def recommend_defaults(
                     "why": f"5k race pace (3% faster for reps ≤{SHORT_REP_MAX_M}m) — {why}",
                 }
             else:
-                tempo = _round_to(five_k_seconds / 5 * TEMPO_FACTOR, 5)
                 recs["target_pace"] = {
-                    "default": _format_mmss(tempo),
+                    "default": _format_mmss(tempo_pace_from_5k(five_k_seconds)),
                     "why": f"~7% slower than 5k race pace — {why}",
                 }
-    elif sport == "swim" and workout_type == "intervals":
-        swim_ref = _recent_swim_css(recent)
+    elif sport == "swim" and workout_type in ("intervals", "continuous"):
+        swim_ref = derive_swim_css(recent)
         if swim_ref:
             css, why = swim_ref
             recs["target_pace_100m"] = {"default": _format_mmss(css), "why": why}
-    elif sport == "cycle" and workout_type == "intervals":
-        ride_ref = _recent_ride_watts(recent)
+    elif sport == "cycle" and workout_type in ("intervals", "endurance", "long"):
+        ride_ref = derive_ride_watts(recent)
         if ride_ref:
             watts, why = ride_ref
-            recs["target_watts"] = {"default": watts, "why": why}
+            if workout_type in ("endurance", "long"):
+                recs["target_watts"] = {
+                    "default": endurance_watts_from_ftp(watts),
+                    "why": f"~70% of threshold — {why}",
+                }
+            else:
+                recs["target_watts"] = {"default": watts, "why": why}
 
     same_type = [
         p

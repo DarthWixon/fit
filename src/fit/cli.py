@@ -9,7 +9,7 @@ from pathlib import Path
 
 import typer
 
-from fit import compute, display, garmin, importers, planner, storage
+from fit import compute, display, garmin, importers, planner, storage, training
 
 app = typer.Typer()
 
@@ -489,3 +489,192 @@ def calendar() -> None:
 @app.command()
 def usage() -> None:
     display.render_usage()
+
+
+# --- fit train: multi-week periodised plans -------------------------------
+
+train_app = typer.Typer(help="Multi-week periodised training plans")
+app.add_typer(train_app, name="train")
+
+
+def _require_training_plan() -> dict:
+    """The active plan, or exit with the how-to-create-one message."""
+    storage.ensure_data_dir()
+    plan = storage.read_training_plan()
+    if not plan:
+        display.render_training_missing()
+        raise typer.Exit(code=1)
+    return plan
+
+
+def _show_plan(plan: dict, activities: list[dict], weeks: int | None) -> None:
+    """The shared `train import`/`train show` tail: match completion against
+    history, then render."""
+    sessions = training.match_completion(plan["sessions"], activities)
+    grouped = training.group_by_week(sessions)
+    if weeks:
+        grouped = grouped[:weeks]
+    display.render_training_plan(
+        training.plan_summary({**plan, "sessions": sessions}, date_cls.today()),
+        grouped,
+    )
+
+
+def _login_or_exit():
+    try:
+        return garmin.login()
+    except garmin.GarminAuthError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@train_app.command(name="import")
+def train_import(
+    path: str = typer.Argument(..., help="YAML plan description file"),
+    weeks: int = typer.Option(
+        0, "--weeks", help="Only show the first N weeks after importing (0 = all)"
+    ),
+) -> None:
+    """Expand a YAML plan description into a full periodised schedule."""
+    activities = _load_activities()
+
+    existing = storage.read_training_plan()
+    if existing:
+        pending = training.future_scheduled(
+            existing.get("sessions", []), date_cls.today()
+        )
+        if pending:
+            typer.echo(
+                f"The active plan still has {len(pending)} future session(s) on the "
+                "Garmin calendar. Run `fit train clear` first, or they will be left "
+                "there with nothing tracking them.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        spec = training.parse_plan_spec(Path(path).read_text())
+        plan = training.expand_plan(spec, activities, date_cls.today())
+    except (ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    storage.write_training_plan(plan)
+    _show_plan(plan, activities, weeks)
+
+
+@train_app.command(name="show")
+def train_show(
+    weeks: int = typer.Option(
+        0, "--weeks", help="Only show the first N weeks (0 = all)"
+    ),
+) -> None:
+    """Show the active plan with each session marked planned or done."""
+    plan = _require_training_plan()
+    _show_plan(plan, _load_activities(), weeks)
+
+
+@train_app.command(name="sync")
+def train_sync(
+    days: int = typer.Option(
+        0,
+        "--days",
+        help="Schedule this many days ahead (0 = config train_sync_window_days)",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be pushed, then stop"
+    ),
+) -> None:
+    """Push and schedule the plan's next sessions onto the Garmin calendar."""
+    plan = _require_training_plan()
+    window_days = days or storage.read_config()["train_sync_window_days"]
+    due = training.sync_window(plan["sessions"], date_cls.today(), window_days)
+    already = sum(
+        1
+        for s in plan["sessions"]
+        if not s.get("is_extra") and s.get("status") == "scheduled"
+    )
+    if not due:
+        display.render_training_synced(
+            {
+                "scheduled": 0,
+                "already": already,
+                "window_days": window_days,
+                "failed": [],
+            }
+        )
+        return
+
+    # Confirm before touching the account: this creates a workout and a calendar
+    # entry per session, and `garmin.login()` resumes a saved session silently,
+    # so without this the whole batch can go out with no visible step in between.
+    display.render_training_sync_preview(due)
+    if dry_run:
+        return
+    if not yes and not typer.confirm("Push and schedule these?", default=False):
+        typer.echo("Nothing pushed.")
+        return
+
+    client = _login_or_exit()
+    scheduled, failed = 0, []
+    for session in due:
+        args = training.session_to_build_args(session)
+        if args is None:  # extras never reach here, but stay defensive
+            continue
+        try:
+            built = planner.build_plan(*args, session["date"])
+            response = garmin.push_workout(client, built["payload"])
+            workout_id = response.get("workoutId")
+            if workout_id is None:
+                raise ValueError("Garmin returned no workout id")
+            placed = garmin.schedule_workout(
+                client, workout_id, planner.parse_schedule_date(session["date"])
+            )
+            session["garmin_workout_id"] = workout_id
+            session["scheduled_workout_id"] = placed.get("workoutScheduleId")
+            session["scheduled_date"] = session["date"]
+            session["status"] = "scheduled"
+            scheduled += 1
+        except Exception as exc:  # one bad session must not lose the rest
+            failed.append(f"{session['date']} {session['workout_name']}: {exc}")
+        # Rewrite after every session: a crash mid-sync must never leave the
+        # plan file claiming less than what is actually on the calendar.
+        storage.write_training_plan(plan)
+
+    display.render_training_synced(
+        {
+            "scheduled": scheduled,
+            "already": already,
+            "window_days": window_days,
+            "failed": failed,
+        }
+    )
+
+
+@train_app.command(name="clear")
+def train_clear() -> None:
+    """Remove the plan's future sessions from the Garmin calendar."""
+    plan = _require_training_plan()
+    pending = training.future_scheduled(plan["sessions"], date_cls.today())
+    if not pending:
+        display.render_training_cleared({"cleared": 0, "failed": []})
+        return
+
+    client = _login_or_exit()
+    cleared, failed = 0, []
+    for session in pending:
+        schedule_id = session.get("scheduled_workout_id")
+        try:
+            if schedule_id is not None:
+                garmin.unschedule_workout(client, schedule_id)
+            session["garmin_workout_id"] = None
+            session["scheduled_workout_id"] = None
+            session["scheduled_date"] = None
+            session["status"] = "planned"
+            cleared += 1
+        except Exception as exc:
+            failed.append(f"{session['date']} {session['workout_name']}: {exc}")
+        storage.write_training_plan(plan)
+
+    display.render_training_cleared({"cleared": cleared, "failed": failed})

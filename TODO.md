@@ -12,9 +12,15 @@ Ordered by priority (importance x ease). Work top to bottom.
    "not yet verified" note in planner.py's docstring.
    - Single-workout scheduling is now DONE: `fit plan --schedule DATE` +
      garmin.schedule_workout, verified live 2026-08-24.
-   - The multi-week periodised `fit train` feature (build on that seam) has a
-     full approved design + implementation reference in
-     docs/training-plan-feature.md — start there. Not yet implemented.
+   - The multi-week periodised `fit train` feature is now DONE
+     (import/show/sync/clear; engine in src/fit/training.py; all eight goal
+     templates). Design reference: docs/training-plan-feature.md; behaviour:
+     CLAUDE.md "Training plans". Still to do:
+     (a) verify the four new steady workout payloads against a live push with
+         scripts/diff_workout.py — they are fit's first single-step workouts,
+         so run it on e.g. a `run`/`long` before trusting a whole train sync;
+     (b) a real `fit train sync` + `fit train clear` round-trip against Garmin
+         (sync now confirms before pushing; --dry-run previews it).
 3. Set up fit-sync on the Linux machine (Mac side done 2026-07-04; script,
    data, and usage guide all live in /my-files/.fit on Proton Drive):
    - Download the official proton-drive CLI (linux-x64 build, v0.4.6+) from

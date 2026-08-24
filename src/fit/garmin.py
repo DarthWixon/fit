@@ -92,6 +92,21 @@ def schedule_workout(client, workout_id, date_str: str) -> dict:
     return client.schedule_workout(workout_id, date_str)
 
 
+def get_scheduled_workouts(client, year: int, month: int) -> dict:
+    """Raw scheduled-workout entries for one calendar month (month is
+    1-based). Counterpart to schedule_workout — lets a caller see what is
+    already on the Garmin calendar rather than trusting local state alone."""
+    return client.get_scheduled_workouts(year, month)
+
+
+def unschedule_workout(client, scheduled_workout_id):
+    """Remove one scheduled workout from the Garmin calendar. Takes the
+    *schedule* id returned by schedule_workout, not the workout id — the same
+    workout can sit on several dates. Atomic for the same reason
+    schedule_workout is: `fit train clear` calls it once per session."""
+    return client.unschedule_workout(scheduled_workout_id)
+
+
 def list_recent_activities(client, start_date: date, end_date: date) -> list[dict]:
     """Raw Garmin Connect activity summaries (activityId, activityType,
     startTimeLocal, ...) in [start_date, end_date] - NOT yet in fit's

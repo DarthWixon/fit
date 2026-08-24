@@ -344,3 +344,77 @@ def test_rep_progression_from_previous_plans():
     ]
     recs = planner.recommend_defaults("run", "intervals", [], capped, REFERENCE)
     assert "reps" not in recs
+
+
+# --- steady sessions (easy / long / endurance / continuous) --------------------
+
+
+def test_parse_distance_km():
+    assert planner.parse_distance_km("16") == 16000
+    assert planner.parse_distance_km(" 16.5 ") == 16500
+
+
+@pytest.mark.parametrize("bad", ["", "0", "-5", "abc", "16km"])
+def test_parse_distance_km_rejects(bad):
+    with pytest.raises(ValueError):
+        planner.parse_distance_km(bad)
+
+
+@pytest.mark.parametrize(
+    "sport,workout_type,params",
+    [
+        ("run", "easy", {"duration_minutes": 40, "target_pace": 360}),
+        ("run", "long", {"distance_m": 16000, "target_pace": 345}),
+        ("cycle", "endurance", {"duration_minutes": 90, "target_watts": 165}),
+        ("cycle", "long", {"distance_m": 60000, "target_watts": 165}),
+        ("swim", "continuous", {"distance_m": 1500, "target_pace_100m": 110}),
+    ],
+)
+def test_steady_workouts_are_a_single_targeted_block(sport, workout_type, params):
+    """Unlike the quality types, steady sessions have no warmup/cooldown — one
+    step, carrying the target band the whole way."""
+    plan = planner.build_plan(sport, workout_type, params, "2026-08-24T10:00:00")
+    steps = plan["payload"]["workoutSegments"][0]["workoutSteps"]
+    assert len(steps) == 1
+    assert steps[0]["type"] == "ExecutableStepDTO"
+    assert steps[0]["targetType"]["workoutTargetTypeKey"] in ("pace.zone", "power.zone")
+    assert plan["payload"]["estimatedDurationInSecs"] > 0
+
+
+def test_steady_targets_use_the_wider_band():
+    tight = planner.build_plan(
+        "run",
+        "tempo",
+        {
+            "warmup_minutes": 10,
+            "tempo_minutes": 20,
+            "target_pace": 300,
+            "cooldown_minutes": 10,
+        },
+        "x",
+    )["payload"]["workoutSegments"][0]["workoutSteps"][1]
+    wide = planner.build_plan(
+        "run", "easy", {"duration_minutes": 40, "target_pace": 300}, "x"
+    )["payload"]["workoutSegments"][0]["workoutSteps"][0]
+    tight_span = tight["targetValueTwo"] - tight["targetValueOne"]
+    wide_span = wide["targetValueTwo"] - wide["targetValueOne"]
+    assert wide_span > tight_span
+
+
+def test_swim_continuous_without_a_pace_target():
+    plan = planner.build_plan("swim", "continuous", {"distance_m": 1500}, "x")
+    step = plan["payload"]["workoutSegments"][0]["workoutSteps"][0]
+    assert step["targetType"]["workoutTargetTypeKey"] == "no.target"
+
+
+def test_easy_and_endurance_intensities_sit_below_threshold():
+    assert planner.easy_pace_from_5k(1500) > 1500 / 5  # slower than 5k pace
+    assert planner.endurance_watts_from_ftp(250) < 250
+
+
+def test_workout_name_matches_build_plan():
+    params = {"distance_m": 16000, "target_pace": 345}
+    assert (
+        planner.workout_name("run", "long", params)
+        == planner.build_plan("run", "long", params, "x")["workout_name"]
+    )
