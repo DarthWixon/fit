@@ -10,6 +10,11 @@ Ordered by priority (importance x ease). Work top to bottom.
    client.schedule_workout exists in garminconnect. While in there: diff
    client.get_workout_by_id() against a generated payload and update the
    "not yet verified" note in planner.py's docstring.
+   - Single-workout scheduling is now DONE: `fit plan --schedule DATE` +
+     garmin.schedule_workout, verified live 2026-08-24.
+   - The multi-week periodised `fit train` feature (build on that seam) has a
+     full approved design + implementation reference in
+     docs/training-plan-feature.md — start there. Not yet implemented.
 3. Set up fit-sync on the Linux machine (Mac side done 2026-07-04; script,
    data, and usage guide all live in /my-files/.fit on Proton Drive):
    - Download the official proton-drive CLI (linux-x64 build, v0.4.6+) from
