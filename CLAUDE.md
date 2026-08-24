@@ -459,7 +459,7 @@ attaching the result to `hr_zones` before the stream is discarded — see "HR zo
 
 **Known limitation**: the Garmin TCX schema's `Sport` attribute only supports
 `Running`/`Biking`/`Other` — there is no native `Swimming` value. `import_tcx`
-currently defaults anything outside Running/Biking (walk, hike, swim) to `"run"`,
+currently defaults anything outside Running/Biking (walk, hike, swim, canoe) to `"run"`,
 which silently mislabels those activities rather than leaving them unclassified.
 Not fixed as part of adding swim support — a separate, independent concern.
 
