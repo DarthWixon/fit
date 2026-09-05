@@ -149,7 +149,7 @@ def render_pbs_table(
     table.add_column("Date")
 
     for activity_type, type_pbs in pbs.items():
-        if activity_type == "computed_from":
+        if activity_type in ("computed_from", "strength"):
             continue
         if sports and activity_type not in sports:
             continue
@@ -161,6 +161,48 @@ def render_pbs_table(
             label, formatted = _format_pb_metric(key, value)
             table.add_row(activity_type, label, formatted, date)
 
+    console.print(table)
+
+    # Strength gets its own table rather than rows in the one above: its PBs
+    # are keyed by exercise, not by distance/time label, so one row per
+    # exercise carries both of its metrics side by side (see compute.
+    # _strength_pbs). Same title, same sports filter.
+    if pbs.get("strength") and not (sports and "strength" not in sports):
+        _render_strength_pbs_table(pbs["strength"], f"Strength {title}")
+
+
+def _humanise_exercise(name: str) -> str:
+    """ "shoulder_press" -> "Shoulder press". Exercise names are stored in the
+    normalised lowercase/underscore form FIT reports them in."""
+    return name.replace("_", " ").capitalize()
+
+
+def _format_kg_with_date(value, date: str | None) -> str:
+    """ "120kg (2026-08-01)", the date dimmed. Both strength metrics carry
+    their own date, so a shared Date column would have to pick one."""
+    if value is None:
+        return "—"
+    weight = f"{value:g}kg"
+    return f"{weight} [dim]({date})[/dim]" if date else weight
+
+
+def _render_strength_pbs_table(strength_pbs: dict, title: str) -> None:
+    table = Table(title=title)
+    table.add_column("Exercise")
+    table.add_column("Heaviest Set", justify="right")
+    table.add_column("Best e1RM", justify="right")
+    for name in sorted(strength_pbs):
+        exercise_pbs = strength_pbs[name]
+        table.add_row(
+            _humanise_exercise(name),
+            _format_kg_with_date(
+                exercise_pbs.get("heaviest_set_kg"),
+                exercise_pbs.get("heaviest_set_date"),
+            ),
+            _format_kg_with_date(
+                exercise_pbs.get("best_e1rm_kg"), exercise_pbs.get("best_e1rm_date")
+            ),
+        )
     console.print(table)
 
 
@@ -403,10 +445,24 @@ def _parse_pb_key(key: str) -> dict:
     fastest_{label}_seconds / fastest_{label}_split_seconds / longest_distance_km
     / most_elevation_gain_m. Returns {"category", "label", "date_key"}."""
     date_key = None
-    for suffix in ("_seconds", "_km", "_m"):
+    for suffix in ("_seconds", "_km", "_m", "_kg"):
         if key.endswith(suffix):
             date_key = key[: -len(suffix)] + "_date"
             break
+
+    # Strength keys are "{exercise}_heaviest_set_kg" / "{exercise}_best_e1rm_kg"
+    # (compute._strength_new_pbs), so the exercise is whatever precedes the
+    # metric suffix -- it may itself contain underscores ("shoulder_press").
+    for suffix, category in (
+        ("_heaviest_set_kg", "strength_heaviest"),
+        ("_best_e1rm_kg", "strength_e1rm"),
+    ):
+        if key.endswith(suffix):
+            return {
+                "category": category,
+                "label": key[: -len(suffix)],
+                "date_key": date_key,
+            }
 
     if key.startswith("fastest_") and key.endswith("_seconds"):
         label = key[len("fastest_") : -len("_seconds")]
@@ -436,6 +492,10 @@ def _format_pb_metric(key: str, value) -> tuple[str, str]:
         return "Longest distance", f"{value:.1f}km"
     if parsed["category"] == "elevation":
         return "Most elevation gain", f"{value:.0f}m"
+    if parsed["category"] == "strength_heaviest":
+        return f"Heaviest {parsed['label'].replace('_', ' ')}", f"{value:g}kg"
+    if parsed["category"] == "strength_e1rm":
+        return f"Best {parsed['label'].replace('_', ' ')} e1RM", f"{value:g}kg"
     return key, str(value)
 
 
@@ -459,6 +519,14 @@ def render_new_pb_messages(new_pbs: list[dict]) -> None:
             )
         elif parsed["category"] == "elevation":
             console.print(f"New most elevation gain: {value:.0f}m")
+        elif parsed["category"] == "strength_heaviest":
+            console.print(
+                f"New heaviest {parsed['label'].replace('_', ' ')}: {value:g}kg"
+            )
+        elif parsed["category"] == "strength_e1rm":
+            console.print(
+                f"New estimated 1RM {parsed['label'].replace('_', ' ')}: {value:g}kg"
+            )
 
 
 def render_plan_recommendations(recs: dict) -> None:
