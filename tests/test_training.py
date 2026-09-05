@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from fit import planner, training
+from fit import planner, templates, training
 
 pytest.importorskip("yaml", reason="parse_plan_spec needs the optional [train] extra")
 
@@ -24,7 +24,7 @@ def _plan(text=MINIMAL, activities=None):
 
 def test_parse_plan_spec_defaults_from_the_goal_template():
     spec = training.parse_plan_spec(MINIMAL)
-    template = training.GOAL_TEMPLATES["sprint_triathlon"]
+    template = templates.GOAL_TEMPLATES["sprint_triathlon"]
     assert spec["days_per_week"] == template["days_per_week"]
     assert spec["rest_day"] == template["rest_day"]
     assert spec["progression"] == training.PROGRESSION_DEFAULTS
@@ -144,7 +144,7 @@ def test_session_sizes_stay_inside_the_template_clamps():
     plan = _plan()
     scale = next(
         s["scale"]
-        for s in training.GOAL_TEMPLATES["sprint_triathlon"]["weekly_sessions"]
+        for s in templates.GOAL_TEMPLATES["sprint_triathlon"]["weekly_sessions"]
         if s["sport"] == "cycle" and s["session_type"] == "long"
     )
     for distance in _long_ride_km_by_week(plan).values():
@@ -153,7 +153,7 @@ def test_session_sizes_stay_inside_the_template_clamps():
 
 # --- every goal template -------------------------------------------------------
 
-ALL_GOALS = sorted(training.GOAL_TEMPLATES)
+ALL_GOALS = sorted(templates.GOAL_TEMPLATES)
 
 
 @pytest.mark.parametrize("goal", ALL_GOALS)
@@ -161,7 +161,7 @@ def test_every_goal_expands_into_buildable_sessions(goal):
     """The pipeline is goal-agnostic, so each template must expand and every
     non-extra session must hand straight to planner.build_plan."""
     plan = _plan(f"goal: {goal}\nevent_date: 2027-03-14\n")
-    assert plan["weeks"] == training.GOAL_TEMPLATES[goal]["weeks"]
+    assert plan["weeks"] == templates.GOAL_TEMPLATES[goal]["weeks"]
     assert plan["sessions"]
     for session in plan["sessions"]:
         args = training.session_to_build_args(session)
@@ -482,7 +482,7 @@ def test_start_date_sets_the_plan_length():
 
 def test_a_plan_at_its_template_length_uses_the_reference_ramp():
     """Deriving the ramp must not change how any goal behaves by default."""
-    for goal, template in training.GOAL_TEMPLATES.items():
+    for goal, template in templates.GOAL_TEMPLATES.items():
         plan = _at_length(goal, template["weeks"])
         assert plan["progression"]["weekly_ramp_pct"] == float(
             training.REFERENCE_RAMP_PCT
@@ -556,7 +556,7 @@ def test_the_tt_block_session_progresses_by_extending_the_block():
     """A 2-5 rep count is too coarse to express a progression at all; the TT
     plans lengthen the sustained block toward race duration instead."""
     for goal in ("cycle_25k_tt", "cycle_40k_tt"):
-        template = training.GOAL_TEMPLATES[goal]
+        template = templates.GOAL_TEMPLATES[goal]
         plan = _at_length(goal, template["weeks"])
         entry = next(
             e for e in template["weekly_sessions"] if e["scale"]["param"] == "work"
@@ -580,7 +580,7 @@ def test_scaled_params_keep_headroom_inside_their_clamps(goal):
     """A clamp that binds often flattens the curve. Hitting the floor on a
     recovery or taper week is the floor working; sitting at the ceiling is not.
     """
-    template = training.GOAL_TEMPLATES[goal]
+    template = templates.GOAL_TEMPLATES[goal]
     plan = _at_length(goal, template["weeks"])
     at_max = total = 0
     for session in plan["sessions"]:
@@ -718,7 +718,7 @@ def test_intensity_targets_do_not_drift_across_the_plan():
 def test_every_goal_schedules_a_re_test(goal):
     """Without a benchmark the plan has no moment where it re-measures, so a
     pace can never legitimately improve."""
-    plan = _at_length(goal, training.GOAL_TEMPLATES[goal]["weeks"])
+    plan = _at_length(goal, templates.GOAL_TEMPLATES[goal]["weeks"])
     assert _benchmarks(plan), f"{goal} never re-tests"
 
 

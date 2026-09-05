@@ -660,12 +660,27 @@ knobs (`RECENT_MONTHS = 6`, `TEMPO_FACTOR = 1.07`, `EASY_FACTOR = 1.3`,
 `ENDURANCE_FTP_FACTOR = 0.70`, `REPS_CAP = 10`, `SHORT_REP_MAX_M = 1000` /
 `SHORT_REP_FACTOR = 0.97` — see "Workout planner" for the short-rep pace discount).
 
+### `templates.py`
+The training content behind `fit train`: one entry per goal in `GOAL_TEMPLATES`
+— plan length, phase structure and the weekly session mix — plus the two
+constructors that build it, `_scale` and `_session`.
+
+Imports nothing from `fit` at all, which is the point of the split: adding a
+goal or recalibrating a base is a change to this file only, and never touches
+the code that expands one. `training.py` imports `GOAL_TEMPLATES` (it expands
+them); `cli.py` imports the module to validate a stored plan's goal id.
+
+The `_scale` clamps and `_session` fields are consumed by `training._scaled`
+and `training._build_session` — this file documents what a template *author*
+needs, `training.py` documents what the engine does with it. See "Goal
+templates" and "Periodisation" for the domain reasoning.
+
 ### `training.py`
 Pure functions turning a compact YAML plan description into a full multi-week
 periodised schedule. No file I/O, no network, no typer — `cli.py` reads the
 description text and hands it in (same split as `importers.py` and path
-reading). May import `compute` and `planner` (pure → pure). See "Training
-plans" for the feature-level design.
+reading). May import `compute`, `planner` and `templates` (pure → pure). See
+"Training plans" for the feature-level design.
 
 Key functions:
 - `parse_plan_spec(text: str) -> dict` — lazy `import yaml`, `yaml.safe_load`,
@@ -728,8 +743,8 @@ Key functions:
 - `future_scheduled(sessions, today) -> list[dict]` — scheduled sessions still
   ahead of today; what `clear` unschedules and what `import` warns about
 
-Key constants: `GOAL_TEMPLATES` (the training-domain content — see "Training
-plans"), `PROGRESSION_DEFAULTS` (`build_recover` 3:1, `taper_weeks` 2),
+Key constants (the goal templates themselves live in `templates.py`):
+`PROGRESSION_DEFAULTS` (`build_recover` 3:1, `taper_weeks` 2),
 `REFERENCE_RAMP_PCT = 8` (the rate templates are calibrated against, not a plan
 default — see "Plan length"), `RECOVERY_FACTOR = 0.6`, `TAPER_START = 0.75` /
 `TAPER_END = 0.45`, `MIN_PLAN_WEEKS = 4`, `EXTRA_DURATIONS_S`,
@@ -1195,10 +1210,9 @@ Consumers:
 
 ## Stretch features (not yet implemented)
 
-- The seven unimplemented goal templates (`run_5k`, `run_10k`, `run_half`,
-  `cycle_25k_tt`, `cycle_40k_tt`, `cycle_100k_sportive`, `standard_triathlon`) —
-  pure data entries in `training.GOAL_TEMPLATES`; the engine around them is
-  already goal-agnostic. See "Training plans".
+- Further goal templates — pure data entries in `templates.GOAL_TEMPLATES`; the
+  engine around them is already goal-agnostic, so a new goal is a change to
+  that one file. See "Training plans".
 - Adaptive reflow when sessions are missed — `fit train show` reports adherence
   but never rewrites the plan. Deliberately out of scope for v1.
 - Garmin multisport/brick single-workout files — bricks are currently two
@@ -1459,7 +1473,7 @@ The contract between the bot and fit. Only `goal` and `event_date` are required;
 everything else defaults from the goal template. See `examples/training-plan.yaml`.
 
 ```yaml
-goal: sprint_triathlon        # one of the goal ids in training.GOAL_TEMPLATES
+goal: sprint_triathlon        # one of the goal ids in templates.GOAL_TEMPLATES
 event_date: 2026-11-15        # anchor; the plan counts back from here
 start_date: 2026-08-24        # optional; default = event_date - template length
 days_per_week: 6              # optional; or [2, 4] to build frequency
@@ -1531,8 +1545,10 @@ separate job.
 
 ### Goal templates
 
-`training.GOAL_TEMPLATES` is the training-domain content: plan length, phase
-structure, and the weekly session mix. All eight goals are implemented:
+`templates.GOAL_TEMPLATES` is the training-domain content: plan length, phase
+structure, and the weekly session mix. It lives in its own module so a goal can
+be added or recalibrated without touching the engine — see "`templates.py`".
+All ten goals are implemented:
 
 | Goal | Weeks | Days/wk | Phases (base/build/peak) | Shape |
 |---|---|---|---|---|
@@ -1542,6 +1558,7 @@ structure, and the weekly session mix. All eight goals are implemented:
 | `cycle_25k_tt` | 8 | 4 | 3/2/1 | long, 5min threshold reps, lengthening blocks, endurance |
 | `cycle_40k_tt` | 10 | 5 | 4/3/1 | long, 6min reps, lengthening blocks, 2 × endurance |
 | `cycle_100k_sportive` | 12 | 5 | 5/3/2 | long + back-to-back endurance, threshold reps, hills |
+| `cycle_strength` | 12 | 5 | 5/5/2 | long ride, 2 × threshold reps, 2 × barbell straight sets |
 | `sprint_triathlon` | 12 | 6 | 4/4/2 | long ride + brick run, long run, swim/run/cycle quality, easy swim |
 | `standard_triathlon` | 16 | 6 | 6/5/3 | as sprint, longer, with tighter clamps |
 | `strength_program` | 12 | 3 | 4/4/2 | A/B/A barbell linear progression, no endurance work |
@@ -1827,38 +1844,6 @@ by_hand_gives_the_same_test_the_plan_schedules` now holds them together.
 
 `benchmarks: false` in the description turns them off. Weeks carrying one are
 recorded in `plan["benchmark_weeks"]` and surfaced by `render_training_plan`.
-
-**Applying a re-test**: do the test → `fit garmin-sync` → **`fit train
-retarget`**, which re-derives every target from the updated history and rewrites
-the sessions still ahead of you, in place. No Garmin login, no calendar change.
-`fit train import` remains the way to change a plan's *shape* and still refuses
-to replace a plan with future scheduled sessions.
-
-### Retargeting
-
-`training.retargetable(sessions, today)` selects what may be rewritten, and
-`training.retarget_sessions(plan, targets, today)` does it, returning
-`{"old_targets", "new_targets", "retargeted", "unchanged", "frozen", "past",
-"changed"}`. Four things it deliberately will not touch:
-
-- **Extras** — they have no `params` key at all; touching one is a `KeyError`.
-- **Benchmarks** — a test at a prescribed pace is not a test.
-- **Sessions already scheduled on Garmin.** A pushed workout is a frozen copy on
-  the account and `garmin.py` has no endpoint to update or delete it, so
-  rewriting one locally would only desynchronise the plan from the watch. They
-  are counted as `frozen` and the renderer says so.
-- **Volume.** Intensity only — and this is *structurally forced*, not just
-  chosen: the template's `scale` dict is never persisted, so a stored session
-  knows its own size but not the rule that produced it. `_INTENSITY_PARAMS`
-  names the three params `_apply_target` writes, and
-  `test_retarget_never_changes_volume` holds the line.
-
-`workout_name` is regenerated whenever params change — it is derived from them,
-and a stale name would disagree with the payload that eventually gets pushed.
-Like `sync`, this mutates `plan["sessions"]` in place ("pure" here means no I/O,
-not no mutation) and `cli.py` writes the plan afterwards. `--dry-run` writes
-nothing, which matters more here than in `sync`: there is no backup of
-`plan.json` and this rewrites every future session at once.
 
 ### Sync, idempotency, and completion
 

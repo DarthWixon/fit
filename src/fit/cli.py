@@ -9,7 +9,16 @@ from pathlib import Path
 
 import typer
 
-from fit import compute, display, garmin, importers, planner, storage, training
+from fit import (
+    compute,
+    display,
+    garmin,
+    importers,
+    planner,
+    storage,
+    templates,
+    training,
+)
 
 app = typer.Typer()
 
@@ -619,7 +628,7 @@ def train_retarget(
     # exists, cannot be re-derived — say so rather than KeyError-ing inside
     # derive_targets.
     spec = plan.get("spec")
-    if not spec or spec.get("goal") not in training.GOAL_TEMPLATES:
+    if not spec or spec.get("goal") not in templates.GOAL_TEMPLATES:
         typer.echo(
             "This plan can't be retargeted — it predates the stored plan spec, or "
             "its goal no longer exists. Run `fit train clear` then "
