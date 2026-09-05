@@ -373,3 +373,102 @@ def test_shorter_windows_are_never_lower_than_longer_ones():
     twenty = compute.best_power_window(ride, 1200)
     assert one >= five >= twenty
     assert one == 400  # the one-minute spike
+
+
+# --- strength ------------------------------------------------------------------
+
+
+def _strength_activity(date_iso, exercises):
+    return {"type": "strength", "date": date_iso, "exercises": exercises}
+
+
+def test_estimated_1rm_epley_and_single_rep():
+    assert compute.estimated_1rm(100, 10) == 133.3
+    # A single rep is the lift itself, not Epley's 3%-above-it extrapolation.
+    assert compute.estimated_1rm(140, 1) == 140.0
+    assert compute.estimated_1rm(0, 10) == 0.0
+    assert compute.estimated_1rm(60, 0) == 0.0
+
+
+def test_strength_pbs_track_heaviest_and_e1rm_independently():
+    activities = [
+        _strength_activity(
+            "2026-08-01",
+            [{"name": "deadlift", "sets": [{"reps": 10, "weight_kg": 100.0}]}],
+        ),
+        # Heavier bar, fewer reps: the heaviest set, but the *lower* e1RM, so
+        # the two PBs must land on different dates.
+        _strength_activity(
+            "2026-08-15",
+            [{"name": "deadlift", "sets": [{"reps": 1, "weight_kg": 125.0}]}],
+        ),
+    ]
+    pbs = compute.all_personal_bests(activities)["strength"]
+    assert pbs["deadlift"] == {
+        "heaviest_set_kg": 125.0,
+        "heaviest_set_date": "2026-08-15",
+        "best_e1rm_kg": 133.3,
+        "best_e1rm_date": "2026-08-01",
+    }
+
+
+def test_strength_pbs_ignore_unweighted_sets():
+    activities = [
+        _strength_activity(
+            "2026-08-01",
+            [
+                {"name": "squat", "sets": [{"reps": 20}]},
+                {"name": "bench_press", "sets": [{"reps": 5, "weight_kg": 60.0}]},
+            ],
+        )
+    ]
+    pbs = compute.all_personal_bests(activities)["strength"]
+    assert "squat" not in pbs
+    assert pbs["bench_press"]["heaviest_set_kg"] == 60.0
+
+
+def test_detect_new_pbs_strength_flattens_keys_per_exercise():
+    current = {
+        "strength": {
+            "deadlift": {"heaviest_set_kg": 130.0, "best_e1rm_kg": 140.0},
+            "squat": {"heaviest_set_kg": 90.0, "best_e1rm_kg": 100.0},
+        }
+    }
+    activity = _strength_activity(
+        "2026-09-04",
+        [
+            # Beats neither deadlift PB.
+            {"name": "deadlift", "sets": [{"reps": 5, "weight_kg": 110.0}]},
+            # Beats both squat PBs.
+            {"name": "squat", "sets": [{"reps": 5, "weight_kg": 95.0}]},
+        ],
+    )
+    assert compute.detect_new_pbs(activity, current) == [
+        {"key": "squat_heaviest_set_kg", "value": 95.0},
+        {"key": "squat_best_e1rm_kg", "value": 110.8},
+    ]
+
+
+def test_total_weight_lifted_counts_every_rep_of_every_set():
+    activity = _strength_activity(
+        "2026-09-04",
+        [
+            {
+                "name": "deadlift",
+                "sets": [
+                    {"reps": 10, "weight_kg": 100.0},
+                    {"reps": 3, "weight_kg": 130.0},
+                ],
+            },
+            # Unweighted work is real training but contributes no tonnage.
+            {"name": "squat", "sets": [{"reps": 20}]},
+        ],
+    )
+    assert compute.total_weight_lifted(activity) == 10 * 100 + 3 * 130
+    assert compute.total_weight_lifted({"type": "strength"}) == 0.0
+
+
+def test_strength_met_is_flat_and_distance_free():
+    activity = {"type": "strength", "duration_seconds": 3600}
+    assert compute.met_for_activity(activity) == 6.0
+    assert "strength" in compute.NO_DISTANCE_TYPES

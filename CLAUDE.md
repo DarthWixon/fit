@@ -72,6 +72,7 @@ fit fitness-reset            # re-anchor the fitness index baseline to today
 fit import ./run.fit         # import a file, folder of files, or Strava export
 fit garmin-sync --days 14    # pull recent activities from Garmin Connect (see "Garmin integration")
 fit plan --sport run --type intervals  # generate a workout interactively, push to the watch (see "Workout planner")
+fit plan --sport strength --type straight_sets  # a gym session: prompts for exercises until you leave one blank
 fit plan --sport run --type intervals --schedule 2026-08-28  # also place it on that date in the Garmin calendar
 fit train import plan.yaml   # expand a YAML goal description into a full periodised plan
 fit train show --weeks 2     # the plan, per week, with planned/done marks
@@ -257,6 +258,11 @@ Key functions:
   [3, 5, 12]}, ...]`. `weeks` comes from stdlib `calendar.monthcalendar`
   (Monday-first rows, 0 = padding cell); grid layout lives here so
   `display.render_calendar` stays computation-free. Powers `fit calendar`
+- `total_weight_lifted(activity: dict) -> float` — tonnage: every rep of every
+  set times what was on the bar. The one figure that says what a whole gym
+  session was, the way distance does for a run — and unlike the heaviest set it
+  moves with sets and reps as well as load, so a week that added volume shows
+  up too. Unweighted sets contribute nothing
 - `best_power_window(points: list[dict], window_seconds: int) -> int | None` —
   highest average power sustained over any window of that length in one
   activity's point stream; the time-axis counterpart to `fastest_split`'s
@@ -274,10 +280,17 @@ Key functions:
   stored `hr_zones` seconds dict into `{"zone1": pct, ..., "zone5": pct}`
   summing to ~100, or `None` if missing/empty/all-zero; the display-time
   arithmetic behind `display._format_hr_zones`
+- `estimated_1rm(weight_kg: float, reps: int) -> float` — Epley one-rep-max
+  estimate for one set, rounded to 0.1kg; the single source of truth for e1RM,
+  so a strength PB and a plan target can never disagree. A single rep returns
+  the lift itself rather than Epley's 3%-above-it extrapolation
 - `all_personal_bests(activities: list[dict]) -> dict` — groups activities by type and
   calls the private `_candidate_pbs` per type, which itself composes four
   single-purpose helpers: `_longest_distance_pb`, `_milestone_pbs`, `_split_pbs`,
-  `_elevation_pb` — each returns its own slice of the PB dict, merged by `_candidate_pbs`
+  `_elevation_pb` — each returns its own slice of the PB dict, merged by `_candidate_pbs`.
+  `"strength"` is dispatched to `_strength_pbs` instead: its PBs are keyed by
+  exercise name rather than by distance/time label, so none of those four
+  helpers apply (see "Strength sessions")
 - `best_pb_per_label(type_pbs: dict) -> dict` — collapses a single type's
   dedicated (`fastest_{label}_seconds`) and split (`fastest_{label}_split_seconds`)
   PBs sharing a distance label down to whichever is faster, for display only;
@@ -285,7 +298,8 @@ Key functions:
   `display.render_pbs_table` to produce one row per label instead of two
 - `detect_new_pbs(new_activity: dict, current_pbs: dict) -> list[dict]` — returns
   `[{"key": ..., "value": ...}, ...]` for each PB category broken, structured rather
-  than pre-formatted; `display.render_new_pb_messages()` turns these into the
+  than pre-formatted; strength goes via `_strength_new_pbs`, which flattens the
+  nested per-exercise shape into the same two-key entries (`"squat_best_e1rm_kg"`); `display.render_new_pb_messages()` turns these into the
   human-readable "New fastest 5k: 21:40"-style text (formatting is a display.py
   concern, not compute.py's)
 - `pbs_cache_is_valid(pbs: dict, activity_count: int) -> bool`
@@ -320,14 +334,14 @@ Key constants:
 - `MET_TABLE` — coarse per-type MET values, banded by pace/speed for most types
   (`cycle` and `canoe` band by km/h, matching their `SPEED_TYPES` display), or
   a single flat value for types with no meaningful pace/speed signal (`hike`,
-  `squash`); see "Fitness index"
+  `squash`, `strength`); see "Fitness index"
 - `SPEED_TYPES` — types shown/banded by km/h speed rather than min/km pace
   (`cycle`, `hike`, `canoe`); `calc_pace` and `met_for_activity` both branch on it
-- `NO_DISTANCE_TYPES` — activity types (currently just `squash`) whose
+- `NO_DISTANCE_TYPES` — activity types (`squash`, `strength`) whose
   `distance_km` is present but never meaningful (e.g. accelerometer noise from
-  an indoor court sport with no GPS track); `calc_pace` and `_candidate_pbs`
-  both check it to suppress pace strings and the "longest distance" PB for
-  these types
+  an indoor court sport with no GPS track, or the 0.0 a gym session reports);
+  `calc_pace` and `_candidate_pbs` both check it to suppress pace strings and
+  the "longest distance" PB for these types
 - `HR_ZONE_BOUNDARIES` — fraction-of-max-heart-rate lower bounds for the 5
   standard HR training zones (`[0.5, 0.6, 0.7, 0.8, 0.9]`); see "HR zones"
 
@@ -369,9 +383,12 @@ Key functions:
   capped to the last `config["dashboard_weeks"]` weeks (0 = all) so long
   history doesn't wrap over multiple lines; the cap is skipped when
   `--timerange` (a truthy `window_label`) is already driving the window.
-- `render_history_table(activities: list[dict], n: int) -> None` — "Pace" column
-  uses `_format_effort()`, which shows `avg_power` ("187W avg") for cycle
-  activities that have it, falling back to `compute.calc_pace()` otherwise.
+- `render_history_table(activities: list[dict], n: int) -> None` — the "Effort"
+  column uses `_format_effort()`, which shows total weight lifted ("5,880kg", via
+  `compute.total_weight_lifted`) for strength, `avg_power` ("187W avg") for
+  cycle activities that have it, and falls back to `compute.calc_pace()`
+  otherwise — whatever says how hard the session was in that sport's own
+  terms.
   "Distance" uses `_format_distance()`, showing `"—"` for any
   `compute.NO_DISTANCE_TYPES` member instead of a meaningless value, same as
   "Pace" already does. "HR Zones" uses `_format_hr_zones()`, a segmented
@@ -382,7 +399,12 @@ Key functions:
 - `render_pbs_table(pbs: dict, sports: list[str] | None = None, window_months: int = 0, window_label: str | None = None) -> None` —
   `window_label`, when set, overrides the `window_months`-based title text
   (`"Personal bests (last N months)"`) with `"Personal bests ({window_label})"`,
-  for windows expressed in units other than months (e.g. `--timerange 10d`)
+  for windows expressed in units other than months (e.g. `--timerange 10d`).
+  Strength is skipped in the main table and rendered afterwards by the private
+  `_render_strength_pbs_table` (title `"Strength {title}"`, one row per
+  exercise, columns Exercise / Heaviest Set / Best e1RM, each value carrying
+  its own dimmed date since the two metrics rarely share one) — the generic
+  Type/Metric/Value/Date shape can't express a per-exercise PB
 - `render_sports_summary(activities: list[dict]) -> None` — dashboard block; the
   passed-in `activities` must not be pre-filtered by sport (pre-filtering by date
   is fine — this is how it respects `--timerange` while ignoring `--sport`).
@@ -453,7 +475,8 @@ Parses external formats and returns a correctly-shaped activity dict. Uses stdli
 
 Key functions:
 - `import_tcx(path: str, max_heart_rate: int = 0) -> dict`
-- `import_fit(path: str, max_heart_rate: int = 0) -> dict`
+- `import_fit(path: str, max_heart_rate: int = 0) -> dict` — branches to
+  `_parse_fit_sets` for strength sessions (see "Strength sessions")
 - `import_strava_csv(path: str) -> tuple[list[dict], list[str]]` — a single bare
   Strava `activities.csv`; second element is warning strings (see below)
 - `import_strava_export(export_dir: str, max_heart_rate: int = 0) -> tuple[list[dict], list[str]]` —
@@ -519,6 +542,15 @@ default an unrecognized *string* sport already gets via `FIT_SPORT_MAP`. Extend
 `FIT_SPORT_CODE_MAP` if a future fixture surfaces another undecoded code
 worth naming.
 
+**Strength sessions have no distinct FIT sport**: a gym session arrives as
+sport 10 (`"training"`) with sub_sport 20 (`"strength_training"`), so
+`import_fit` checks `FIT_STRENGTH_SUB_SPORTS` *before* the sport map — sport
+10 isn't in `FIT_SPORT_MAP` and would otherwise default to `"run"`. There is
+deliberately **no** `FIT_EXERCISE_CATEGORY_MAP`: unlike the sport codes,
+fitparse decodes the `set` message's `category` to a name already and its
+enum covers everything in scope, so a map would only add a staler second
+source of truth. See "Strength sessions".
+
 **Canoe mapping assumption**: there is no canoe-specific FIT `sport` — Garmin
 records paddling as `19` (paddling) or `41` (kayaking). Both are folded to
 `"canoe"` (in `FIT_SPORT_CODE_MAP`/`FIT_SPORT_MAP`), and Strava's `"Canoeing"`
@@ -537,6 +569,17 @@ See "Workout planner" for the feature-level design and payload schema notes.
 Key functions:
 - `parse_pace(text: str) -> int` — `"4:30"` → 270 seconds (per km or per 100m,
   caller's unit); strict m:ss, raises `ValueError` otherwise
+- `parse_exercise(text: str) -> str` — normalises and validates one lift name
+  against `STRENGTH_CATEGORIES`, raising `ValueError` listing the four;
+  Garmin blanks an exercise it doesn't recognise rather than rejecting it, so
+  a typo would otherwise reach the watch as a nameless step
+- `parse_weight_kg(text: str) -> float | None` — kilograms, blank → `None`
+  (no prescribed load: a bodyweight or work-up set)
+- `repeated_param_specs(sport, workout_type) -> tuple[str, list[dict]]` —
+  `("exercises", EXERCISE_PARAM_SPECS)` for strength straight sets, `("", [])`
+  for every other combo. The one combo whose prompts repeat into a list rather
+  than answering one key each; this is how `cli.py` asks *whether* a combo
+  loops instead of hard-coding which one does
 - `parse_duration(text: str) -> int` — `"90"` → 90, `"2:00"` → 120; raises `ValueError`
 - `parse_distance_km(text: str) -> int` — `"16"`/`"16.5"` → metres. Steady
   sessions are prompted in km (nobody thinks of a long run as "16000") but
@@ -603,7 +646,12 @@ correction, worth applying now the cycle benchmark is a bare test) and
 `RIDE_POWER_MIN_SECONDS` (1140 — a watch stopped on the beep records 1199s, and
 disqualifying a test that was actually done is the worst failure available).
 
-Key constants: `SPORT_TYPES` / `WORKOUT_TYPES` (valid combos), `STEADY_TYPES`
+Key constants: `SPORT_TYPES` / `WORKOUT_TYPES` (valid combos),
+`STRENGTH_CATEGORIES` (the four barbell lifts fit plans — the FIT
+`exercise_category` names `importers.py` stores, uppercased for the payload),
+`EXERCISE_PARAM_SPECS`, `_FALLBACK_SECONDS_PER_REP` / `_FALLBACK_REST_SECONDS`
+(the strength siblings of `_FALLBACK_SPEED_MPS`, so a lifting session doesn't
+estimate as free when `training.py` sizes a week), `STEADY_TYPES`
 (the four single-block types — see "Workout planner"), the target-band
 tolerances (`PACE_TOLERANCE_S_PER_KM = 10`, `SWIM_PACE_TOLERANCE_S_PER_100M = 5`,
 `POWER_TOLERANCE_W = 10`, plus the wider `EASY_PACE_TOLERANCE_S_PER_KM = 20` /
@@ -637,7 +685,29 @@ Key functions:
   phase_by_week, build_recover) -> float` / `_week_roles(...)` — the
   length-independent ramp; see "Plan length"
 - `template_sports(goal) -> set` — the sports a goal's session mix uses; scopes
-  both target derivation and the volume measurement
+  target derivation
+- `volume_sports(goal) -> set` — the sports whose volume the plan can actually
+  *scale*, i.e. every sport except strength (whose sessions carry no `scale`).
+  What the volume measurement uses, so a triathlete who does no gym work isn't
+  scaled down for it
+- `template_lifts(goal) -> list` — the barbell lifts a goal prescribes, in
+  first-appearance order; the strength counterpart to `template_sports`
+- `derive_lift_1rm(recent, exercise)` / `derive_lift_target(recent, exercise)` —
+  the raw e1RM measurement and its plausibility-guarded front door, mirroring
+  `planner.derive_run_5k` / `planner.derive_target`. A separate guard rather
+  than an entry in `PLAUSIBLE_TARGETS` because strength needs one bound per
+  lift, not one per sport
+- `strength_weekly_e1rm(current, goal, roles, increment) -> list[float]` — the
+  per-week e1RM path; mirrors `_week_multipliers`' shape so the two
+  progressions can't disagree about which weeks advance
+- `reachable_e1rm(current, roles, increment) -> float` — the most this plan's
+  length can honestly add, at one increment per build week. Both the derived
+  goal and the too-ambitious warning are measured against it
+- `working_weight_from_1rm(e1rm, reps, increment) -> float` —
+  `compute.estimated_1rm` read backwards, rounded to loadable plates
+- `plan_week_roles(plan) -> list[str]` — the week roles recovered from a stored
+  plan, so retargeting sits a rewritten session at the same point on the curve
+  expand_plan put it
 - `session_to_build_args(session) -> tuple[str, str, dict] | None` —
   `(sport, workout_type, params)` for `planner.build_plan`; `None` for extras
 - `match_completion(sessions, activities) -> list[dict]` — copies with
@@ -730,7 +800,7 @@ decisions) or a private helper (which would just relocate the same branches).
 ```python
 {
     "id": "2024-01-15T08:30:00",      # ISO 8601, used as filename key
-    "type": "run",                     # "run" | "cycle" | "walk" | "hike" | "swim" | "squash" | "canoe"
+    "type": "run",                     # "run" | "cycle" | "walk" | "hike" | "swim" | "squash" | "canoe" | "strength"
     "date": "2024-01-15",
     "distance_km": 10.2,
     "duration_seconds": 3120,
@@ -742,7 +812,10 @@ decisions) or a private helper (which would just relocate the same branches).
     "source": "garmin",                # "garmin" | "strava"
     "splits": {"5k_seconds": 1423, "10k_seconds": 2950},  # optional, see "Split PBs"
     "hr_zones": {"zone1_seconds": 120.0, "zone2_seconds": 340.5, "zone3_seconds": 890.0,
-                 "zone4_seconds": 210.0, "zone5_seconds": 40.0}  # optional, see "HR zones"
+                 "zone4_seconds": 210.0, "zone5_seconds": 40.0},  # optional, see "HR zones"
+    "exercises": [                     # strength activities only, see "Strength sessions"
+        {"name": "deadlift", "sets": [{"reps": 10, "weight_kg": 100.0}]},
+    ],
 }
 ```
 
@@ -776,6 +849,10 @@ files. If they differ, the cache is stale and must be recomputed and rewritten.
         "fastest_1k_date": "2024-05-04",
         "fastest_500m_split_seconds": 512,
         "fastest_500m_split_date": "2024-06-01"
+    },
+    "strength": {                       # nested per exercise — see "Strength sessions"
+        "deadlift": {"heaviest_set_kg": 130.0, "heaviest_set_date": "2026-09-04",
+                      "best_e1rm_kg": 143.0, "best_e1rm_date": "2026-09-04"}
     }
 }
 ```
@@ -860,6 +937,57 @@ nothing in practice feeds — `garmin-sync` pulls FIT and Strava supplies CSV.
 ride — exactly where an FTP test happens. It now keeps a record carrying either
 distance or power, `distance_km` is `None` when absent, and `_compute_splits`
 filters those out since only it needs distance.
+
+---
+
+## Strength sessions
+
+Strength is a full activity type — logged, PB-tracked and counted in volume —
+rather than the placeholder `extras: {strength: N}` a training plan schedules.
+`fit train`'s side of it (periodised progression toward a target working
+weight) is designed but not built; see `docs/STRENGTH_PLAN.md`.
+
+**Shape.** A strength activity carries an `exercises` list instead of a track:
+`[{"name": "deadlift", "sets": [{"reps": 10, "weight_kg": 100.0}, ...]}, ...]`.
+Names are FIT's own normalised lowercase/underscore form (`shoulder_press`),
+an open string like `type` itself rather than a closed enum. Weight is always
+kg — fitparse's `set.weight` is scaled to kilograms at source, so
+`weight_display_unit` is a display preference, not a unit to convert from.
+
+**`distance_km` stays present and meaningless**, usually 0.0, exactly as it is
+for squash — `NO_DISTANCE_TYPES` is what suppresses it everywhere it would be
+displayed or ranked. Dropping the key instead would have made strength the one
+type whose activity dict is missing one of the five always-present fields.
+
+**PBs are keyed by exercise, not by distance label** — two per exercise,
+tracked independently: `heaviest_set_kg` (the heaviest single set at any rep
+count) and `best_e1rm_kg` (the best `compute.estimated_1rm` across all sets).
+They genuinely differ — a heavy triple can be the heaviest set while a set of
+ten is the better e1RM — and either can be the more recent. This is why
+`_strength_pbs` sits outside `_candidate_pbs`'s four helpers rather than
+becoming a fifth, and why `pbs.json`'s `"strength"` entry is nested one level
+deeper than every other type's.
+
+**Import is FIT-only**, from `set` messages rather than a point stream. Rest
+sets (`set_type == "rest"`) are dropped, consecutive sets of the same exercise
+group into one entry, and a category fitparse can't name is kept as
+`"unknown_<int>"` rather than dropped — an unrecognised exercise still counts
+toward the session's volume and load, and keeping the code distinct stops two
+unmapped exercises merging into one PB line. `category_subtype` (front vs back
+squat) is deliberately ignored for now; it is an undecoded uint16 indexing
+per-category `<category>_exercise_name` enums, and adding it would change what
+PBs are keyed on.
+
+In the dashboard's recent-activity table, a gym session's effort column shows
+**tonnage** rather than the `"—"` a pace would be. It is the closest thing
+strength has to distance: two 45-minute sessions are not the same work, and
+because it counts reps and sets as well as load it registers a week where the
+plan grew rather than only one where the bar did.
+
+Splits and best-power are skipped for strength (there is no distance or power
+stream to sweep), but **HR zones are not**: the FIT record loop keeps records
+carrying only a heart rate, which is the exact shape a gym session's records
+have. Same going-forward-only rule as `hr_zones` everywhere else.
 
 ---
 
@@ -1173,6 +1301,36 @@ carrying a wide target band (`EASY_PACE_TOLERANCE_S_PER_KM` /
 more easy running. They exist chiefly so `fit train` can build a whole week out
 of real workouts; `fit plan --sport run --type easy` reaches them too.
 
+**Strength is shaped differently from every cardio combo**, in three ways
+that are all forced by Garmin's own schema (dumped from a real workout — see
+`docs/STRENGTH_PLAN.md` Findings, and `scripts/dump_workout.py` to re-read it):
+
+- **Weight is not a target.** `targetType` stays `no.target`; the load rides on
+  the step as `weightValue` (kilograms) + `weightUnit`. Reps are the
+  `endCondition` (`"reps"`, id 10) with the count in `endConditionValue`.
+- **One `RepeatGroupDTO` per exercise**, siblings in the segment, numbered
+  globally — the same repeat machinery run intervals already use, several
+  times over. This is why a gym session of several exercises needed no new
+  payload concept.
+- **`params` carries a list**, `{"exercises": [{"exercise", "sets", "reps",
+  "target_weight_kg"}, ...]}`, so `fit plan` prompts in a loop until the
+  exercise is left blank (`planner.repeated_param_specs` →
+  `cli._prompt_repeated_params`). Every other combo answers one value per
+  prompt.
+
+The exercise vocabulary is shared with the import side: `importers.py` stores
+FIT's lowercase `exercise_category` name and the payload upper-cases it, so
+`deadlift` and `DEADLIFT` are the same lift by construction. `exerciseName`
+(the variant, e.g. `BARBELL_BACK_SQUAT`) is deliberately left unset — each of
+the four lifts is a category in its own right.
+
+`straight_sets` optionally opens with a `CARDIO`-tagged warmup and rests
+between sets either on a timer or on the lap button (blank rest), matching how
+Connect's own UI builds them. `strength`/`baseline` is the e1RM re-test: a
+single untargeted top set at a fixed rep count, no warmup step and no
+prescribed load — the ramp of lighter sets *is* the warmup, and
+`compute._strength_pbs` reads only the best set, so the ramp costs nothing.
+
 **Sport/type matrix** (`planner.WORKOUT_TYPES`): run has `intervals` (N × distance
 reps at a pace target with timed recoveries), `tempo` (sustained block at pace),
 `hills` (N × timed uphill efforts — deliberately *no* pace target, since gradient
@@ -1228,8 +1386,16 @@ warmup=1/cooldown=2/interval=3/recovery=4/rest=5/repeat=6; end conditions
 time=2 (seconds)/distance=3 (meters)/iterations=7; targets no.target=1/
 power.zone=2 (watts)/pace.zone=6 (m/s, low bound first as
 `targetValueOne`/`targetValueTwo`). Repeats are `RepeatGroupDTO` steps with
-nested `workoutSteps`; absent fields are omitted, not null. **Verified against a
-live upload on 2026-08-24**: a real `run`/`intervals` push round-tripped through
+nested `workoutSteps`; absent fields are omitted, not null. **`strength`/`straight_sets` verified against a live upload on 2026-09-05**:
+a two-exercise push round-tripped through `garmin.get_workout` with every
+field fit sent coming back unchanged — including a 62.5kg load returned as
+62.5 under `unitKey: "kilogram"`, which settles that `weightValue` is read as
+kilograms inbound (not the grams its unit `factor` hints at) and that a
+half-kilo plate survives. The same push confirmed the `reps` end condition, a
+*timed* rest step (Connect's own UI writes `lap.button`), a time-ended
+`CARDIO` warmup, and a bare `category` with `exerciseName` unset.
+`strength`/`baseline` reuses those builders but hasn't been pushed alone.
+**Verified against a live upload on 2026-08-24**: a real `run`/`intervals` push round-tripped through
 `client.get_workout_by_id()` unchanged — `targetValueOne`/`targetValueTwo` came
 back as the low/high m/s bounds in that order, with step numbering intact,
 confirming the target-value and step-numbering machinery every combo shares. The
@@ -1304,6 +1470,7 @@ targets:                      # optional per-sport overrides (else history-deriv
   run_5k: "24:00"
   bike_ftp: 250
   swim_css_100m: "1:45"
+  squat_goal_kg: 140          # per-lift goal e1RM; else derived from plan length
 progression:                  # optional overrides of template defaults
   build_recover: [3, 1]
   weekly_ramp_pct: 8          # optional; else solved from the plan's length
@@ -1377,6 +1544,11 @@ structure, and the weekly session mix. All eight goals are implemented:
 | `cycle_100k_sportive` | 12 | 5 | 5/3/2 | long + back-to-back endurance, threshold reps, hills |
 | `sprint_triathlon` | 12 | 6 | 4/4/2 | long ride + brick run, long run, swim/run/cycle quality, easy swim |
 | `standard_triathlon` | 16 | 6 | 6/5/3 | as sprint, longer, with tighter clamps |
+| `strength_program` | 12 | 3 | 4/4/2 | A/B/A barbell linear progression, no endurance work |
+
+Both triathlon goals also carry two supplementary `straight_sets` sessions,
+sharing the days their hard endurance work already occupies and ranked last so
+a trimmed week loses the gym before it loses a discipline.
 
 Phase lengths sum to `weeks - taper_weeks`. Two shapes are goal-specific rather
 than uniform: `run_half` ranks the tempo block *above* the interval session
@@ -1521,6 +1693,68 @@ recent training is well below where the goal needs to start. Warnings are
 returned, never printed — `display.render_training_plan` surfaces them, the same
 split `read_activities_with_warnings` uses.
 
+### Strength: the one intensity that is projected forward
+
+Every other sport in a plan holds intensity fixed and ramps volume, for the
+reason set out under "Benchmarks" below — prescribing a pace you might not
+have by week 10 prescribes work you cannot complete. **Strength inverts both
+axes**: volume is fixed (3x10 stays 3x10) and the *load* ramps, because that
+is what linear progression is, and because a weight that turns out to be too
+heavy is a failed rep rather than a failed session.
+
+That inversion is why strength sessions carry **no `scale`** (`_session`'s
+`scale` is `None` for them). Ramping sets or reps as well would be two
+progressions at once. It follows that:
+
+- `_week_seconds` counts only scaling sessions, and `volume_sports` excludes
+  strength — measuring the volume scale against training the multiplier can
+  never move would only bias it.
+- The clamp tests exempt unscaled sessions, the same way they exempt
+  benchmarks.
+
+**Targets are per lift, not per sport**, so strength stays out of
+`_SPORT_TARGETS`, `planner.PLAUSIBLE_TARGETS` and `planner.derive_target` —
+forcing it in would mean giving `derive_target` a float path and making the
+bounds per-exercise, changes to code all three cardio sports depend on. It
+lives under `targets["strength"]` instead:
+
+```python
+"strength": {"squat": {"current_e1rm_kg": 105.0, "goal_e1rm_kg": 122.5,
+                        "goal_from": "one 2.5kg step per build week — ...",
+                        "by_week": [105.0, 107.5, ..., 98.0]}}
+```
+
+- **`current` is measured** (`derive_lift_target`, else `FALLBACK_LIFT_E1RM_KG`).
+- **`goal` cannot be measured** — it is a decision about the future. A
+  description's `<lift>_goal_kg` wins; otherwise it defaults to
+  `reachable_e1rm`, i.e. what this plan's length delivers at one increment a
+  build week. Deriving it keeps strength inside the derive-or-fall-back rule
+  every other sport follows, so a plan expands with no `targets:` at all. An
+  explicit goal further off than the plan is long is **capped, and warned
+  about** in `plan["warnings"]` rather than quietly prescribed.
+- **`by_week` is the whole point**: intensity depends on the week, but
+  `_apply_target` is stateless by design, so the week structure is baked into a
+  table once (`_attach_weekly_lifts`) and `_apply_target` only indexes it with
+  the `week` the session already carries. `retarget_sessions` rebuilds the
+  table via `plan_week_roles`, since it is a function of the plan's length as
+  well as of the targets.
+
+`LIFT_INCREMENT_KG` serves two purposes deliberately: it is the plate step a
+working weight rounds to *and* the most a week may add — "add one increment a
+week" is the method. Deloads use `STRENGTH_DELOAD_FACTOR` (0.85), not
+`RECOVERY_FACTOR` (0.6): that is a volume cut, and 60% of a working weight
+stops being training.
+
+**Retargeting rewrites load, never sets or reps.** For a barbell, load *is*
+intensity — so this is consistent with "intensity only, never volume", not an
+exception to it. `_intensity_snapshot` extends the old `_INTENSITY_PARAMS`
+tuple comparison down one level into the exercises list, since a strength
+session's intensity is a list rather than a single param.
+
+**Per-session params must be deep-copied** (`_build_session`): a strength
+session's params hold a list of exercise dicts shared with the template, and a
+shallow copy would have week 12 writing its load into week 1.
+
 ### Benchmarks and why pace does not drift
 
 Intensity is measured, never projected. `derive_targets` runs once per plan and
@@ -1549,6 +1783,12 @@ defines a re-test per sport, and each one's *shape* follows a single rule:
   diluted it — `compute.best_power_window` now recovers the 20-minute effort
   from wherever it sits in the recording, so the constraint is gone. See
   "Power windows".
+- **strength: a heavy triple**, on whichever lift that week's session leads
+  with — which lift to test is a property of the session, not of the sport, so
+  `_build_benchmark` takes the session being replaced. A 3RM rather than a
+  true single: `compute.estimated_1rm` reads a triple perfectly well, and a
+  plan should not be sending anybody to a genuine one-rep max alone in a gym
+  every few weeks.
 - **swim: a bare 1km test.** A whole swim of 1.000–1.060km lands in the existing
   `fastest_1k` milestone, which `derive_swim_css` already reads — so this needed
   no `compute.py` change at all. Milestones are computed from `distance_km` and
@@ -1708,6 +1948,7 @@ show` reads well without rebuilding anything.
   `FIT_DATA_DIR` at it when needed. `examples/data/` is a demo data dir
   (six months of fake activities); `examples/strava-export/` is a miniature
   fake Strava bulk export; `tests/data/test_run.fit` is a synthetic
-  constant-pace FIT file; `examples/training-plan.yaml` is a commented sample
+  constant-pace FIT file and `tests/data/test_strength.fit` a synthetic gym
+  session (both written by throwaway generators kept outside the repo); `examples/training-plan.yaml` is a commented sample
   `fit train` plan description. The generation tooling is deliberately not part of
   the repo — fit displays fitness data, it doesn't generate it.

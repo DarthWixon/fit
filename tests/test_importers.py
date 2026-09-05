@@ -139,6 +139,46 @@ def test_import_fit_generated_fixture():
     }
 
 
+def test_import_fit_strength_session():
+    """tests/data/test_strength.fit: sport 10 / sub_sport 20, HR-only records,
+    and sets covering rest intervals, an unmapped category and a bodyweight
+    set."""
+    fixture = Path(__file__).parent / "data" / "test_strength.fit"
+    activity = importers.import_fit(str(fixture), max_heart_rate=185)
+
+    assert activity["type"] == "strength"
+    assert activity["duration_seconds"] == 2700
+    # No splits or power curve: neither means anything without a distance or
+    # power stream. HR zones still land, from records carrying nothing else.
+    assert "splits" not in activity
+    assert "best_power" not in activity
+    assert sum(activity["hr_zones"].values()) > 0
+
+    assert [e["name"] for e in activity["exercises"]] == [
+        "deadlift",
+        "squat",
+        "bench_press",
+        "unknown_4242",
+    ]
+    deadlift = activity["exercises"][0]["sets"]
+    # Rest sets dropped: three working sets plus the heavy single, not seven.
+    assert deadlift == [
+        {"reps": 10, "weight_kg": 100.0},
+        {"reps": 10, "weight_kg": 100.0},
+        {"reps": 10, "weight_kg": 100.0},
+        {"reps": 3, "weight_kg": 130.0},
+    ]
+
+
+def test_fit_exercise_name_handles_every_category_shape():
+    # fitparse decodes known categories itself; the FIT profile defines the
+    # field as an array, and an unmapped code must stay distinguishable.
+    assert importers._fit_exercise_name("DEADLIFT") == "deadlift"
+    assert importers._fit_exercise_name(["squat"]) == "squat"
+    assert importers._fit_exercise_name(4242) == "unknown_4242"
+    assert importers._fit_exercise_name(None) == "unknown"
+
+
 def test_import_strava_csv_maps_and_drops_types(tmp_path):
     path = tmp_path / "activities.csv"
     path.write_text(STRAVA_CSV_FIXTURE)

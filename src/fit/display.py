@@ -69,7 +69,12 @@ def render_sparkline(data: list[float], label: str, partial_last: bool = False) 
 
 
 def _format_effort(activity: dict) -> str:
-    """Average power for cycle activities that have it, else pace."""
+    """Total weight lifted for a gym session, average power for a ride that
+    has it, else pace. The column is whatever best says how hard the session
+    was in that sport's own terms."""
+    if activity.get("type") == "strength":
+        tonnage = compute.total_weight_lifted(activity)
+        return f"{tonnage:,.0f}kg" if tonnage else "—"
     if activity.get("type") == "cycle" and activity.get("avg_power") is not None:
         return f"{round(activity['avg_power'])}W avg"
     distance_km = activity.get("distance_km", 0) or 0
@@ -114,7 +119,9 @@ def render_history_table(activities: list[dict], n: int) -> None:
     table.add_column("Type")
     table.add_column("Distance", justify="right")
     table.add_column("Duration", justify="right")
-    table.add_column("Pace", justify="right")
+    # "Effort", not "Pace": the column holds whichever measure means something
+    # for that sport — pace, average power, or tonnage (see _format_effort).
+    table.add_column("Effort", justify="right")
     table.add_column("HR Zones", justify="left")
 
     for activity in recent:
@@ -149,7 +156,7 @@ def render_pbs_table(
     table.add_column("Date")
 
     for activity_type, type_pbs in pbs.items():
-        if activity_type == "computed_from":
+        if activity_type in ("computed_from", "strength"):
             continue
         if sports and activity_type not in sports:
             continue
@@ -161,6 +168,48 @@ def render_pbs_table(
             label, formatted = _format_pb_metric(key, value)
             table.add_row(activity_type, label, formatted, date)
 
+    console.print(table)
+
+    # Strength gets its own table rather than rows in the one above: its PBs
+    # are keyed by exercise, not by distance/time label, so one row per
+    # exercise carries both of its metrics side by side (see compute.
+    # _strength_pbs). Same title, same sports filter.
+    if pbs.get("strength") and not (sports and "strength" not in sports):
+        _render_strength_pbs_table(pbs["strength"], f"Strength {title}")
+
+
+def _humanise_exercise(name: str) -> str:
+    """ "shoulder_press" -> "Shoulder press". Exercise names are stored in the
+    normalised lowercase/underscore form FIT reports them in."""
+    return name.replace("_", " ").capitalize()
+
+
+def _format_kg_with_date(value, date: str | None) -> str:
+    """ "120kg (2026-08-01)", the date dimmed. Both strength metrics carry
+    their own date, so a shared Date column would have to pick one."""
+    if value is None:
+        return "—"
+    weight = f"{value:g}kg"
+    return f"{weight} [dim]({date})[/dim]" if date else weight
+
+
+def _render_strength_pbs_table(strength_pbs: dict, title: str) -> None:
+    table = Table(title=title)
+    table.add_column("Exercise")
+    table.add_column("Heaviest Set", justify="right")
+    table.add_column("Best e1RM", justify="right")
+    for name in sorted(strength_pbs):
+        exercise_pbs = strength_pbs[name]
+        table.add_row(
+            _humanise_exercise(name),
+            _format_kg_with_date(
+                exercise_pbs.get("heaviest_set_kg"),
+                exercise_pbs.get("heaviest_set_date"),
+            ),
+            _format_kg_with_date(
+                exercise_pbs.get("best_e1rm_kg"), exercise_pbs.get("best_e1rm_date")
+            ),
+        )
     console.print(table)
 
 
@@ -403,10 +452,24 @@ def _parse_pb_key(key: str) -> dict:
     fastest_{label}_seconds / fastest_{label}_split_seconds / longest_distance_km
     / most_elevation_gain_m. Returns {"category", "label", "date_key"}."""
     date_key = None
-    for suffix in ("_seconds", "_km", "_m"):
+    for suffix in ("_seconds", "_km", "_m", "_kg"):
         if key.endswith(suffix):
             date_key = key[: -len(suffix)] + "_date"
             break
+
+    # Strength keys are "{exercise}_heaviest_set_kg" / "{exercise}_best_e1rm_kg"
+    # (compute._strength_new_pbs), so the exercise is whatever precedes the
+    # metric suffix -- it may itself contain underscores ("shoulder_press").
+    for suffix, category in (
+        ("_heaviest_set_kg", "strength_heaviest"),
+        ("_best_e1rm_kg", "strength_e1rm"),
+    ):
+        if key.endswith(suffix):
+            return {
+                "category": category,
+                "label": key[: -len(suffix)],
+                "date_key": date_key,
+            }
 
     if key.startswith("fastest_") and key.endswith("_seconds"):
         label = key[len("fastest_") : -len("_seconds")]
@@ -436,6 +499,10 @@ def _format_pb_metric(key: str, value) -> tuple[str, str]:
         return "Longest distance", f"{value:.1f}km"
     if parsed["category"] == "elevation":
         return "Most elevation gain", f"{value:.0f}m"
+    if parsed["category"] == "strength_heaviest":
+        return f"Heaviest {parsed['label'].replace('_', ' ')}", f"{value:g}kg"
+    if parsed["category"] == "strength_e1rm":
+        return f"Best {parsed['label'].replace('_', ' ')} e1RM", f"{value:g}kg"
     return key, str(value)
 
 
@@ -459,6 +526,14 @@ def render_new_pb_messages(new_pbs: list[dict]) -> None:
             )
         elif parsed["category"] == "elevation":
             console.print(f"New most elevation gain: {value:.0f}m")
+        elif parsed["category"] == "strength_heaviest":
+            console.print(
+                f"New heaviest {parsed['label'].replace('_', ' ')}: {value:g}kg"
+            )
+        elif parsed["category"] == "strength_e1rm":
+            console.print(
+                f"New estimated 1RM {parsed['label'].replace('_', ' ')}: {value:g}kg"
+            )
 
 
 def render_plan_recommendations(recs: dict) -> None:
@@ -516,14 +591,31 @@ def _format_target_value(key: str, value) -> str:
     return f"{value}W"
 
 
+def _format_lift_target(lift: str, entry: dict) -> str:
+    """'Squat 105 → 122.5kg' — a strength target is a journey, not a figure,
+    so both ends are shown."""
+    name = lift.replace("_", " ").capitalize()
+    return (
+        f"{name} {entry['current_e1rm_kg']:g} → {entry['goal_e1rm_kg']:g}kg"
+        if entry.get("goal_e1rm_kg") is not None
+        else f"{name} {entry['current_e1rm_kg']:g}kg"
+    )
+
+
 def _format_targets(targets: dict) -> str:
     """'Run 5k 22:30 · Swim CSS 1:45/100m · Bike FTP 245W' from
-    training.derive_targets' dict."""
-    return " · ".join(
+    training.derive_targets' dict. Strength lifts are appended in the same
+    run, each as a current → goal e1RM pair."""
+    parts = [
         f"{label} {_format_target_value(key, targets[key])}"
         for key, (label, _) in _TARGET_LABELS.items()
         if targets.get(key) is not None
+    ]
+    parts.extend(
+        _format_lift_target(lift, entry)
+        for lift, entry in (targets.get("strength") or {}).items()
     )
+    return " · ".join(parts)
 
 
 def render_training_plan(summary: dict, weeks: list[dict]) -> None:
@@ -646,8 +738,18 @@ def render_training_retargeted(summary: dict, dry_run: bool = False) -> None:
         for key, _ in _TARGET_LABELS.items()
         if new.get(key) is not None and old.get(key) != new.get(key)
     ]
+    # A lift moves when its measured starting point does — the goal is where
+    # the plan was always aiming, so quoting that as the change would hide the
+    # only thing a re-test actually told you.
+    old_lifts, new_lifts = old.get("strength") or {}, new.get("strength") or {}
+    moved_lifts = [
+        lift
+        for lift, entry in new_lifts.items()
+        if (old_lifts.get(lift) or {}).get("current_e1rm_kg")
+        != entry.get("current_e1rm_kg")
+    ]
 
-    if not moved:
+    if not moved and not moved_lifts:
         console.print(
             "Targets unchanged — nothing to rewrite. "
             "[dim]Your latest history derives the same numbers the plan already has.[/dim]"
@@ -671,6 +773,18 @@ def render_training_retargeted(summary: dict, dry_run: bool = False) -> None:
             f"  [bold]{label}[/bold] {was} → {_format_target_value(key, new[key])}"
         )
         why = (new.get("why") or {}).get(key)
+        if why:
+            console.print(f"    [dim]{why}[/dim]")
+
+    for lift in moved_lifts:
+        was = (old_lifts.get(lift) or {}).get("current_e1rm_kg")
+        console.print(
+            f"  [bold]{lift.replace('_', ' ').capitalize()}[/bold] "
+            f"{f'{was:g}kg' if was is not None else 'not set'} → "
+            f"{new_lifts[lift]['current_e1rm_kg']:g}kg e1RM, "
+            f"aiming at {new_lifts[lift]['goal_e1rm_kg']:g}kg"
+        )
+        why = (new.get("why") or {}).get(f"{lift}_e1rm_kg")
         if why:
             console.print(f"    [dim]{why}[/dim]")
 

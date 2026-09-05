@@ -22,6 +22,19 @@ verification and worth the diff first: the steady types (easy/long/endurance/
 continuous), which are fit's first single-step workouts, and the bare
 baselines (cycle/swim), which are the first to omit warmup and cooldown steps
 entirely and renumber what remains.
+
+The strength combos are a different case again, and were built from a real
+workout rather than from garminconnect's models, which carry nothing
+strength-specific at all (see docs/STRENGTH_PLAN.md Findings).
+`strength`/`straight_sets` is **verified against a live upload on 2026-09-05**:
+a two-exercise push round-tripped through get_workout() with every field
+unchanged, including a 62.5kg load that came back as 62.5 under unitKey
+"kilogram" — so weightValue is read as kilograms on the way in, not as the
+grams its unit factor might suggest, and a half-kilo plate is not rounded
+away. Also confirmed by that push: a reps end condition, a timed rest step
+(Connect's own UI writes a lap.button one), a time-ended CARDIO warmup, and a
+bare `category` with exerciseName left unset. `strength`/`baseline` shares
+those builders but has not been pushed on its own.
 """
 
 import statistics
@@ -33,13 +46,29 @@ SPORT_TYPES = {
     "run": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
     "cycle": {"sportTypeId": 2, "sportTypeKey": "cycling", "displayOrder": 2},
     "swim": {"sportTypeId": 4, "sportTypeKey": "swimming", "displayOrder": 3},
+    # Copied verbatim from a live strength workout's dump (see
+    # docs/STRENGTH_PLAN.md Findings), not inferred.
+    "strength": {
+        "sportTypeId": 5,
+        "sportTypeKey": "strength_training",
+        "displayOrder": 4,
+    },
 }
 
 WORKOUT_TYPES = {
     "run": ["intervals", "tempo", "hills", "baseline", "easy", "long"],
     "swim": ["intervals", "continuous", "baseline"],
     "cycle": ["intervals", "hills", "baseline", "endurance", "long"],
+    "strength": ["straight_sets", "baseline"],
 }
+
+# The four barbell lifts fit plans. Deliberately not Garmin's whole exercise
+# catalogue: an unknown category is silently blanked on the watch rather than
+# rejected, so a typo would otherwise become a nameless step nobody can read.
+# These are the FIT exercise_category names importers.py already stores, and
+# the payload wants them uppercased -- one vocabulary, both directions. Extend
+# from a real session, the same rule FIT_SPORT_CODE_MAP follows.
+STRENGTH_CATEGORIES = ("deadlift", "squat", "bench_press", "shoulder_press")
 
 # Quality workouts (intervals/tempo/hills/baseline) are warmup -> main ->
 # cooldown. The steady types above (easy/long/endurance/continuous) are a
@@ -114,6 +143,13 @@ RIDE_POWER_MIN_SECONDS = 1140
 # pace target to average (6:00/km run, 2:00/100m swim).
 _FALLBACK_SPEED_MPS = {"run": 1000 / 360, "swim": 100 / 120, "cycle": 25 / 3.6}
 
+# The same role on the strength side: a reps step and a press-lap-when-ready
+# rest carry no duration, but training.py sizes a planned week by summing
+# estimate_seconds, so a strength session that estimated zero would look free.
+# Both are coarse by design -- a rep is a rep whatever is on the bar.
+_FALLBACK_SECONDS_PER_REP = 4
+_FALLBACK_REST_SECONDS = 90
+
 _STEP_TYPES = {
     "warmup": 1,
     "cooldown": 2,
@@ -122,7 +158,25 @@ _STEP_TYPES = {
     "rest": 5,
     "repeat": 6,
 }
-_END_CONDITIONS = {"lap.button": 1, "time": 2, "distance": 3, "iterations": 7}
+_END_CONDITIONS = {
+    "lap.button": 1,
+    "time": 2,
+    "distance": 3,
+    "iterations": 7,
+    "reps": 10,
+}
+
+# A set's load is not a target: the live dump has targetType "no.target" on a
+# step carrying weightValue/weightUnit (see docs/STRENGTH_PLAN.md Findings).
+# weightValue is in kilograms -- the unit's factor is metadata, not something
+# to pre-apply.
+_WEIGHT_UNIT_KG = {"unitId": 8, "unitKey": "kilogram", "factor": 1000.0}
+
+# A lap.button step ends when the athlete presses lap, so its endConditionValue
+# is inert -- but Connect writes 10.0 there rather than 0, on both the warmup
+# and the rests in the dumped workout. Sent as observed: a value Garmin itself
+# stores is safer than one it has never been given.
+_LAP_BUTTON_END_VALUE = 10.0
 _TARGET_TYPES = {"no.target": 1, "power.zone": 2, "pace.zone": 6}
 
 
@@ -202,6 +256,45 @@ def _optional_int(text: str) -> int:
 
 def _optional_pace(text: str) -> int | None:
     return parse_pace(text) if str(text).strip() else None
+
+
+def parse_exercise(text: str) -> str:
+    """'Back Squat' / 'squat' -> 'squat', validated against
+    STRENGTH_CATEGORIES. Raises ValueError naming the valid lifts otherwise --
+    Garmin blanks an exercise it doesn't recognise rather than rejecting it,
+    which would put a nameless step on the watch."""
+    name = str(text).strip().lower().replace(" ", "_").replace("-", "_")
+    if name not in STRENGTH_CATEGORIES:
+        raise ValueError(
+            f"unknown exercise '{text}': expected one of "
+            f"{', '.join(STRENGTH_CATEGORIES)}"
+        )
+    return name
+
+
+def parse_weight_kg(text: str) -> float | None:
+    """'60' / '62.5' -> kilograms; blank -> None, meaning the step carries no
+    prescribed load (bodyweight, or 'work up to something today'). Raises
+    ValueError on anything that isn't a positive number."""
+    text = str(text).strip()
+    if not text:
+        return None
+    try:
+        kg = float(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"invalid weight '{text}': expected kilograms, e.g. '60' or '62.5'"
+        ) from exc
+    if kg <= 0:
+        raise ValueError(f"invalid weight '{text}': must be greater than zero")
+    return round(kg, 2)
+
+
+def _optional_rest(text: str) -> int:
+    """Blank -> 0, meaning a press-lap-when-ready rest between sets rather
+    than a timed one (which is how Connect's own UI builds them)."""
+    text = str(text).strip()
+    return parse_duration(text) if text else 0
 
 
 def pace_zone_mps(
@@ -571,7 +664,77 @@ _PARAM_SPECS = {
             "parse": _optional_pace,
         },
     ],
+    # Straight sets are the only combo whose params aren't one flat answer per
+    # prompt: a gym session is several exercises, each with its own sets, reps
+    # and load. The per-exercise half lives in EXERCISE_PARAM_SPECS below and
+    # is prompted in a loop -- see repeated_param_specs.
+    ("strength", "straight_sets"): [
+        {
+            "key": "warmup_minutes",
+            "label": "Warmup (minutes, blank for none)",
+            "default": 10,
+            "parse": _optional_int,
+        },
+        {
+            "key": "rest",
+            "label": "Rest between sets (min:sec, blank for press-lap)",
+            "default": "1:30",
+            "parse": _optional_rest,
+        },
+    ],
+    # The e1RM re-test. No warmup step and no prescribed load: the ramp of
+    # lighter sets before the top set is the warmup, and prescribing the
+    # weight would make it a workout rather than a measurement. Phase 1's PB
+    # tracking already reads only the best set, so the ramp costs nothing.
+    ("strength", "baseline"): [
+        {
+            "key": "exercise",
+            "label": f"Exercise ({' | '.join(STRENGTH_CATEGORIES)})",
+            "default": "deadlift",
+            "parse": parse_exercise,
+        },
+        {
+            "key": "reps",
+            "label": "Reps in the top set",
+            "default": 3,
+            "parse": _positive_int,
+        },
+    ],
 }
+
+# One exercise's worth of prompts, asked repeatedly by `fit plan --sport
+# strength --type straight_sets` until the exercise is left blank. Kept out of
+# _PARAM_SPECS because its answers become one entry in a list, not one key in
+# the params dict.
+EXERCISE_PARAM_SPECS = [
+    {
+        "key": "exercise",
+        "label": f"Exercise ({' | '.join(STRENGTH_CATEGORIES)})",
+        "default": "deadlift",
+        "parse": parse_exercise,
+    },
+    {"key": "sets", "label": "Sets", "default": 3, "parse": _positive_int},
+    {"key": "reps", "label": "Reps per set", "default": 10, "parse": _positive_int},
+    {
+        "key": "target_weight_kg",
+        "label": "Weight (kg, blank for none)",
+        "default": "",
+        "parse": parse_weight_kg,
+    },
+]
+
+
+def repeated_param_specs(sport: str, workout_type: str) -> tuple[str, list[dict]]:
+    """(params key, specs) for a combo whose prompts repeat into a list, or
+    ("", []) when the combo's params are one flat answer per prompt like every
+    other one.
+
+    This exists so cli.py can ask whether a combo needs its loop rather than
+    hard-coding which combo that is — the knowledge of what a workout's params
+    look like belongs here with the rest of the spec."""
+    if (sport, workout_type) == ("strength", "straight_sets"):
+        return "exercises", [dict(spec) for spec in EXERCISE_PARAM_SPECS]
+    return "", []
 
 
 def workout_params(sport: str, workout_type: str) -> list[dict]:
@@ -942,6 +1105,99 @@ def _swim_continuous(params: dict) -> tuple[str, list[dict]]:
     return name, steps
 
 
+def _weight_fields(weight_kg: float | None) -> dict:
+    """The load half of a lifting step. Omitted entirely when there is none,
+    rather than sent as zero — an unloaded step is a bodyweight or work-up set,
+    not a 0kg one."""
+    if not weight_kg:
+        return {}
+    return {"weightValue": float(weight_kg), "weightUnit": dict(_WEIGHT_UNIT_KG)}
+
+
+def _lift_step(order: int, exercise: str, reps: int, weight_kg: float | None) -> dict:
+    """One working set: reps as the end condition, load on the step itself.
+    `category` is the uppercase FIT exercise name (see STRENGTH_CATEGORIES);
+    `exerciseName` (the variant, e.g. BARBELL_BACK_SQUAT) is deliberately left
+    unset — every lift fit plans is a category in its own right, and Connect
+    accepts a bare one."""
+    step = _step(order, "interval", "reps", reps, _no_target())
+    step["category"] = exercise.upper()
+    step.update(_weight_fields(weight_kg))
+    return step
+
+
+def _rest_step(order: int, rest_seconds: int) -> dict:
+    """Rest between sets: timed if the user gave a duration, otherwise
+    press-lap-when-ready, which is how Connect's own UI builds it and what a
+    gym rest usually is."""
+    if rest_seconds:
+        return _step(order, "rest", "time", rest_seconds, _no_target())
+    return _step(order, "rest", "lap.button", _LAP_BUTTON_END_VALUE, _no_target())
+
+
+def _describe_exercise(name: str) -> str:
+    return name.replace("_", " ")
+
+
+def _strength_straight_sets(params: dict) -> tuple[str, list[dict]]:
+    """One RepeatGroupDTO per exercise, siblings in the segment — the shape a
+    real Connect strength workout has (see docs/STRENGTH_PLAN.md Findings).
+    Step numbering runs globally across the groups, as it does for every other
+    combo here."""
+    exercises = params.get("exercises") or []
+    if not exercises:
+        raise ValueError("a straight-sets workout needs at least one exercise")
+
+    steps: list[dict] = []
+    order = 1
+    warmup = params.get("warmup_minutes", 0)
+    if warmup:
+        # Connect tags a strength warmup CARDIO; it is a warmup, not a lift.
+        warmup_step = _step(order, "warmup", "time", warmup * 60, _no_target())
+        warmup_step["category"] = "CARDIO"
+        steps.append(warmup_step)
+        order += 1
+
+    rest = params.get("rest", 0)
+    for exercise in exercises:
+        group_order = order
+        steps.append(
+            _repeat(
+                group_order,
+                exercise["sets"],
+                [
+                    _lift_step(
+                        group_order + 1,
+                        exercise["exercise"],
+                        exercise["reps"],
+                        exercise.get("target_weight_kg"),
+                    ),
+                    _rest_step(group_order + 2, rest),
+                ],
+            )
+        )
+        order = group_order + 3
+
+    name = "Strength " + ", ".join(
+        f"{_describe_exercise(e['exercise'])} {e['sets']}x{e['reps']}"
+        + (f" @ {e['target_weight_kg']:g}kg" if e.get("target_weight_kg") else "")
+        for e in exercises
+    )
+    return name, steps
+
+
+def _strength_baseline(params: dict) -> tuple[str, list[dict]]:
+    # An e1RM test: one top set at a fixed rep count, no prescribed load, no
+    # warmup step. The ramp of lighter sets is the warmup and belongs in the
+    # name, since nothing else in the payload can carry an instruction.
+    steps = [_lift_step(1, params["exercise"], params["reps"], None)]
+    name = (
+        f"Strength baseline {_describe_exercise(params['exercise'])} "
+        f"{params['reps']}-rep test"
+    )
+    return name + _bare_suffix(0), steps
+
+
 _BUILDERS = {
     ("run", "intervals"): _run_intervals,
     ("run", "tempo"): _run_tempo,
@@ -957,6 +1213,8 @@ _BUILDERS = {
     ("swim", "baseline"): _swim_baseline,
     ("cycle", "endurance"): _cycle_endurance,
     ("cycle", "long"): _cycle_long,
+    ("strength", "straight_sets"): _strength_straight_sets,
+    ("strength", "baseline"): _strength_baseline,
 }
 
 
@@ -969,6 +1227,12 @@ def _estimate_seconds(steps: list[dict], sport: str) -> float:
             )
         elif step["endCondition"]["conditionTypeKey"] == "time":
             total += step["endConditionValue"]
+        elif step["endCondition"]["conditionTypeKey"] == "reps":
+            total += step["endConditionValue"] * _FALLBACK_SECONDS_PER_REP
+        elif step["endCondition"]["conditionTypeKey"] == "lap.button":
+            # Only a strength rest ends this way today, and it has no duration
+            # to read; the alternative is counting it as free.
+            total += _FALLBACK_REST_SECONDS
         else:  # distance: estimate via the pace target's midpoint if present
             if step.get("targetType", {}).get("workoutTargetTypeKey") == "pace.zone":
                 speed = (step["targetValueOne"] + step["targetValueTwo"]) / 2
@@ -1045,14 +1309,31 @@ def _describe_target(step: dict, sport: str) -> str:
 
 
 def _describe_extent(step: dict) -> str:
-    if step["endCondition"]["conditionTypeKey"] == "time":
+    condition = step["endCondition"]["conditionTypeKey"]
+    if condition == "time":
         return _format_mmss(step["endConditionValue"])
+    if condition == "reps":
+        return f"{round(step['endConditionValue'])} reps"
+    if condition == "lap.button":
+        return "until lap"
     return _format_meters(step["endConditionValue"])
+
+
+def _describe_load(step: dict) -> str:
+    """The lifting counterpart to _describe_target: weight rides on the step
+    itself rather than in a target zone (see _weight_fields)."""
+    weight = step.get("weightValue")
+    return f" @ {weight:g}kg" if weight else ""
 
 
 def _describe_step(step: dict, sport: str) -> str:
     kind = step["stepType"]["stepTypeKey"]
-    body = _describe_extent(step) + _describe_target(step, sport)
+    body = _describe_extent(step) + _describe_target(step, sport) + _describe_load(step)
+    # A lift's step names the exercise; a strength warmup's CARDIO category is
+    # the absence of one, and reads as noise next to "Warmup 10:00".
+    category = step.get("category")
+    if category and category != "CARDIO":
+        body = f"{_describe_exercise(category.lower()).capitalize()} {body}"
     if kind in ("warmup", "cooldown"):
         return f"{kind.capitalize()} {body}"
     if kind in ("recovery", "rest"):
@@ -1377,10 +1658,15 @@ def recommend_defaults(
             else:
                 recs["target_watts"] = {"default": watts, "why": why}
 
+    # Build-by-one is an *interval* progression: add a rep to the set of reps.
+    # Straight sets progress by load instead — 3x10 stays 3x10 and the bar gets
+    # heavier — so recommending an eleventh rep there would be wrong training
+    # advice, not just an inapplicable default.
     same_type = [
         p
         for p in previous_plans
-        if p.get("sport") == sport
+        if sport != "strength"
+        and p.get("sport") == sport
         and p.get("workout_type") == workout_type
         and isinstance(p.get("params", {}).get("reps"), int)
     ]

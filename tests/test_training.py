@@ -204,8 +204,13 @@ def test_every_goal_keeps_its_scaled_params_inside_the_clamps(goal):
             for s in template["weekly_sessions"]
             if (s["sport"], s["session_type"])
             == (session["sport"], session["session_type"])
+            and s["scale"]
         ]
-        assert candidates
+        # Strength sessions carry no scale at all: their progression is the
+        # weight on the bar, so there is no size to clamp.
+        if not candidates:
+            assert session["sport"] == "strength"
+            continue
         assert any(
             scale["min"] <= session["params"][scale["param"]] <= scale["max"]
             for scale in candidates
@@ -216,8 +221,14 @@ def test_every_goal_keeps_its_scaled_params_inside_the_clamps(goal):
 def test_targets_cover_exactly_the_sports_the_goal_trains(goal):
     plan = _plan(f"goal: {goal}\nevent_date: 2027-03-14\n")
     expected = {
-        training._SPORT_TARGETS[sport][0] for sport in training.template_sports(goal)
+        training._SPORT_TARGETS[sport][0]
+        for sport in training.template_sports(goal)
+        if sport in training._SPORT_TARGETS
     }
+    # Strength sits under its own key: one figure per lift, not one per sport.
+    if training.template_lifts(goal):
+        expected.add("strength")
+        assert set(plan["targets"]["strength"]) == set(training.template_lifts(goal))
     assert set(plan["targets"]) - {"why"} == expected
 
 
@@ -252,7 +263,10 @@ def test_trimming_the_week_keeps_every_discipline(goal, days_per_week):
         f"days_per_week: {days_per_week}\nextras: {{}}\n"
     )
     week_two = [s for s in plan["sessions"] if s["week"] == 2]
-    assert {s["sport"] for s in week_two} == {"run", "cycle", "swim"}
+    # Every endurance discipline survives the trim. Strength may or may not:
+    # it is ranked last precisely so the gym goes before a discipline does.
+    assert {"run", "cycle", "swim"} <= {s["sport"] for s in week_two}
+    assert {s["sport"] for s in week_two} <= {"run", "cycle", "swim", "strength"}
     training_days = {s["date"] for s in week_two}
     assert len(training_days) <= days_per_week
 
@@ -567,6 +581,10 @@ def test_doubling_a_plans_length_does_not_pin_it_at_its_clamps(goal):
         total += 1
         if session["params"][scale["param"]] == scale["max"]:
             pinned += 1
+    if not total:
+        # strength_program scales nothing — load is its whole progression.
+        assert not training.volume_sports(goal)
+        return
     assert pinned / total < 0.25
 
 
@@ -653,6 +671,9 @@ def test_scaled_params_keep_headroom_inside_their_clamps(goal):
         total += 1
         if session["params"][scale["param"]] == scale["max"]:
             at_max += 1
+    if not total:
+        assert not training.volume_sports(goal)
+        return
     assert at_max / total <= 0.10, f"{goal}: {at_max}/{total} sessions pinned at max"
 
 
@@ -811,7 +832,7 @@ def test_benchmarks_take_turns_between_a_multisport_goals_disciplines():
     while another is waiting — the rotation picks whichever has gone longest."""
     plan = _at_length("standard_triathlon", 22, "days_per_week: [3, 5]\n")
     sports = [s["sport"] for s in _benchmarks(plan)]
-    assert set(sports) == {"run", "cycle", "swim"}
+    assert set(sports) == {"run", "cycle", "swim", "strength"}
     assert all(a != b for a, b in zip(sports, sports[1:]))
 
 
@@ -1033,3 +1054,143 @@ def test_an_implausible_derivation_falls_back_with_a_reason():
     targets = training.derive_targets(spec, swims, REFERENCE)
     low, high = planner.PLAUSIBLE_TARGETS["swim"]
     assert low <= targets["swim_css_100m"] <= high
+
+
+# --- strength progression ------------------------------------------------------
+
+
+STRENGTH = "goal: strength_program\nevent_date: 2027-06-13\n"
+
+
+def _lifted(date_iso, exercise, reps, weight_kg):
+    return {
+        "type": "strength",
+        "date": date_iso,
+        "duration_seconds": 2700,
+        "exercises": [
+            {"name": exercise, "sets": [{"reps": reps, "weight_kg": weight_kg}]}
+        ],
+    }
+
+
+def test_strength_weekly_e1rm_advances_only_on_build_weeks():
+    roles = ["build", "build", "recover", "build", "taper"]
+    weekly = training.strength_weekly_e1rm(100.0, 120.0, roles, 2.5)
+    # First build week sits at the current figure; later ones add a step.
+    assert weekly[0] == 100.0
+    assert weekly[1] == 102.5
+    # A deload dips without advancing: the week after resumes from 102.5.
+    assert weekly[2] == pytest.approx(102.5 * training.STRENGTH_DELOAD_FACTOR)
+    assert weekly[3] == 105.0
+    assert weekly[4] == pytest.approx(105.0 * training.STRENGTH_TAPER_FACTOR)
+
+
+def test_a_goal_further_off_than_the_plan_is_long_is_capped_and_warned():
+    """Better to say the timeline doesn't reach than to prescribe a curve
+    nobody could ride."""
+    plan = _plan(STRENGTH + "targets: {deadlift_goal_kg: 300}\n")
+    entry = plan["targets"]["strength"]["deadlift"]
+    increment = training.lift_increment("deadlift")
+    # Only build weeks advance, so they are the ones the cap applies to — a
+    # deload week dips and the week after resumes, which is not a step.
+    roles = training.plan_week_roles(plan)
+    build = [v for v, role in zip(entry["by_week"], roles) if role == "build"]
+    steps = [b - a for a, b in zip(build, build[1:])]
+    assert max(steps) <= increment + 0.01
+    assert entry["by_week"][-1] < 300
+    assert any("deadlift" in w for w in plan["warnings"])
+
+
+def test_an_underived_goal_is_what_the_plans_length_can_deliver():
+    plan = _plan(STRENGTH)
+    for lift, entry in plan["targets"]["strength"].items():
+        roles = training.plan_week_roles(plan)
+        assert entry["goal_e1rm_kg"] == pytest.approx(
+            training.reachable_e1rm(
+                entry["current_e1rm_kg"], roles, training.lift_increment(lift)
+            ),
+            abs=0.01,
+        )
+        # Derived, so it can never trip its own warning.
+        assert not plan["warnings"]
+
+
+def test_working_weight_round_trips_through_the_e1rm_formula():
+    """The PB table and the plan must agree about the same set — both go
+    through compute.estimated_1rm, one of them backwards."""
+    from fit import compute
+
+    for reps in (3, 5, 8, 10):
+        e1rm = compute.estimated_1rm(100.0, reps)
+        assert training.working_weight_from_1rm(e1rm, reps, 2.5) == 100.0
+
+
+def test_each_week_gets_its_own_exercise_dicts():
+    """A shallow copy of the template's params would have every week sharing
+    one exercise list, and the last week written would win everywhere."""
+    plan = _plan(STRENGTH)
+    loads = {
+        s["week"]: s["params"]["exercises"][0]["target_weight_kg"]
+        for s in plan["sessions"]
+        if s["sport"] == "strength" and not s.get("is_benchmark")
+    }
+    assert len(set(loads.values())) > 1
+
+
+def test_retargeting_strength_moves_load_but_never_sets_or_reps():
+    plan = _plan(STRENGTH)
+    before = [
+        (s["params"]["exercises"][0]["sets"], s["params"]["exercises"][0]["reps"])
+        for s in plan["sessions"]
+        if s["sport"] == "strength" and not s.get("is_benchmark")
+    ]
+    stronger = [_lifted("2026-08-20", lift, 3, 150.0) for lift in ("squat", "deadlift")]
+    targets = training.derive_targets(plan["spec"], stronger, REFERENCE)
+    summary = training.retarget_sessions(plan, targets, date(2026, 1, 1))
+
+    assert summary["retargeted"] > 0
+    after = [
+        (s["params"]["exercises"][0]["sets"], s["params"]["exercises"][0]["reps"])
+        for s in plan["sessions"]
+        if s["sport"] == "strength" and not s.get("is_benchmark")
+    ]
+    assert after == before
+
+
+def test_retargeting_keeps_an_explicit_goal_but_re_derives_an_implicit_one():
+    """A re-test tells you where you are, not where you were going."""
+    plan = _plan(STRENGTH + "targets: {deadlift_goal_kg: 200}\n")
+    old_squat_goal = plan["targets"]["strength"]["squat"]["goal_e1rm_kg"]
+    stronger = [_lifted("2026-08-20", "squat", 3, 150.0)]
+    targets = training.derive_targets(plan["spec"], stronger, REFERENCE)
+    training.retarget_sessions(plan, targets, date(2026, 1, 1))
+
+    assert plan["targets"]["strength"]["deadlift"]["goal_e1rm_kg"] == 200
+    assert plan["targets"]["strength"]["squat"]["goal_e1rm_kg"] > old_squat_goal
+
+
+def test_a_strength_benchmark_tests_the_lift_its_session_leads_with():
+    plan = _plan(STRENGTH)
+    tests = [s for s in plan["sessions"] if s.get("is_benchmark")]
+    assert tests
+    for session in tests:
+        assert session["sport"] == "strength"
+        assert session["params"]["exercise"] in training.template_lifts(
+            "strength_program"
+        )
+        # Untargeted: a test at a prescribed load is not a test.
+        assert "target_weight_kg" not in session["params"]
+
+
+def test_strength_volume_is_not_measured_against_endurance_history():
+    """A strength session's size never moves, so counting it would scale a
+    triathlete down for gym work the plan can't adjust anyway."""
+    assert "strength" not in training.volume_sports("sprint_triathlon")
+    assert training.volume_sports("strength_program") == set()
+
+
+def test_a_lift_goal_for_a_goal_that_never_lifts_is_rejected():
+    with pytest.raises(ValueError):
+        training.parse_plan_spec(
+            "goal: run_5k\nevent_date: 2027-03-14\ntargets: {squat_goal_kg: 120}\n"
+        )

@@ -374,13 +374,54 @@ def _prompt_params(specs: list[dict]) -> dict:
     return params
 
 
+def _prompt_optional_value(spec: dict, default: str):
+    """One prompt that may be answered blank, returning None when it is —
+    which is how a repeated group knows the user has finished adding."""
+    while True:
+        raw = str(typer.prompt(spec["label"], default=default)).strip()
+        if not raw:
+            return None
+        try:
+            return spec["parse"](raw)
+        except ValueError as exc:
+            typer.echo(f"invalid value: {exc}", err=True)
+
+
+def _prompt_repeated_params(specs: list[dict]) -> list[dict]:
+    """Prompt one whole group of specs at a time, appending each answered
+    group to a list, until the first field is left blank. `fit plan --sport
+    strength` is the only caller — a gym session is several exercises, not one
+    flat answer per prompt — and planner.repeated_param_specs is what says so,
+    so this never names the combo itself."""
+    first, rest = specs[0], specs[1:]
+    entries: list[dict] = []
+    while True:
+        value = _prompt_optional_value(
+            (
+                first
+                if not entries
+                else {**first, "label": f"{first['label']}, or blank to finish"}
+            ),
+            str(first["default"]) if not entries else "",
+        )
+        if value is None:
+            if entries:
+                return entries
+            typer.echo("at least one is needed", err=True)
+            continue
+        entries.append({first["key"]: value, **_prompt_params(rest)})
+
+
 @app.command()
 def plan(
-    sport: str = typer.Option(..., "--sport", help="run | swim | cycle"),
+    sport: str = typer.Option(..., "--sport", help="run | swim | cycle | strength"),
     type: str = typer.Option(
         ...,
         "--type",
-        help="intervals | tempo | hills | baseline (availability varies by sport)",
+        help=(
+            "intervals | tempo | hills | baseline | straight_sets "
+            "(availability varies by sport)"
+        ),
     ),
     push: bool = typer.Option(
         True, "--push/--no-push", help="Push to Garmin Connect after saving locally"
@@ -426,6 +467,9 @@ def plan(
     display.render_plan_recommendations(recs)
 
     params = _prompt_params(specs)
+    repeated_key, repeated_specs = planner.repeated_param_specs(sport, type)
+    if repeated_key:
+        params[repeated_key] = _prompt_repeated_params(repeated_specs)
     created = datetime.now().isoformat(timespec="seconds")
     plan_dict = planner.build_plan(sport, type, params, created)
     storage.write_plan(plan_dict)

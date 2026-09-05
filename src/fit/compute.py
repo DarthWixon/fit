@@ -59,7 +59,10 @@ SPLIT_DISTANCES_KM = {
 # SPEED_TYPES. hike and squash are single flat values, not banded by pace/speed —
 # hike because trail pace is a poor intensity signal given terrain/elevation
 # variance; squash because it has no meaningful distance/pace at all (an
-# indoor court sport with no GPS track — see NO_DISTANCE_TYPES below). Any
+# indoor court sport with no GPS track — see NO_DISTANCE_TYPES below);
+# strength because a gym session has no distance to band on and its intensity
+# lives in the weight on the bar, not in how far anything moved. 6.0 is the
+# Compendium's figure for vigorous free-weight training. Any
 # activity_type whose MET_TABLE value is a plain int/float rather than a list
 # of bands is treated as flat by met_for_activity. squash's 12.0 approximates
 # the Compendium of Physical Activities' "squash, general" figure — one of
@@ -73,6 +76,7 @@ MET_TABLE = {
     "canoe": [(11.0, 12.5), (7.0, 5.8), (0, 2.8)],
     "hike": 6.0,
     "squash": 12.0,
+    "strength": 6.0,
 }
 
 # Used when duration_seconds is present but distance_km is 0/missing (e.g. an
@@ -104,8 +108,11 @@ _EWMA_WINDOW_DAYS = 42  # Coggan's CTL/"Fitness" smoothing window
 # distance. calc_pace and _candidate_pbs (_longest_distance_pb specifically)
 # both check this set so a pace string / "longest distance" PB is never
 # fabricated from that noise. Extend for any future indoor/court-sport type
-# with the same characteristic.
-NO_DISTANCE_TYPES = {"squash"}
+# with the same characteristic. Strength is here for a different reason: a gym
+# session has no distance field at all, so there is nothing to suppress -- but
+# the set keeps calc_pace and the display's distance column honest if one ever
+# arrives (a treadmill-tagged session, a hand-written file).
+NO_DISTANCE_TYPES = {"squash", "strength"}
 
 # Activity types shown as speed (km/h) rather than pace (min/km). Cycling effort
 # is conventionally read as speed; hiking is slow and gradient-driven, so a
@@ -574,6 +581,94 @@ def _elevation_pb(activities: list[dict]) -> dict:
     }
 
 
+def estimated_1rm(weight_kg: float, reps: int) -> float:
+    """Epley one-rep-max estimate for a single set, rounded to 0.1kg.
+
+    The single source of truth for e1RM: strength PBs here and the target
+    derivation `fit train` uses both read it, so a plan can never be built
+    against a different number than the one the PB table shows.
+
+    A single rep is returned as-is rather than through the formula, which
+    would otherwise claim a 1RM 3% above a lift actually performed. Anything
+    non-positive is 0.0 -- a bodyweight or unrecorded set is not an e1RM."""
+    if weight_kg <= 0 or reps <= 0:
+        return 0.0
+    if reps == 1:
+        return round(float(weight_kg), 1)
+    return round(weight_kg * (1 + reps / 30), 1)
+
+
+def total_weight_lifted(activity: dict) -> float:
+    """Tonnage: every rep of every set multiplied by what was on the bar, in
+    kilograms. 0.0 for anything with no weighted sets.
+
+    The one figure that says what a whole gym session actually was, in the way
+    distance says it for a run: two sessions of the same length are not the
+    same work, and unlike the heaviest set it moves with sets and reps as well
+    as load — so it registers a week where the plan added volume, not only one
+    where it added weight."""
+    total = 0.0
+    for exercise in activity.get("exercises", []) or []:
+        for one_set in exercise.get("sets", []) or []:
+            weight = one_set.get("weight_kg") or 0
+            reps = one_set.get("reps") or 0
+            if weight > 0 and reps > 0:
+                total += weight * reps
+    return total
+
+
+def _strength_pbs(activities: list[dict]) -> dict:
+    """PBs for the strength type, keyed by exercise name rather than by
+    distance/time label -- which is why this sits outside _candidate_pbs
+    rather than alongside its four helpers.
+
+        {"deadlift": {"heaviest_set_kg": 120.0, "heaviest_set_date": "...",
+                      "best_e1rm_kg": 133.3, "best_e1rm_date": "..."}, ...}
+
+    Heaviest set and best e1RM are tracked independently: a heavy triple and a
+    lighter set of ten are different achievements, and either can be the more
+    recent one. Sets with no positive weight (bodyweight work, an unrecorded
+    load) contribute to neither. Ties keep the first activity seen, so the
+    result is deterministic for a given input order."""
+    result: dict[str, dict] = {}
+    for activity in activities:
+        activity_date = activity.get("date")
+        for exercise in activity.get("exercises", []) or []:
+            name = exercise.get("name")
+            if not name:
+                continue
+            best = result.setdefault(name, {})
+            for one_set in exercise.get("sets", []) or []:
+                weight = one_set.get("weight_kg") or 0
+                reps = one_set.get("reps") or 0
+                if weight <= 0 or reps <= 0:
+                    continue
+                if weight > best.get("heaviest_set_kg", 0):
+                    best["heaviest_set_kg"] = weight
+                    best["heaviest_set_date"] = activity_date
+                e1rm = estimated_1rm(weight, reps)
+                if e1rm > best.get("best_e1rm_kg", 0):
+                    best["best_e1rm_kg"] = e1rm
+                    best["best_e1rm_date"] = activity_date
+    # An exercise whose every set was unweighted leaves an empty dict behind.
+    return {name: best for name, best in result.items() if best}
+
+
+def _strength_new_pbs(new_activity: dict, existing: dict) -> list[dict]:
+    """detect_new_pbs' strength path. Keys are flattened to
+    "{exercise}_heaviest_set_kg" / "{exercise}_best_e1rm_kg" so the returned
+    entries keep the same {"key", "value"} shape every other PB category uses
+    -- pbs.json itself stays nested per exercise (see _strength_pbs)."""
+    broken = []
+    for name, candidate in _strength_pbs([new_activity]).items():
+        current = existing.get(name, {})
+        for metric in ("heaviest_set_kg", "best_e1rm_kg"):
+            value = candidate.get(metric)
+            if value is not None and value > current.get(metric, 0):
+                broken.append({"key": f"{name}_{metric}", "value": value})
+    return broken
+
+
 def _candidate_pbs(activities: list[dict], activity_type: str) -> dict:
     """Compute the best-of values for one type across a set of activities."""
     result: dict = {}
@@ -633,7 +728,11 @@ def all_personal_bests(activities: list[dict]) -> dict:
         by_type.setdefault(activity.get("type", "unknown"), []).append(activity)
 
     return {
-        activity_type: _candidate_pbs(type_activities, activity_type)
+        activity_type: (
+            _strength_pbs(type_activities)
+            if activity_type == "strength"
+            else _candidate_pbs(type_activities, activity_type)
+        )
         for activity_type, type_activities in by_type.items()
     }
 
@@ -646,8 +745,10 @@ def detect_new_pbs(new_activity: dict, current_pbs: dict) -> list[dict]:
     new_activity broke, compared against current_pbs — no message formatting;
     see display.render_new_pb_messages for turning these into readable text."""
     activity_type = new_activity.get("type", "unknown")
-    candidate = _candidate_pbs([new_activity], activity_type)
     existing = current_pbs.get(activity_type, {})
+    if activity_type == "strength":
+        return _strength_new_pbs(new_activity, existing)
+    candidate = _candidate_pbs([new_activity], activity_type)
 
     broken = []
     for key, value in candidate.items():

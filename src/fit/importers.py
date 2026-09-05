@@ -56,6 +56,30 @@ FIT_SPORT_CODE_MAP = {
     41: "canoe",
 }
 
+# A gym session is not a distinct FIT `sport`: it arrives as sport 10
+# ("training") with sub_sport 20 ("strength_training"), both of which
+# fitparse==1.2.0's profile does decode to names. Keyed on the sub_sport
+# because that is the specific half -- sport 10 alone also covers cardio and
+# flexibility training. The raw int is accepted alongside the decoded name for
+# the same reason FIT_SPORT_CODE_MAP exists: a profile that stops decoding it
+# should not silently reclassify a gym session as a run.
+FIT_STRENGTH_SUB_SPORTS = {"strength_training", 20}
+
+# Deliberately no FIT_EXERCISE_CATEGORY_MAP. Unlike the sport codes above,
+# fitparse's bundled profile decodes the `set` message's `category` field to a
+# name already, and its exercise_category enum covers everything in scope
+# (bench_press=0, deadlift=8, shoulder_press=24, squat=28) plus an explicit
+# unknown=65534. There is no gap to paper over, so adding a map would only
+# create a second, staler source of truth. A category that arrives as a bare
+# int (a future firmware's addition) is named "unknown_<int>" rather than
+# dropped -- see _fit_exercise_name.
+#
+# `category_subtype` is the undecoded one (a uint16 indexing per-category
+# <category>_exercise_name enums, e.g. squat_exercise_name 2 = back_squats).
+# It is deliberately ignored for now: PBs key on the category, so a front
+# squat and a back squat share a line. Add the lookup, keyed by
+# (category, category_subtype), if that distinction turns out to matter.
+
 # Deliberately no "squash" entry: no Strava CSV/bulk-export fixture exists to
 # confirm the exact raw_type string Strava uses for squash (if any), and
 # guessing risks silently mismapping real data. An unmapped raw_type is
@@ -425,6 +449,62 @@ def import_tcx(path: str, max_heart_rate: int = 0) -> dict:
 # --- FIT ------------------------------------------------------------------------------
 
 
+def _fit_exercise_name(category) -> str:
+    """One exercise name from a `set` message's category field.
+
+    fitparse decodes known categories to a name already (see the note by
+    FIT_STRENGTH_SUB_SPORTS). The FIT profile defines category as an array, so
+    a list is unwrapped to its first entry. Anything that arrives as a bare int
+    is named "unknown_<int>" -- kept rather than dropped, so the session's real
+    volume survives, and kept distinct per code so two unmapped exercises don't
+    merge into one PB line."""
+    if isinstance(category, (list, tuple)):
+        category = category[0] if category else None
+    if isinstance(category, str):
+        return category.lower()
+    if isinstance(category, int):
+        return f"unknown_{category}"
+    return "unknown"
+
+
+def _parse_fit_sets(fit_file) -> list[dict]:
+    """The `exercises` list for a strength activity, read from the FIT file's
+    `set` messages -- the strength counterpart to the point stream every other
+    sport builds.
+
+    Rest sets are dropped (set_type "rest"); only the active ones are work.
+    Consecutive sets of the same exercise group into one entry, which is what a
+    straight-sets session looks like; alternating them (a superset) just
+    produces repeated entries, and compute._strength_pbs merges by name anyway.
+    A set with neither reps nor weight carries nothing and is skipped; weight
+    arrives from fitparse already scaled to kilograms."""
+    exercises: list[dict] = []
+    for message in fit_file.get_messages("set"):
+        fields = {field.name: field.value for field in message}
+
+        set_type = fields.get("set_type")
+        if set_type not in ("active", 1):
+            continue
+
+        reps = fields.get("repetitions")
+        weight = fields.get("weight")
+        if reps is None and weight is None:
+            continue
+
+        one_set: dict = {}
+        if reps is not None:
+            one_set["reps"] = int(reps)
+        if weight is not None:
+            one_set["weight_kg"] = round(float(weight), 2)
+
+        name = _fit_exercise_name(fields.get("category"))
+        if exercises and exercises[-1]["name"] == name:
+            exercises[-1]["sets"].append(one_set)
+        else:
+            exercises.append({"name": name, "sets": [one_set]})
+    return exercises
+
+
 def import_fit(path: str, max_heart_rate: int = 0) -> dict:
     from fitparse import FitFile
 
@@ -441,7 +521,11 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
         raise ValueError(f"no start_time found in {path}")
 
     raw_sport = fields.get("sport")
-    if isinstance(raw_sport, str):
+    if fields.get("sub_sport") in FIT_STRENGTH_SUB_SPORTS:
+        # Checked before the sport map: a gym session's own sport value is
+        # "training", which that map doesn't carry and would default to "run".
+        activity_type = "strength"
+    elif isinstance(raw_sport, str):
         activity_type = FIT_SPORT_MAP.get(raw_sport.lower(), "run")
     else:
         # fitparse couldn't decode this enum value to a name (see
@@ -474,9 +558,15 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
         record_power = record_fields.get("power")
         # Distance is no longer required: an indoor ride may report power and
         # heart rate with none at all, and dropping those records would lose
-        # the FTP signal entirely. _compute_splits filters for what it needs.
+        # the FTP signal entirely. Heart rate alone is enough to keep a record
+        # too -- a strength session reports neither distance nor power, and
+        # dropping its records would leave hr_zones permanently empty for the
+        # one sport whose whole stream looks like that. _compute_splits and
+        # best_power_window each filter for what they need.
         if record_timestamp is None or (
-            record_distance_m is None and record_power is None
+            record_distance_m is None
+            and record_power is None
+            and record_fields.get("heart_rate") is None
         ):
             continue
         points.append(
@@ -489,6 +579,16 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
                 "power": record_power,
             }
         )
+
+    if activity_type == "strength":
+        # No splits and no power curve: there is no distance stream to slide a
+        # window over, and the effort lives in the weight on the bar. HR zones
+        # still apply -- a gym session with a chest strap has them like any
+        # other. distance_km stays whatever the session reported (usually 0);
+        # NO_DISTANCE_TYPES is what stops it being displayed, the same way
+        # squash's accelerometer noise is handled.
+        activity["exercises"] = _parse_fit_sets(fit_file)
+        return _attach_hr_zones(activity, points, max_heart_rate)
 
     activity = _attach_splits(activity, points)
     activity = _attach_best_power(activity, points)

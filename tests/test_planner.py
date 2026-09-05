@@ -629,3 +629,118 @@ def test_planning_a_baseline_by_hand_gives_the_same_test_the_plan_schedules(spor
     assert planner.workout_name(sport, "baseline", defaults) == planner.workout_name(
         sport, "baseline", training.BENCHMARK_SESSIONS[sport]["params"]
     )
+
+
+# --- strength -------------------------------------------------------------
+
+
+def _straight_sets_params(**overrides):
+    params = {
+        "warmup_minutes": 10,
+        "rest": 90,
+        "exercises": [
+            {"exercise": "deadlift", "sets": 3, "reps": 10, "target_weight_kg": 60.0},
+            {"exercise": "squat", "sets": 3, "reps": 10, "target_weight_kg": 50.0},
+        ],
+    }
+    params.update(overrides)
+    return params
+
+
+def _steps(sport, workout_type, params):
+    plan = planner.build_plan(sport, workout_type, params, "2026-09-05T10:00:00")
+    return plan["payload"]["workoutSegments"][0]["workoutSteps"]
+
+
+def test_straight_sets_payload_matches_the_live_schema():
+    """Field-for-field against the workout dumped from Connect on 2026-09-05
+    (docs/STRENGTH_PLAN.md Findings): one repeat group per exercise, reps as
+    the end condition, load on the step with targetType left no.target."""
+    steps = _steps("strength", "straight_sets", _straight_sets_params())
+
+    assert [s["stepOrder"] for s in steps] == [1, 2, 5]
+    warmup, first, second = steps
+    assert warmup["category"] == "CARDIO"
+    assert first["type"] == "RepeatGroupDTO"
+    assert first["numberOfIterations"] == 3
+
+    lift, rest = first["workoutSteps"]
+    assert lift["stepOrder"] == 3 and rest["stepOrder"] == 4
+    assert lift["category"] == "DEADLIFT"
+    assert lift["endCondition"]["conditionTypeKey"] == "reps"
+    assert lift["endConditionValue"] == 10.0
+    assert lift["weightValue"] == 60.0
+    assert lift["weightUnit"] == {
+        "unitId": 8,
+        "unitKey": "kilogram",
+        "factor": 1000.0,
+    }
+    # Weight is not a target — the live workout leaves this at no.target.
+    assert lift["targetType"]["workoutTargetTypeKey"] == "no.target"
+    assert rest["stepType"]["stepTypeKey"] == "rest"
+
+    # Numbering continues across groups rather than restarting per exercise.
+    assert [s["stepOrder"] for s in second["workoutSteps"]] == [6, 7]
+
+
+def test_straight_sets_omit_weight_when_none_given():
+    params = _straight_sets_params(
+        exercises=[{"exercise": "squat", "sets": 5, "reps": 5}]
+    )
+    lift = _steps("strength", "straight_sets", params)[1]["workoutSteps"][0]
+    assert "weightValue" not in lift
+    assert "weightUnit" not in lift
+
+
+def test_blank_rest_becomes_a_press_lap_step():
+    params = _straight_sets_params(rest=0)
+    rest = _steps("strength", "straight_sets", params)[1]["workoutSteps"][1]
+    assert rest["endCondition"]["conditionTypeKey"] == "lap.button"
+
+
+def test_strength_baseline_is_a_bare_untargeted_top_set():
+    steps = _steps("strength", "baseline", {"exercise": "deadlift", "reps": 3})
+    assert len(steps) == 1
+    assert steps[0]["category"] == "DEADLIFT"
+    assert "weightValue" not in steps[0]  # an e1RM test prescribes no load
+    assert planner.workout_name(
+        "strength", "baseline", {"exercise": "deadlift", "reps": 3}
+    ) == ("Strength baseline deadlift 3-rep test (warm up first)")
+
+
+def test_strength_estimate_counts_reps_and_rests():
+    params = _straight_sets_params(
+        warmup_minutes=0,
+        rest=60,
+        exercises=[{"exercise": "squat", "sets": 3, "reps": 10}],
+    )
+    # 3 x (10 reps x 4s + 60s rest)
+    assert planner.estimate_seconds("strength", "straight_sets", params) == 300
+    # A press-lap rest has no duration to read, so it falls back rather than
+    # counting as free — otherwise training.py would size the week too small.
+    assert planner.estimate_seconds(
+        "strength", "straight_sets", {**params, "rest": 0}
+    ) == 3 * (40 + planner._FALLBACK_REST_SECONDS)
+
+
+def test_parse_exercise_rejects_anything_outside_the_four_lifts():
+    assert planner.parse_exercise("Bench Press") == "bench_press"
+    assert planner.parse_exercise(" SQUAT ") == "squat"
+    with pytest.raises(ValueError):
+        planner.parse_exercise("bicep curl")
+
+
+def test_describe_plan_names_each_lift():
+    plan = planner.build_plan(
+        "strength", "straight_sets", _straight_sets_params(), "2026-09-05T10:00:00"
+    )
+    assert planner.describe_plan(plan) == [
+        "Warmup 10:00",
+        "3 x Deadlift 10 reps @ 60kg, 1:30 rest",
+        "3 x Squat 10 reps @ 50kg, 1:30 rest",
+    ]
+
+
+def test_only_straight_sets_prompts_repeat():
+    assert planner.repeated_param_specs("strength", "straight_sets")[0] == "exercises"
+    assert planner.repeated_param_specs("run", "intervals") == ("", [])
