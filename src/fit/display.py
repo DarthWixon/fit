@@ -69,7 +69,12 @@ def render_sparkline(data: list[float], label: str, partial_last: bool = False) 
 
 
 def _format_effort(activity: dict) -> str:
-    """Average power for cycle activities that have it, else pace."""
+    """Total weight lifted for a gym session, average power for a ride that
+    has it, else pace. The column is whatever best says how hard the session
+    was in that sport's own terms."""
+    if activity.get("type") == "strength":
+        tonnage = compute.total_weight_lifted(activity)
+        return f"{tonnage:,.0f}kg" if tonnage else "—"
     if activity.get("type") == "cycle" and activity.get("avg_power") is not None:
         return f"{round(activity['avg_power'])}W avg"
     distance_km = activity.get("distance_km", 0) or 0
@@ -114,7 +119,9 @@ def render_history_table(activities: list[dict], n: int) -> None:
     table.add_column("Type")
     table.add_column("Distance", justify="right")
     table.add_column("Duration", justify="right")
-    table.add_column("Pace", justify="right")
+    # "Effort", not "Pace": the column holds whichever measure means something
+    # for that sport — pace, average power, or tonnage (see _format_effort).
+    table.add_column("Effort", justify="right")
     table.add_column("HR Zones", justify="left")
 
     for activity in recent:
@@ -584,14 +591,31 @@ def _format_target_value(key: str, value) -> str:
     return f"{value}W"
 
 
+def _format_lift_target(lift: str, entry: dict) -> str:
+    """'Squat 105 → 122.5kg' — a strength target is a journey, not a figure,
+    so both ends are shown."""
+    name = lift.replace("_", " ").capitalize()
+    return (
+        f"{name} {entry['current_e1rm_kg']:g} → {entry['goal_e1rm_kg']:g}kg"
+        if entry.get("goal_e1rm_kg") is not None
+        else f"{name} {entry['current_e1rm_kg']:g}kg"
+    )
+
+
 def _format_targets(targets: dict) -> str:
     """'Run 5k 22:30 · Swim CSS 1:45/100m · Bike FTP 245W' from
-    training.derive_targets' dict."""
-    return " · ".join(
+    training.derive_targets' dict. Strength lifts are appended in the same
+    run, each as a current → goal e1RM pair."""
+    parts = [
         f"{label} {_format_target_value(key, targets[key])}"
         for key, (label, _) in _TARGET_LABELS.items()
         if targets.get(key) is not None
+    ]
+    parts.extend(
+        _format_lift_target(lift, entry)
+        for lift, entry in (targets.get("strength") or {}).items()
     )
+    return " · ".join(parts)
 
 
 def render_training_plan(summary: dict, weeks: list[dict]) -> None:
@@ -714,8 +738,18 @@ def render_training_retargeted(summary: dict, dry_run: bool = False) -> None:
         for key, _ in _TARGET_LABELS.items()
         if new.get(key) is not None and old.get(key) != new.get(key)
     ]
+    # A lift moves when its measured starting point does — the goal is where
+    # the plan was always aiming, so quoting that as the change would hide the
+    # only thing a re-test actually told you.
+    old_lifts, new_lifts = old.get("strength") or {}, new.get("strength") or {}
+    moved_lifts = [
+        lift
+        for lift, entry in new_lifts.items()
+        if (old_lifts.get(lift) or {}).get("current_e1rm_kg")
+        != entry.get("current_e1rm_kg")
+    ]
 
-    if not moved:
+    if not moved and not moved_lifts:
         console.print(
             "Targets unchanged — nothing to rewrite. "
             "[dim]Your latest history derives the same numbers the plan already has.[/dim]"
@@ -739,6 +773,18 @@ def render_training_retargeted(summary: dict, dry_run: bool = False) -> None:
             f"  [bold]{label}[/bold] {was} → {_format_target_value(key, new[key])}"
         )
         why = (new.get("why") or {}).get(key)
+        if why:
+            console.print(f"    [dim]{why}[/dim]")
+
+    for lift in moved_lifts:
+        was = (old_lifts.get(lift) or {}).get("current_e1rm_kg")
+        console.print(
+            f"  [bold]{lift.replace('_', ' ').capitalize()}[/bold] "
+            f"{f'{was:g}kg' if was is not None else 'not set'} → "
+            f"{new_lifts[lift]['current_e1rm_kg']:g}kg e1RM, "
+            f"aiming at {new_lifts[lift]['goal_e1rm_kg']:g}kg"
+        )
+        why = (new.get("why") or {}).get(f"{lift}_e1rm_kg")
         if why:
             console.print(f"    [dim]{why}[/dim]")
 

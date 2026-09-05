@@ -258,6 +258,11 @@ Key functions:
   [3, 5, 12]}, ...]`. `weeks` comes from stdlib `calendar.monthcalendar`
   (Monday-first rows, 0 = padding cell); grid layout lives here so
   `display.render_calendar` stays computation-free. Powers `fit calendar`
+- `total_weight_lifted(activity: dict) -> float` — tonnage: every rep of every
+  set times what was on the bar. The one figure that says what a whole gym
+  session was, the way distance does for a run — and unlike the heaviest set it
+  moves with sets and reps as well as load, so a week that added volume shows
+  up too. Unweighted sets contribute nothing
 - `best_power_window(points: list[dict], window_seconds: int) -> int | None` —
   highest average power sustained over any window of that length in one
   activity's point stream; the time-axis counterpart to `fastest_split`'s
@@ -378,9 +383,12 @@ Key functions:
   capped to the last `config["dashboard_weeks"]` weeks (0 = all) so long
   history doesn't wrap over multiple lines; the cap is skipped when
   `--timerange` (a truthy `window_label`) is already driving the window.
-- `render_history_table(activities: list[dict], n: int) -> None` — "Pace" column
-  uses `_format_effort()`, which shows `avg_power` ("187W avg") for cycle
-  activities that have it, falling back to `compute.calc_pace()` otherwise.
+- `render_history_table(activities: list[dict], n: int) -> None` — the "Effort"
+  column uses `_format_effort()`, which shows total weight lifted ("5,880kg", via
+  `compute.total_weight_lifted`) for strength, `avg_power` ("187W avg") for
+  cycle activities that have it, and falls back to `compute.calc_pace()`
+  otherwise — whatever says how hard the session was in that sport's own
+  terms.
   "Distance" uses `_format_distance()`, showing `"—"` for any
   `compute.NO_DISTANCE_TYPES` member instead of a meaningless value, same as
   "Pace" already does. "HR Zones" uses `_format_hr_zones()`, a segmented
@@ -677,7 +685,29 @@ Key functions:
   phase_by_week, build_recover) -> float` / `_week_roles(...)` — the
   length-independent ramp; see "Plan length"
 - `template_sports(goal) -> set` — the sports a goal's session mix uses; scopes
-  both target derivation and the volume measurement
+  target derivation
+- `volume_sports(goal) -> set` — the sports whose volume the plan can actually
+  *scale*, i.e. every sport except strength (whose sessions carry no `scale`).
+  What the volume measurement uses, so a triathlete who does no gym work isn't
+  scaled down for it
+- `template_lifts(goal) -> list` — the barbell lifts a goal prescribes, in
+  first-appearance order; the strength counterpart to `template_sports`
+- `derive_lift_1rm(recent, exercise)` / `derive_lift_target(recent, exercise)` —
+  the raw e1RM measurement and its plausibility-guarded front door, mirroring
+  `planner.derive_run_5k` / `planner.derive_target`. A separate guard rather
+  than an entry in `PLAUSIBLE_TARGETS` because strength needs one bound per
+  lift, not one per sport
+- `strength_weekly_e1rm(current, goal, roles, increment) -> list[float]` — the
+  per-week e1RM path; mirrors `_week_multipliers`' shape so the two
+  progressions can't disagree about which weeks advance
+- `reachable_e1rm(current, roles, increment) -> float` — the most this plan's
+  length can honestly add, at one increment per build week. Both the derived
+  goal and the too-ambitious warning are measured against it
+- `working_weight_from_1rm(e1rm, reps, increment) -> float` —
+  `compute.estimated_1rm` read backwards, rounded to loadable plates
+- `plan_week_roles(plan) -> list[str]` — the week roles recovered from a stored
+  plan, so retargeting sits a rewritten session at the same point on the curve
+  expand_plan put it
 - `session_to_build_args(session) -> tuple[str, str, dict] | None` —
   `(sport, workout_type, params)` for `planner.build_plan`; `None` for extras
 - `match_completion(sessions, activities) -> list[dict]` — copies with
@@ -947,6 +977,12 @@ unmapped exercises merging into one PB line. `category_subtype` (front vs back
 squat) is deliberately ignored for now; it is an undecoded uint16 indexing
 per-category `<category>_exercise_name` enums, and adding it would change what
 PBs are keyed on.
+
+In the dashboard's recent-activity table, a gym session's effort column shows
+**tonnage** rather than the `"—"` a pace would be. It is the closest thing
+strength has to distance: two 45-minute sessions are not the same work, and
+because it counts reps and sets as well as load it registers a week where the
+plan grew rather than only one where the bar did.
 
 Splits and best-power are skipped for strength (there is no distance or power
 stream to sweep), but **HR zones are not**: the FIT record loop keeps records
@@ -1434,6 +1470,7 @@ targets:                      # optional per-sport overrides (else history-deriv
   run_5k: "24:00"
   bike_ftp: 250
   swim_css_100m: "1:45"
+  squat_goal_kg: 140          # per-lift goal e1RM; else derived from plan length
 progression:                  # optional overrides of template defaults
   build_recover: [3, 1]
   weekly_ramp_pct: 8          # optional; else solved from the plan's length
@@ -1507,6 +1544,11 @@ structure, and the weekly session mix. All eight goals are implemented:
 | `cycle_100k_sportive` | 12 | 5 | 5/3/2 | long + back-to-back endurance, threshold reps, hills |
 | `sprint_triathlon` | 12 | 6 | 4/4/2 | long ride + brick run, long run, swim/run/cycle quality, easy swim |
 | `standard_triathlon` | 16 | 6 | 6/5/3 | as sprint, longer, with tighter clamps |
+| `strength_program` | 12 | 3 | 4/4/2 | A/B/A barbell linear progression, no endurance work |
+
+Both triathlon goals also carry two supplementary `straight_sets` sessions,
+sharing the days their hard endurance work already occupies and ranked last so
+a trimmed week loses the gym before it loses a discipline.
 
 Phase lengths sum to `weeks - taper_weeks`. Two shapes are goal-specific rather
 than uniform: `run_half` ranks the tempo block *above* the interval session
@@ -1651,6 +1693,68 @@ recent training is well below where the goal needs to start. Warnings are
 returned, never printed — `display.render_training_plan` surfaces them, the same
 split `read_activities_with_warnings` uses.
 
+### Strength: the one intensity that is projected forward
+
+Every other sport in a plan holds intensity fixed and ramps volume, for the
+reason set out under "Benchmarks" below — prescribing a pace you might not
+have by week 10 prescribes work you cannot complete. **Strength inverts both
+axes**: volume is fixed (3x10 stays 3x10) and the *load* ramps, because that
+is what linear progression is, and because a weight that turns out to be too
+heavy is a failed rep rather than a failed session.
+
+That inversion is why strength sessions carry **no `scale`** (`_session`'s
+`scale` is `None` for them). Ramping sets or reps as well would be two
+progressions at once. It follows that:
+
+- `_week_seconds` counts only scaling sessions, and `volume_sports` excludes
+  strength — measuring the volume scale against training the multiplier can
+  never move would only bias it.
+- The clamp tests exempt unscaled sessions, the same way they exempt
+  benchmarks.
+
+**Targets are per lift, not per sport**, so strength stays out of
+`_SPORT_TARGETS`, `planner.PLAUSIBLE_TARGETS` and `planner.derive_target` —
+forcing it in would mean giving `derive_target` a float path and making the
+bounds per-exercise, changes to code all three cardio sports depend on. It
+lives under `targets["strength"]` instead:
+
+```python
+"strength": {"squat": {"current_e1rm_kg": 105.0, "goal_e1rm_kg": 122.5,
+                        "goal_from": "one 2.5kg step per build week — ...",
+                        "by_week": [105.0, 107.5, ..., 98.0]}}
+```
+
+- **`current` is measured** (`derive_lift_target`, else `FALLBACK_LIFT_E1RM_KG`).
+- **`goal` cannot be measured** — it is a decision about the future. A
+  description's `<lift>_goal_kg` wins; otherwise it defaults to
+  `reachable_e1rm`, i.e. what this plan's length delivers at one increment a
+  build week. Deriving it keeps strength inside the derive-or-fall-back rule
+  every other sport follows, so a plan expands with no `targets:` at all. An
+  explicit goal further off than the plan is long is **capped, and warned
+  about** in `plan["warnings"]` rather than quietly prescribed.
+- **`by_week` is the whole point**: intensity depends on the week, but
+  `_apply_target` is stateless by design, so the week structure is baked into a
+  table once (`_attach_weekly_lifts`) and `_apply_target` only indexes it with
+  the `week` the session already carries. `retarget_sessions` rebuilds the
+  table via `plan_week_roles`, since it is a function of the plan's length as
+  well as of the targets.
+
+`LIFT_INCREMENT_KG` serves two purposes deliberately: it is the plate step a
+working weight rounds to *and* the most a week may add — "add one increment a
+week" is the method. Deloads use `STRENGTH_DELOAD_FACTOR` (0.85), not
+`RECOVERY_FACTOR` (0.6): that is a volume cut, and 60% of a working weight
+stops being training.
+
+**Retargeting rewrites load, never sets or reps.** For a barbell, load *is*
+intensity — so this is consistent with "intensity only, never volume", not an
+exception to it. `_intensity_snapshot` extends the old `_INTENSITY_PARAMS`
+tuple comparison down one level into the exercises list, since a strength
+session's intensity is a list rather than a single param.
+
+**Per-session params must be deep-copied** (`_build_session`): a strength
+session's params hold a list of exercise dicts shared with the template, and a
+shallow copy would have week 12 writing its load into week 1.
+
 ### Benchmarks and why pace does not drift
 
 Intensity is measured, never projected. `derive_targets` runs once per plan and
@@ -1679,6 +1783,12 @@ defines a re-test per sport, and each one's *shape* follows a single rule:
   diluted it — `compute.best_power_window` now recovers the 20-minute effort
   from wherever it sits in the recording, so the constraint is gone. See
   "Power windows".
+- **strength: a heavy triple**, on whichever lift that week's session leads
+  with — which lift to test is a property of the session, not of the sport, so
+  `_build_benchmark` takes the session being replaced. A 3RM rather than a
+  true single: `compute.estimated_1rm` reads a triple perfectly well, and a
+  plan should not be sending anybody to a genuine one-rep max alone in a gym
+  every few weeks.
 - **swim: a bare 1km test.** A whole swim of 1.000–1.060km lands in the existing
   `fastest_1k` milestone, which `derive_swim_css` already reads — so this needed
   no `compute.py` change at all. Milestones are computed from `distance_km` and

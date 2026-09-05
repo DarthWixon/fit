@@ -449,6 +449,25 @@ def test_detect_new_pbs_strength_flattens_keys_per_exercise():
     ]
 
 
+def test_total_weight_lifted_counts_every_rep_of_every_set():
+    activity = _strength_activity(
+        "2026-09-04",
+        [
+            {
+                "name": "deadlift",
+                "sets": [
+                    {"reps": 10, "weight_kg": 100.0},
+                    {"reps": 3, "weight_kg": 130.0},
+                ],
+            },
+            # Unweighted work is real training but contributes no tonnage.
+            {"name": "squat", "sets": [{"reps": 20}]},
+        ],
+    )
+    assert compute.total_weight_lifted(activity) == 10 * 100 + 3 * 130
+    assert compute.total_weight_lifted({"type": "strength"}) == 0.0
+
+
 def test_strength_met_is_flat_and_distance_free():
     activity = {"type": "strength", "duration_seconds": 3600}
     assert compute.met_for_activity(activity) == 6.0

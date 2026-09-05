@@ -379,7 +379,22 @@ been pushed on its own.
 
 ---
 
-## Phase 4 — `training.py`
+## Phase 4 — `training.py` — **DONE**
+
+Landed: the strength progression constants and functions
+(`LIFT_INCREMENT_KG`, `STRENGTH_DELOAD_FACTOR`/`STRENGTH_TAPER_FACTOR`,
+`PLAUSIBLE_LIFT_E1RM_KG`, `FALLBACK_LIFT_E1RM_KG`, `working_weight_from_1rm`,
+`strength_weekly_e1rm`, `reachable_e1rm`, `derive_lift_1rm`/
+`derive_lift_target`), `template_lifts`/`volume_sports`, the
+`targets["strength"]` shape with `_derive_lift_targets` and
+`_attach_weekly_lifts`, `plan_week_roles`, `_intensity_snapshot`, the strength
+branches in `_apply_target`/`retarget_sessions`, an optional `scale` on
+`_session`, the `strength_program` goal plus strength sessions in both
+triathlon goals, the strength benchmark, and the display side. Tests in
+`tests/test_training.py`.
+
+Three deviations from the plan below, each marked in place: the deload factor,
+the benchmark's rep scheme, and how the volume measurement treats strength.
 
 The novel part of the feature, and the part that fits the existing engine
 least. Three shared structures assume one intensity value per sport, fixed for
@@ -451,10 +466,13 @@ shape:
   for strength too**: if the gap is too large for the requested timeline,
   the plan says so explicitly rather than silently prescribing an
   unachievable curve.
-- Deload weeks reuse the existing `RECOVERY_FACTOR`-style dip (a straight
-  weight reduction on the `build_recover` cadence's recovery weeks), applied
-  after computing that week's progression point, not instead of it — so
-  progression resumes from where it left off rather than resetting.
+- Deload weeks dip and do not advance, so progression resumes where it left
+  off rather than resetting.
+
+  **Deviation: the factor is not `RECOVERY_FACTOR`.** That constant is 0.6 and
+  is a *volume* cut; taking 40% off a working weight would leave a bar so light
+  it stops being training. `STRENGTH_DELOAD_FACTOR` is 0.85, with
+  `STRENGTH_TAPER_FACTOR` at 0.8 for taper weeks.
 
 ### `_apply_target` is stateless, and this target is not
 
@@ -465,15 +483,14 @@ index and the plan's length, and *both* `expand_plan` and `retarget_sessions`
 call `_apply_target`. So this is a signature change to shared machinery, and
 there are two ways to take it:
 
-- **Thread `week` and `total_weeks` through `_apply_target`** — honest about
-  the dependency, touches every call site and every cardio branch's signature
-  for a parameter only one sport reads.
-- **Precompute a per-week weight table into `targets`** (e.g.
-  `targets["strength"]["squat"]["by_week"] = [100.0, 102.5, ...]`) so
-  `_apply_target` stays a pure lookup and the week index comes off the session
-  itself, which already carries `week`. Preferred: it keeps the stateless
-  property that makes retargeting easy to reason about, and the table is
-  exactly the artifact `fit train show` would want to display anyway.
+**Built as the table**, and it needed a little of both: `_attach_weekly_lifts`
+bakes the week structure into `targets["strength"][lift]["by_week"]`, and
+`_apply_target` gained a `week` parameter that does nothing but index it (the
+session already carries `week`, so nothing new is threaded through
+`_build_session`). The stateless property survives — for every other sport the
+parameter is ignored — and `retarget_sessions` rebuilds the table through
+`plan_week_roles`, since it depends on the plan's length as well as its
+targets.
 
 Also: `_INTENSITY_PARAMS = ("target_pace", "target_watts", "target_pace_100m")`
 must gain `"target_weight_kg"`, or `retarget_sessions`' change detection
@@ -516,11 +533,18 @@ Two changes, not one new template:
    against — so a new triathlon plan built by someone with no imported strength
    history (i.e. everyone, before Phase 2 has had time to collect any) measures
    itself against a bigger template week and scales *down*. Two things follow:
-   check whether the `VOLUME_SCALE_MIN` floor absorbs this acceptably, and
-   decide what an upgraded plan does when it carries both legacy
-   `extras.strength` entries and real strength sessions — extras are never
-   matched by `match_completion`, so those legacy entries show as permanently
-   undone alongside the real ones.
+   **Deviation, and it resolves the concern rather than absorbing it:**
+   strength is excluded from the volume measurement entirely.
+   `volume_sports` drops it and `_week_seconds` counts only sessions that
+   carry a `scale`. A strength session's size never moves, so including it put
+   time into the ratio that the multiplier could never adjust — a triathlete
+   who does no gym work would have been scaled down for the swimming. New
+   triathlon plans therefore measure exactly what they did before.
+
+   Still true: a plan carrying both legacy `extras.strength` entries and real
+   strength sessions double-counts, and the extras show as permanently undone
+   since `match_completion` never matches them. Drop `extras: {strength: N}`
+   from a description once the goal schedules real sessions.
 2. **A pure-strength goal is still not a triathlon goal** — for a plan whose
    *only* aim is the four lifts (no swim/bike/run demanded), add a small
    `strength_program` template: a flat N-week linear block per lift toward its
@@ -537,11 +561,18 @@ Two changes, not one new template:
 
 ### Benchmark rotation
 
-Add strength to `BENCHMARK_SESSIONS`, replacing a week's `straight_sets`
-session with a `baseline` (e1RM test) on the same turn-taking rotation
-`benchmark_sports` already implements for run/cycle/swim — same recovery-
-week-only placement rule, same "unscaled and untargeted" exemption from
-clamps (which strength sessions have anyway, per above).
+Strength is in `BENCHMARK_SESSIONS`, replacing a week's `straight_sets` session
+with a `baseline` on the same turn-taking rotation, same recovery-week-only
+placement, same "unscaled and untargeted" exemption (which strength sessions
+have anyway, per above). `"straight_sets"` had to join the list of session
+types a benchmark may stand in for.
+
+**Deviation: it is a heavy triple, not a one-rep max**, and the lift is taken
+from the session being replaced rather than fixed per sport — a plan that
+squats and benches tests whichever its week leads with, so `_build_benchmark`
+gained a `replaced` argument. `compute.estimated_1rm` reads a 3RM perfectly
+well, and a plan should not send anybody to a genuine single alone in a gym
+every few weeks.
 
 ### Retargeting
 
@@ -569,7 +600,24 @@ leaving sets/reps untouched while doing it.
 
 ---
 
-## Phase 5 — `display.py` / `cli.py` (plan-facing, not logging-facing)
+## Phase 5 — `display.py` / `cli.py` — **DONE, and mostly empty**
+
+It turned out to need almost nothing:
+
+- `render_training_plan` needed **no** strength branch. `describe_session`
+  already reads `workout_name`, and `planner.workout_name` composes
+  "Strength squat 3x5 @ 87.5kg" for a strength session like any other.
+- The multi-exercise prompt loop landed in Phase 3, where it was needed.
+- The dashboard and PB table were done in Phase 1.
+
+What was actually added: `display._format_lift_target` (each lift shown as a
+current → goal e1RM pair in `fit train show`'s header) and strength lines in
+`render_training_retargeted`, which report the *measured* figure moving —
+quoting the goal would hide the only thing a re-test tells you.
+
+The original plan for this phase follows.
+
+## Phase 5 (as planned) — `display.py` / `cli.py`
 
 - `render_training_plan`: a strength session's row needs its own
   description format ("Squat 3x10 @ 102.5kg") — reuse `training.
@@ -591,9 +639,9 @@ leaving sets/reps untouched while doing it.
 3. ~~Phase 3 (planner payloads)~~ — **done and verified against a live
    upload** (2026-09-05). `fit plan --sport strength --type
    straight_sets|baseline` builds and pushes a real strength workout.
-4. Phase 4 (training/progression) — full `fit train` periodization,
-   including the new goal templates and progression model.
-5. Phase 5 (display polish) — last, cosmetic relative to the above.
+4. ~~Phase 4 (training/progression)~~ — **done**. `strength_program`, strength
+   in both triathlon goals, the load progression, benchmarks and retargeting.
+5. ~~Phase 5 (display polish)~~ — **done**, and it needed almost nothing.
 
 Phase 3's payload builder must not be written until the live dump is recorded
 in Findings; Phase 2 should not merge without a real fixture.

@@ -598,6 +598,25 @@ def estimated_1rm(weight_kg: float, reps: int) -> float:
     return round(weight_kg * (1 + reps / 30), 1)
 
 
+def total_weight_lifted(activity: dict) -> float:
+    """Tonnage: every rep of every set multiplied by what was on the bar, in
+    kilograms. 0.0 for anything with no weighted sets.
+
+    The one figure that says what a whole gym session actually was, in the way
+    distance says it for a run: two sessions of the same length are not the
+    same work, and unlike the heaviest set it moves with sets and reps as well
+    as load — so it registers a week where the plan added volume, not only one
+    where it added weight."""
+    total = 0.0
+    for exercise in activity.get("exercises", []) or []:
+        for one_set in exercise.get("sets", []) or []:
+            weight = one_set.get("weight_kg") or 0
+            reps = one_set.get("reps") or 0
+            if weight > 0 and reps > 0:
+                total += weight * reps
+    return total
+
+
 def _strength_pbs(activities: list[dict]) -> dict:
     """PBs for the strength type, keyed by exercise name rather than by
     distance/time label -- which is why this sits outside _candidate_pbs
