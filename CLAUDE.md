@@ -1411,7 +1411,14 @@ kilograms inbound (not the grams its unit `factor` hints at) and that a
 half-kilo plate survives. The same push confirmed the `reps` end condition, a
 *timed* rest step (Connect's own UI writes `lap.button`), a time-ended
 `CARDIO` warmup, and a bare `category` with `exerciseName` unset.
-`strength`/`baseline` reuses those builders but hasn't been pushed alone.
+**`strength`/`baseline` and `cycle`/`baseline` verified on 2026-09-05**, by
+`fit train sync` pushing a test week: both round-tripped clean. The lifts came
+back as a single `interval` step, `endCondition` `reps` = 3, `targetType`
+`no.target`, `category` `SQUAT`/`BENCH_PRESS` with `exerciseName` unset and
+**no `weightValue` at all** — which confirms an untargeted, unloaded top set
+survives as one, rather than Garmin filling in a default. The ride came back as
+warmup 1200s / interval 1200s / cooldown 600s, every step `no.target`,
+confirming a time-ended block with an open target.
 **Verified against a live upload on 2026-08-24**: a real `run`/`intervals` push round-tripped through
 `client.get_workout_by_id()` unchanged — `targetValueOne`/`targetValueTwo` came
 back as the low/high m/s bounds in that order, with step numbering intact,
@@ -1419,10 +1426,13 @@ confirming the target-value and step-numbering machinery every combo shares. The
 other sport/type combos reuse the same builders but haven't each been
 round-tripped individually; `scripts/diff_workout.py` performs the check (a
 one-directional payload-vs-stored diff via `garmin.get_workout`), so re-run it
-after first pushing an as-yet-unverified combo and update this note. **The four
-steady types are unverified against a live push** — they are the first
-single-step workouts fit builds, so run the diff on one of them (e.g. a
-`run`/`long`) before trusting a whole `fit train sync`.
+after first pushing an as-yet-unverified combo and update this note. Note it
+reads a `fit plan` file's stored `payload`, which a *training-plan* session
+does not have — those store `params`, so rebuild the payload with
+`planner.build_plan` first and diff that. **The four steady types are still
+unverified against a live push** — they are the first single-step workouts fit
+builds, so run the diff on one of them (e.g. a `run`/`long`) before trusting a
+whole `fit train sync`.
 
 **Save-before-push is deliberate**: the plan file is written before `garmin.login`
 is attempted, so a failed push (no `garminconnect` installed, bad credentials,
