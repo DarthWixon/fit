@@ -1568,7 +1568,8 @@ A clamp that binds tells you the axis or the base is wrong, but read it the
 right way round: hitting the **floor** on a recovery or taper week is the floor
 working (race week *should* be the smallest session in the block), while sitting
 at the **ceiling** flattens the peak. `test_scaled_params_keep_headroom_inside_
-their_clamps` holds every goal to ≤10% at-max. When measuring this, match each
+their_clamps` holds every goal to ≤10% at-max, and asserts in the same pass
+that no scaled value escaped its clamp at all. When measuring this, match each
 session to its own template entry by weekday as well as type — two sessions of
 the same type on different days carry different scales, and matching on type
 alone reads one against the other's clamps (which is how `cycle_25k_tt` once
@@ -1942,6 +1943,46 @@ show` reads well without rebuilding anything.
   workout payloads/recommendations, plan-description parsing and periodisation
   math). Run `.venv/bin/pytest` after any change to `compute.py`, `storage.py`,
   `importers.py`, `planner.py`, or `training.py`.
+
+  **The suite is kept small on purpose, and was trimmed once already** (192
+  test functions to 154). Three things do not earn a test, and adding them
+  back is how it regrows:
+  - **Restating a constant or a one-line definition.** `EASY_FACTOR > 1` and
+    `"strength" not in volume_sports(...)` are the definitions, not
+    behaviour. Where the *direction* of a factor genuinely matters, assert it
+    through the pipeline that consumes it — the easy-pace direction is
+    checked in `test_targets_reach_the_session_params`, against a real
+    session's params, not against the constant.
+  - **Asserting what the code guarantees by construction.** A clamped value
+    lies inside its clamp; `workout_name` and `build_plan` return the same
+    name because they call the same `_BUILDERS` entry. Such a test can only
+    fail if the test itself is wrong.
+  - **Running goal-agnostic code once per goal.** `@pytest.mark.parametrize
+    ("goal", ALL_GOALS)` is for properties of the *template data* —
+    that every goal expands and stays off its clamps' ceilings. Phase
+    apportionment and `days_per_week` trimming are engine code and are
+    covered once.
+
+  The three surviving `ALL_GOALS` loops are deliberate and should stay:
+  `test_every_goal_expands_into_buildable_sessions`, `test_scaled_params_
+  keep_headroom_inside_their_clamps`, and `test_every_goal_schedules_a_re_
+  test`. Each asserts a property of the template data — that a goal expands
+  at all, that its bases sit low enough to leave headroom under its clamps,
+  and that its session mix leaves a benchmark somewhere to land. They are the
+  only tests that catch mistakes in `GOAL_TEMPLATES`, which is where a plan
+  actually goes wrong.
+
+  Prefer folding a new assertion into a loop that already exists over adding
+  a function beside it — the clamp check and the stored-vs-rebuilt
+  `workout_name` check both ride along in the two loops above, covering every
+  sport/type combo in every template for one line each.
+
+  **Before deleting a test, mutate the behaviour it names and confirm
+  something still fails.** Four of the cuts in that trim looked tautological
+  and were not; the mutation caught it, and the assertions were folded back
+  in. It also surfaced a kept test whose fixture dated two swims four years
+  apart, so `CSS_PAIR_MAX_DAYS` rejected the pair and the ratio guard the
+  test is named for never ran.
 - Everything committed under `examples/` and `tests/data/` is synthetic —
   generated fake data, no real recordings. Real personal data never enters the
   repo: keep it outside the project dir (e.g. `~/fit-dev-data/`) and point
