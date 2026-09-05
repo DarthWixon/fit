@@ -13,14 +13,16 @@ Ordered by priority (importance x ease). Work top to bottom.
    - Single-workout scheduling is now DONE: `fit plan --schedule DATE` +
      garmin.schedule_workout, verified live 2026-08-24.
    - The multi-week periodised `fit train` feature is now DONE
-     (import/show/sync/clear; engine in src/fit/training.py; all eight goal
+     (import/show/sync/clear; engine in src/fit/training.py; all ten goal
      templates). Design reference: docs/training-plan-feature.md; behaviour:
      CLAUDE.md "Training plans". Still to do:
      (a) verify the newer workout payloads against a live push with
          scripts/diff_workout.py: the four steady types (fit's first
-         single-step workouts) and the bare cycle/swim baselines (first to
-         omit warmup/cooldown and renumber the remaining steps). Run it on at
-         least one of each before trusting a whole train sync;
+         single-step workouts) remain unverified. The bare baselines are
+         done — strength/baseline and cycle/baseline round-tripped clean on
+         2026-09-05. diff_workout.py now takes --session YYYY-MM-DD to diff a
+         training-plan session directly, so once week 1 is synced the cycle
+         long ride on 2026-09-20 is one command;
      (b) a real `fit train sync` + `fit train clear` round-trip against Garmin
          (sync now confirms before pushing; --dry-run previews it).
    - `fit train retarget` is DONE (re-derives intensity, rewrites the sessions

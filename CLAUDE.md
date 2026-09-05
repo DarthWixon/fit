@@ -1426,13 +1426,14 @@ confirming the target-value and step-numbering machinery every combo shares. The
 other sport/type combos reuse the same builders but haven't each been
 round-tripped individually; `scripts/diff_workout.py` performs the check (a
 one-directional payload-vs-stored diff via `garmin.get_workout`), so re-run it
-after first pushing an as-yet-unverified combo and update this note. Note it
-reads a `fit plan` file's stored `payload`, which a *training-plan* session
-does not have — those store `params`, so rebuild the payload with
-`planner.build_plan` first and diff that. **The four steady types are still
-unverified against a live push** — they are the first single-step workouts fit
-builds, so run the diff on one of them (e.g. a `run`/`long`) before trusting a
-whole `fit train sync`.
+after first pushing an as-yet-unverified combo and update this note. It reads
+either a `fit plan` file's stored `payload` or, with `--session YYYY-MM-DD`
+(`--sport` to disambiguate a brick's two sessions), a training-plan session —
+those store `params` rather than a payload, so it rebuilds one with the same
+`planner.build_plan` call `fit train sync` makes at push time. **The four
+steady types are still unverified against a live push** — they are the first
+single-step workouts fit builds, so run the diff on one of them (e.g. a
+`run`/`long`) before trusting a whole `fit train sync`.
 
 **Save-before-push is deliberate**: the plan file is written before `garmin.login`
 is attempted, so a failed push (no `garminconnect` installed, bad credentials,

@@ -22,6 +22,11 @@ Usage:
     # Live: log in, fetch the workout the plan was pushed as, diff it.
     scripts/diff_workout.py ~/.fit/plans/2026-07-03T09:15:02.json
 
+    # A training-plan session instead of a `fit plan` file. Sessions store
+    # `params`, not a payload, so the payload is rebuilt with
+    # planner.build_plan first — the diff is otherwise identical.
+    scripts/diff_workout.py --session 2026-09-20 [--sport cycle]
+
     # Offline: diff against a previously-saved get_workout() dump instead of
     # logging in (e.g. JSON you already pulled from the Garmin web app).
     scripts/diff_workout.py <plan.json> --fetched fetched-workout.json
@@ -98,15 +103,59 @@ def _load_plan(plan_path: Path) -> dict:
     return plan
 
 
+def _load_session(session_date: str, sport: str | None) -> dict:
+    """The training plan's session on `session_date`, in the same shape a
+    `fit plan` file has — "payload", "workout_name", "garmin_workout_id" — so
+    everything downstream of here treats the two sources identically.
+
+    A session stores `params` rather than a payload (a payload per session
+    would bloat plan.json ~80x), so the payload is rebuilt here exactly as
+    `fit train sync` rebuilds it at push time: same build_plan call, same
+    arguments. Diffing a rebuilt payload is therefore diffing what was sent.
+    """
+    from fit import planner, storage, training
+
+    plan = storage.read_training_plan()
+    if plan is None:
+        sys.exit("error: no active training plan — import one with `fit train import`.")
+    matches = [
+        s
+        for s in plan["sessions"]
+        if s.get("date") == session_date
+        and not s.get("is_extra")
+        and (sport is None or s.get("sport") == sport)
+    ]
+    if not matches:
+        sys.exit(
+            f"error: no non-extra session dated {session_date}"
+            + (f" for sport {sport}" if sport else "")
+            + " — check `fit train show`."
+        )
+    if len(matches) > 1:
+        sports = ", ".join(sorted({s.get("sport", "?") for s in matches}))
+        sys.exit(
+            f"error: {len(matches)} sessions dated {session_date} ({sports}) — "
+            "narrow it with --sport."
+        )
+    session = matches[0]
+    args = training.session_to_build_args(session)
+    built = planner.build_plan(*args, session["date"])
+    return {
+        "payload": built["payload"],
+        "workout_name": session.get("workout_name", built["workout_name"]),
+        "garmin_workout_id": session.get("garmin_workout_id"),
+    }
+
+
 def _fetch_stored(plan: dict, fetched_path: Path | None) -> dict:
     if fetched_path is not None:
         return json.loads(fetched_path.read_text())
     workout_id = plan.get("garmin_workout_id")
     if workout_id is None:
         sys.exit(
-            "error: plan has no 'garmin_workout_id' — it was never pushed, so "
-            "there is nothing to fetch. Push it first (fit plan) or pass "
-            "--fetched with a saved workout dump."
+            "error: no 'garmin_workout_id' — this was never pushed, so there "
+            "is nothing to fetch. Push it first (fit plan / fit train sync) or "
+            "pass --fetched with a saved workout dump."
         )
     # Imported lazily so the offline --fetched path needs no garminconnect.
     from fit import garmin
@@ -117,7 +166,23 @@ def _fetch_stored(plan: dict, fetched_path: Path | None) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("plan", type=Path, help="path to a ~/.fit/plans/<id>.json file")
+    parser.add_argument(
+        "plan",
+        type=Path,
+        nargs="?",
+        help="path to a ~/.fit/plans/<id>.json file",
+    )
+    parser.add_argument(
+        "--session",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="diff a training-plan session on this date instead of a plan file",
+    )
+    parser.add_argument(
+        "--sport",
+        default=None,
+        help="with --session, pick between two sessions sharing that date",
+    )
     parser.add_argument(
         "--fetched",
         type=Path,
@@ -132,7 +197,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    plan = _load_plan(args.plan)
+    if (args.plan is None) == (args.session is None):
+        parser.error("give either a plan file path or --session YYYY-MM-DD, not both")
+    if args.plan is not None:
+        plan = _load_plan(args.plan)
+        source = str(args.plan)
+    else:
+        plan = _load_session(args.session, args.sport)
+        source = f"training plan session {args.session}"
     stored = _fetch_stored(plan, args.fetched)
 
     if args.dump is not None:
@@ -140,7 +212,7 @@ def main() -> int:
         print(f"wrote fetched workout to {args.dump}")
 
     differences = list(_diff(plan["payload"], stored))
-    print(f"\nplan:    {args.plan}")
+    print(f"\nplan:    {source}")
     print(f"workout: {plan.get('workout_name', '(unnamed)')}\n")
 
     if not differences:
