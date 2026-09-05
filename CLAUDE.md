@@ -296,12 +296,20 @@ Key functions:
   PBs sharing a distance label down to whichever is faster, for display only;
   `pbs.json` keeps both stored independently (see "Split PBs"). Used by
   `display.render_pbs_table` to produce one row per label instead of two
-- `detect_new_pbs(new_activity: dict, current_pbs: dict) -> list[dict]` — returns
-  `[{"key": ..., "value": ...}, ...]` for each PB category broken, structured rather
-  than pre-formatted; strength goes via `_strength_new_pbs`, which flattens the
+- `detect_new_pbs(new_activities: list[dict], current_pbs: dict) -> list[dict]` —
+  returns `[{"key": ..., "value": ...}, ...]` for each PB category broken, structured
+  rather than pre-formatted; strength goes via `_strength_new_pbs`, which flattens the
   nested per-exercise shape into the same two-key entries (`"squat_best_e1rm_kg"`); `display.render_new_pb_messages()` turns these into the
   human-readable "New fastest 5k: 21:40"-style text (formatting is a display.py
-  concern, not compute.py's)
+  concern, not compute.py's).
+  **Takes the whole import as one batch**, measured against `current_pbs` once,
+  and delegates the best-of reduction to `all_personal_bests` — so an import of
+  nine paddles of a type with no history breaks "longest distance" once, at the
+  batch's best. Per-activity comparison against a fixed pre-import snapshot
+  instead announced every activity that beat what was on disk before the import
+  started, in file order rather than best-first (a real 26-line flood on
+  2026-09-05). `cli._import_and_report` therefore writes the batch first and
+  announces afterwards, rather than announcing inside the write loop
 - `pbs_cache_is_valid(pbs: dict, activity_count: int) -> bool`
 - `met_for_activity(activity: dict) -> float` — coarse MET value from `MET_TABLE`,
   banded by pace/speed; see "Fitness index"

@@ -654,13 +654,15 @@ def _strength_pbs(activities: list[dict]) -> dict:
     return {name: best for name, best in result.items() if best}
 
 
-def _strength_new_pbs(new_activity: dict, existing: dict) -> list[dict]:
-    """detect_new_pbs' strength path. Keys are flattened to
-    "{exercise}_heaviest_set_kg" / "{exercise}_best_e1rm_kg" so the returned
-    entries keep the same {"key", "value"} shape every other PB category uses
-    -- pbs.json itself stays nested per exercise (see _strength_pbs)."""
+def _strength_new_pbs(candidate_pbs: dict, existing: dict) -> list[dict]:
+    """detect_new_pbs' strength path: `candidate_pbs` is _strength_pbs' nested
+    per-exercise output for the activities being imported, `existing` the same
+    for what came before. Keys are flattened to "{exercise}_heaviest_set_kg" /
+    "{exercise}_best_e1rm_kg" so the returned entries keep the same
+    {"key", "value"} shape every other PB category uses -- pbs.json itself
+    stays nested per exercise (see _strength_pbs)."""
     broken = []
-    for name, candidate in _strength_pbs([new_activity]).items():
+    for name, candidate in candidate_pbs.items():
         current = existing.get(name, {})
         for metric in ("heaviest_set_kg", "best_e1rm_kg"):
             value = candidate.get(metric)
@@ -740,27 +742,36 @@ def all_personal_bests(activities: list[dict]) -> dict:
 _HIGHER_IS_BETTER_KEYS = {"longest_distance_km", "most_elevation_gain_m"}
 
 
-def detect_new_pbs(new_activity: dict, current_pbs: dict) -> list[dict]:
+def detect_new_pbs(new_activities: list[dict], current_pbs: dict) -> list[dict]:
     """Returns [{"key": ..., "value": ...}, ...] for each PB category
-    new_activity broke, compared against current_pbs — no message formatting;
-    see display.render_new_pb_messages for turning these into readable text."""
-    activity_type = new_activity.get("type", "unknown")
-    existing = current_pbs.get(activity_type, {})
-    if activity_type == "strength":
-        return _strength_new_pbs(new_activity, existing)
-    candidate = _candidate_pbs([new_activity], activity_type)
+    `new_activities` broke, compared against current_pbs — no message
+    formatting; see display.render_new_pb_messages for turning these into
+    readable text.
 
+    Takes the whole import as one batch, measured against current_pbs once.
+    Comparing each activity separately against the same pre-import snapshot
+    reports a category once per activity that beats what was on disk before
+    the import started -- so importing nine paddles of a type with no history
+    announced nine "longest distance" PBs, in file order rather than
+    best-first. all_personal_bests already reduces a list of activities to its
+    best-of values per type, so the batch's own best is what gets compared.
+    """
     broken = []
-    for key, value in candidate.items():
-        if key.endswith("_date"):
+    for activity_type, candidate in all_personal_bests(new_activities).items():
+        existing = current_pbs.get(activity_type, {})
+        if activity_type == "strength":
+            broken.extend(_strength_new_pbs(candidate, existing))
             continue
-        if key in _HIGHER_IS_BETTER_KEYS:
-            is_new_best = value > existing.get(key, 0)
-        else:
-            current_best = existing.get(key)
-            is_new_best = current_best is None or value < current_best
-        if is_new_best:
-            broken.append({"key": key, "value": value})
+        for key, value in candidate.items():
+            if key.endswith("_date"):
+                continue
+            if key in _HIGHER_IS_BETTER_KEYS:
+                is_new_best = value > existing.get(key, 0)
+            else:
+                current_best = existing.get(key)
+                is_new_best = current_best is None or value < current_best
+            if is_new_best:
+                broken.append({"key": key, "value": value})
     return broken
 
 

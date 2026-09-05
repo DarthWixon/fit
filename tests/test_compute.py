@@ -242,12 +242,43 @@ def test_detect_new_pbs_direction_of_comparison():
         "distance_km": 5.0,
         "duration_seconds": 1450,
     }
-    broken = {pb["key"] for pb in compute.detect_new_pbs(faster_5k, current)}
+    broken = {pb["key"] for pb in compute.detect_new_pbs([faster_5k], current)}
     assert "fastest_5k_seconds" in broken  # lower seconds wins
     assert "longest_distance_km" not in broken  # 5.0 < 10.5
 
     slower_5k = dict(faster_5k, duration_seconds=1600)
-    assert not compute.detect_new_pbs(slower_5k, current)
+    assert not compute.detect_new_pbs([slower_5k], current)
+
+
+def test_detect_new_pbs_reports_a_category_once_per_batch():
+    """A batch is measured against the pre-import PBs once, so a type with no
+    history breaks each category a single time at the batch's best -- not once
+    per activity that beats what was on disk before the import started."""
+    paddles = [
+        {
+            "type": "canoe",
+            "date": "2026-08-30",
+            "distance_km": 3.0,
+            "duration_seconds": 3333,
+        },
+        {
+            "type": "canoe",
+            "date": "2026-09-01",
+            "distance_km": 5.3,
+            "duration_seconds": 5557,
+        },
+        {
+            "type": "canoe",
+            "date": "2026-09-02",
+            "distance_km": 4.3,
+            "duration_seconds": 4203,
+        },
+    ]
+    broken = {pb["key"]: pb["value"] for pb in compute.detect_new_pbs(paddles, {})}
+    # One entry each, at the batch's best -- not one per activity. The 5.3km
+    # paddle is both the longest and (within MILESTONE_TOLERANCE of 5km) the
+    # only dedicated 5k effort in the batch.
+    assert broken == {"longest_distance_km": 5.3, "fastest_5k_seconds": 5557}
 
 
 # --- fitness index -------------------------------------------------------------
@@ -408,7 +439,7 @@ def test_detect_new_pbs_strength_flattens_keys_per_exercise():
             {"name": "squat", "sets": [{"reps": 5, "weight_kg": 95.0}]},
         ],
     )
-    assert compute.detect_new_pbs(activity, current) == [
+    assert compute.detect_new_pbs([activity], current) == [
         {"key": "squat_heaviest_set_kg", "value": 95.0},
         {"key": "squat_best_e1rm_kg", "value": 110.8},
     ]

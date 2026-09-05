@@ -275,17 +275,22 @@ def _import_and_report(new_activities: list[dict]) -> None:
     recompute the PB cache, and print the imported/skipped summary."""
     pbs_before_import = storage.read_pbs()
 
-    imported, skipped = 0, 0
+    written = []
+    skipped = 0
     for activity in new_activities:
         if storage.activity_exists(activity["id"]):
             skipped += 1
             continue
         storage.write_activity(activity)
-        imported += 1
-        display.render_new_pb_messages(
-            compute.detect_new_pbs(activity, pbs_before_import)
-        )
+        written.append(activity)
 
+    # Announced once for the batch, not once per activity: each activity
+    # compared separately against the same pre-import snapshot reports every
+    # category it beats, so an import of nine paddles announced nine "longest
+    # distance" PBs in file order (see compute.detect_new_pbs).
+    display.render_new_pb_messages(compute.detect_new_pbs(written, pbs_before_import))
+
+    imported = len(written)
     if imported:
         _recompute_and_write_pbs(_load_activities())
 
