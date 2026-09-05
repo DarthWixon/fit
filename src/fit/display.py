@@ -628,9 +628,12 @@ def render_training_plan(summary: dict, weeks: list[dict]) -> None:
     when = (
         f"in {days} days" if days > 0 else "today" if days == 0 else f"{-days} days ago"
     )
+    length = f"{summary['weeks']} weeks"
+    if summary.get("test_week"):
+        length = f"week 0 + {length}"
     console.print(
         f"Event {summary['event_date']} ({when}) · "
-        f"{summary['weeks']} weeks from {summary['start_date']}"
+        f"{length} from {summary['start_date']}"
     )
     console.print(
         f"{summary['completed']}/{summary['sessions'] - summary['extras']} sessions "
@@ -647,6 +650,12 @@ def render_training_plan(summary: dict, weeks: list[dict]) -> None:
     # Not `weeks` — that is the parameter holding the grouped session weeks the
     # table below iterates, and shadowing it here made this function raise on
     # every plan that schedules a re-test.
+    if summary.get("test_week"):
+        console.print(
+            "[dim]Week 0 is a test week: every target below was derived from "
+            "your history, so do the tests, `fit garmin-sync`, then `fit train "
+            "retarget` to rebuild the plan at your measured fitness.[/dim]"
+        )
     benchmark_weeks = summary.get("benchmark_weeks") or []
     if benchmark_weeks:
         console.print(

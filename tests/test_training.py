@@ -734,6 +734,43 @@ def test_benchmarks_land_on_recovery_weeks():
         assert session["phase"] != "taper"
 
 
+def test_a_test_week_comes_out_of_the_plan_rather_than_extending_it():
+    """Week 0 sits inside the user's own start/event dates: it takes a week from
+    the periodised block rather than pushing start_date a week earlier, so both
+    dates still mean what they said."""
+    plain = _at_length("cycle_strength", 15)
+    tested = _at_length("cycle_strength", 15, "test_week: true\n")
+
+    assert plain["weeks"] == 15 and tested["weeks"] == 14
+    assert tested["start_date"] == plain["start_date"]
+    assert tested["event_date"] == plain["event_date"]
+    # Week 1 begins a week later, and is still a full periodised week 1.
+    week_one = [s for s in tested["sessions"] if s["week"] == 1]
+    assert min(s["date"] for s in week_one) > min(s["date"] for s in plain["sessions"])
+    assert all(s["phase"] == "base" for s in week_one)
+
+
+def test_a_test_week_measures_each_test_once():
+    """Week 0's job is clean measurements, so it carries the tests alone — one
+    per distinct test, where strength counts per lift rather than per sport."""
+    plan = _at_length("cycle_strength", 15, "test_week: true\n")
+    week_zero = [s for s in plan["sessions"] if s["week"] == 0]
+
+    assert week_zero and all(s.get("is_benchmark") for s in week_zero)
+    identities = [(s["sport"], s["params"].get("exercise")) for s in week_zero]
+    assert len(identities) == len(set(identities))
+    assert ("cycle", None) in identities
+    assert sum(1 for sport, _ in identities if sport == "strength") > 1
+
+
+def test_a_test_week_is_independent_of_the_in_plan_re_tests():
+    """Measuring once before the block starts and re-measuring as it goes are
+    separate decisions; wanting the first must not force the second."""
+    plan = _at_length("cycle_strength", 15, "test_week: true\nbenchmarks: false\n")
+    assert [s for s in plan["sessions"] if s["week"] == 0]
+    assert plan["benchmark_weeks"] == []
+
+
 def test_benchmarks_replace_a_session_rather_than_adding_one():
     with_tests = _at_length("run_half", 12)
     without = _at_length("run_half", 12, "benchmarks: false\n")

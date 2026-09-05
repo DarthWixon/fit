@@ -40,6 +40,13 @@ extras:
 # at your new fitness. Default true.
 # benchmarks: false
 
+# Optional. Open the plan with a test week — week 0, carrying one benchmark per
+# sport (and per lift) and nothing else, so you start from measured fitness
+# rather than from history. It takes a week out of the plan rather than moving
+# start_date, and every target is still derived at import: do the tests, then
+# `fit garmin-sync` and `fit train retarget` to rebuild the rest. Default false.
+# test_week: true
+
 # Optional overrides of the template's periodisation.
 # progression:
 #   build_recover: [3, 1]     # three build weeks, then one recovery week

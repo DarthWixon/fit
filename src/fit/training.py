@@ -223,6 +223,7 @@ _SPEC_KEYS = {
     "progression",
     "volume",
     "benchmarks",
+    "test_week",
 }
 _TARGET_KEYS = {"run_5k", "bike_ftp", "swim_css_100m"} | {
     f"{lift}_goal_kg" for lift in LIFT_INCREMENT_KG
@@ -367,8 +368,15 @@ def parse_plan_spec(text: str) -> dict:
         "extras": {},
         "targets": {},
         "benchmarks": True,
+        "test_week": False,
         "progression": dict(PROGRESSION_DEFAULTS),
     }
+
+    if "test_week" in raw:
+        value = raw["test_week"]
+        if not isinstance(value, bool):
+            raise ValueError("test_week: expected true or false")
+        spec["test_week"] = value
 
     if "start_date" in raw:
         start_date = _as_date_string(raw["start_date"], "start_date")
@@ -378,7 +386,9 @@ def parse_plan_spec(text: str) -> dict:
             )
         spec["start_date"] = start_date
     else:
-        spec["start_date"] = _default_start_date(event_date, template["weeks"])
+        spec["start_date"] = _default_start_date(
+            event_date, template["weeks"] + (1 if spec["test_week"] else 0)
+        )
 
     if "days_per_week" in raw:
         # Either a fixed count, or [start, end] to build frequency across the
@@ -504,15 +514,23 @@ def _default_start_date(event_date: str, weeks: int) -> str:
 # --- periodisation --------------------------------------------------------
 
 
-def _plan_weeks(start_date: str, event_date: str) -> tuple[date, int]:
-    """(first Monday, number of whole ISO weeks through the event's week)."""
+def _plan_weeks(
+    start_date: str, event_date: str, test_week: bool = False
+) -> tuple[date, int]:
+    """(first Monday, number of whole ISO weeks through the event's week).
+
+    A test week is taken out of that span rather than bolted on the front of
+    it, so it raises the floor by one: the periodised plan still needs
+    MIN_PLAN_WEEKS of its own."""
     start_monday = compute.week_start(start_date)
     event_monday = compute.week_start(event_date)
     weeks = ((event_monday - start_monday).days // 7) + 1
-    if weeks < MIN_PLAN_WEEKS:
+    needed = MIN_PLAN_WEEKS + (1 if test_week else 0)
+    if weeks < needed:
+        because = " — a test week takes one of them" if test_week else ""
         raise ValueError(
-            f"a plan needs at least {MIN_PLAN_WEEKS} weeks between start_date "
-            f"{start_date} and event_date {event_date} (got {weeks})"
+            f"a plan needs at least {needed} weeks between start_date "
+            f"{start_date} and event_date {event_date} (got {weeks}){because}"
         )
     return start_monday, weeks
 
@@ -1150,6 +1168,54 @@ def _build_benchmark(
     }
 
 
+def _test_identity(sport: str, template_session: dict) -> tuple:
+    """What makes two benchmarks the same test, for deduplicating a test week.
+
+    Per sport for run/cycle/swim — one FTP test in a week is plenty — but per
+    *lift* for strength, because _build_benchmark tests whichever lift the
+    session leads with: a plan that squats on Wednesday and benches on Friday
+    has two distinct tests to run, not one."""
+    if sport != "strength":
+        return (sport,)
+    exercises = template_session.get("params", {}).get("exercises") or []
+    return (sport, exercises[0]["exercise"] if exercises else None)
+
+
+def _test_week_sessions(
+    week_one: list[dict], monday: date, testable: list[str]
+) -> list[dict]:
+    """Week 0: one benchmark per distinct test, and nothing else.
+
+    A test week exists to produce clean measurements, so it carries the tests
+    alone rather than tests plus training — you turn up rested, test, and go
+    home. That is also what separates it from an in-plan re-test, which stands
+    in for one session of one sport on a recovery week and leaves the rest of
+    that week's training alone.
+
+    The tests are drawn from what week 1 would have trained, in the template's
+    own priority order, so each lands on a day that sport already owns."""
+    built: list[dict] = []
+    seen: set[tuple] = set()
+    for template_session in week_one:
+        sport = template_session["sport"]
+        if sport not in testable:
+            continue
+        identity = _test_identity(sport, template_session)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        built.append(
+            _build_benchmark(
+                sport,
+                monday + timedelta(days=template_session["day"]),
+                0,
+                "test",
+                template_session,
+            )
+        )
+    return built
+
+
 def _extra_days(week_sessions: list[dict], occupied: dict[int, int]) -> list[int]:
     """Days an extra may be placed on, least-loaded first — so rest days fill
     before easy days, and a key-session day is never used at all."""
@@ -1202,7 +1268,14 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
     Sessions falling before start_date or on/after the event itself are
     dropped: race day is not a training day."""
     template = GOAL_TEMPLATES[spec["goal"]]
-    start_monday, weeks = _plan_weeks(spec["start_date"], spec["event_date"])
+    test_week = spec["test_week"]
+    start_monday, span = _plan_weeks(spec["start_date"], spec["event_date"], test_week)
+    # A test week is one of the plan's weeks, not an extra one in front of it:
+    # both dates are the user's, and shifting either to make room would answer
+    # a different question than the one they asked. So the periodised plan runs
+    # from the *second* Monday and is one week shorter.
+    weeks = span - 1 if test_week else span
+    first_monday = start_monday + timedelta(weeks=1) if test_week else start_monday
     progression = dict(spec["progression"])
     phase_by_week = _assign_phases(
         weeks, template["phases"], progression["taper_weeks"]
@@ -1289,9 +1362,19 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
 
     sessions = []
     benchmark_weeks = []
+    if test_week:
+        # Independent of spec["benchmarks"], which governs the in-plan re-tests
+        # only: "measure once before we start" and "re-measure as we go" are
+        # separate decisions, and wanting the first is no reason to be forced
+        # into the second.
+        sessions.extend(
+            _test_week_sessions(
+                week_sessions(0), start_monday, benchmark_sports(spec["goal"])
+            )
+        )
     for index in range(weeks):
         week, phase = index + 1, phase_by_week[index]
-        monday = start_monday + timedelta(weeks=index)
+        monday = first_monday + timedelta(weeks=index)
         volume = _volume_scale_for_week(start_scale, index, weeks, taper_weeks)
         this_week = week_sessions(index)
         bench_sport, replaced = bench_by_week.get(index, (None, None))
@@ -1330,6 +1413,7 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
         "event_date": spec["event_date"],
         "start_date": spec["start_date"],
         "weeks": weeks,
+        "test_week": test_week,
         "created": reference.isoformat(),
         "spec": spec,
         "targets": targets,
@@ -1418,6 +1502,7 @@ def plan_summary(plan: dict, today: date) -> dict:
         "event_date": plan["event_date"],
         "start_date": plan.get("start_date"),
         "weeks": plan.get("weeks", 0),
+        "test_week": plan.get("test_week", False),
         "days_to_go": (event - today).days,
         "sessions": len(sessions),
         "extras": len(sessions) - len(real),
@@ -1438,7 +1523,10 @@ def describe_session(session: dict) -> str:
     if session.get("is_brick"):
         return f"{name} (brick)"
     if session.get("is_benchmark"):
-        return f"{name} (re-test)"
+        # The suffix marks a test sitting among ordinary training. In week 0 the
+        # week itself is labelled "test" and holds nothing else, so it would only
+        # restate the workout name ("Cycle baseline 20min test (test)").
+        return name if session.get("week") == 0 else f"{name} (re-test)"
     return name
 
 

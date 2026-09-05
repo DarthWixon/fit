@@ -737,6 +737,9 @@ Key functions:
 - `retargetable(sessions, today) -> list[dict]` / `retarget_sessions(plan,
   targets, today) -> dict` — re-derive intensity for the sessions still ahead;
   see "Retargeting"
+- `_test_identity(sport, template_session) -> tuple` / `_test_week_sessions(
+  week_one, monday, testable) -> list[dict]` — week 0's benchmarks-only week;
+  see "The test week"
 - `sync_window(sessions, today, window_days) -> list[dict]` — the still-
   unscheduled, non-extra sessions inside the rolling horizon; what makes
   `fit train sync` idempotent
@@ -1491,6 +1494,7 @@ progression:                  # optional overrides of template defaults
   taper_weeks: 2
 volume: 70                    # optional; % of the template's opening week
                               # (else measured from recent training)
+test_week: true               # optional; open with week 0, a testing week
 ```
 
 **PyYAML is YAML 1.1, and `parse_plan_spec` defends against its coercions**
@@ -1845,6 +1849,80 @@ by_hand_gives_the_same_test_the_plan_schedules` now holds them together.
 `benchmarks: false` in the description turns them off. Weeks carrying one are
 recorded in `plan["benchmark_weeks"]` and surfaced by `render_training_plan`.
 
+### The test week
+
+`test_week: true` opens the plan with **week 0**, carrying benchmarks and
+nothing else. It exists because a plan's targets are derived once, at import,
+from whatever history happens to exist — and an unmeasured target (a
+hand-written `bike_ftp:`, or a `FALLBACK_TARGETS` entry standing in for a sport
+with no recent history) silently sets the intensity of every session until the
+first recovery-week re-test, which is week 4 at the earliest.
+
+Four decisions in it:
+
+- **It takes a week out of the plan, not off the front.** `start_date` and
+  `event_date` are the user's; shifting either to make room would answer a
+  different question than the one they asked. So `_plan_weeks` raises its floor
+  to `MIN_PLAN_WEEKS + 1`, the periodised block runs from the *second* Monday
+  (`first_monday`), and `plan["weeks"]` stays the **periodised** count — which
+  is what keeps `plan_week_roles`, `_attach_weekly_lifts`' `by_week` table and
+  `_apply_target`'s `week - 1` indexing aligned. Only `_default_start_date`
+  compensates, reaching one week further back so a description that names no
+  `start_date` still gets the template's own length of actual training.
+- **Tests alone, no training around them.** This is what separates it from an
+  in-plan re-test, which stands in for one session of one sport and leaves the
+  rest of that week intact. A test week's job is clean measurements, so you turn
+  up rested, test, and go home.
+- **One benchmark per distinct test, deduplicated by `_test_identity`** — per
+  sport for run/cycle/swim (one FTP test in a week is plenty), but per *lift*
+  for strength, since `_build_benchmark` tests whichever lift the session leads
+  with. Sessions are drawn from week 1's own selection in template priority
+  order, so each test lands on a day that sport already owns. **Only the lead
+  lift of each strength session is tested** — a goal whose Wednesday session is
+  squat-then-deadlift tests the squat and derives the deadlift from history as
+  before.
+- **Independent of `benchmarks:`.** "Measure once before we start" and
+  "re-measure as we go" are separate decisions, and wanting the first is no
+  reason to be forced into the second.
+
+Week 0 sessions carry `week: 0` and `phase: "test"`, which `group_by_week`
+sorts first and `render_training_plan` renders with no special case. The plan
+records `test_week: true`, and the renderer prints the follow-up the week is
+pointless without: the targets below it were still derived at import, so do the
+tests, `fit garmin-sync`, then `fit train retarget`.
+
+**Applying a re-test**: do the test → `fit garmin-sync` → **`fit train
+retarget`**, which re-derives every target from the updated history and rewrites
+the sessions still ahead of you, in place. No Garmin login, no calendar change.
+`fit train import` remains the way to change a plan's *shape* and still refuses
+to replace a plan with future scheduled sessions.
+
+### Retargeting
+
+`training.retargetable(sessions, today)` selects what may be rewritten, and
+`training.retarget_sessions(plan, targets, today)` does it, returning
+`{"old_targets", "new_targets", "retargeted", "unchanged", "frozen", "past",
+"changed"}`. Four things it deliberately will not touch:
+
+- **Extras** — they have no `params` key at all; touching one is a `KeyError`.
+- **Benchmarks** — a test at a prescribed pace is not a test.
+- **Sessions already scheduled on Garmin.** A pushed workout is a frozen copy on
+  the account and `garmin.py` has no endpoint to update or delete it, so
+  rewriting one locally would only desynchronise the plan from the watch. They
+  are counted as `frozen` and the renderer says so.
+- **Volume.** Intensity only — and this is *structurally forced*, not just
+  chosen: the template's `scale` dict is never persisted, so a stored session
+  knows its own size but not the rule that produced it. `_INTENSITY_PARAMS`
+  names the three params `_apply_target` writes, and
+  `test_retarget_never_changes_volume` holds the line.
+
+`workout_name` is regenerated whenever params change — it is derived from them,
+and a stale name would disagree with the payload that eventually gets pushed.
+Like `sync`, this mutates `plan["sessions"]` in place ("pure" here means no I/O,
+not no mutation) and `cli.py` writes the plan afterwards. `--dry-run` writes
+nothing, which matters more here than in `sync`: there is no backup of
+`plan.json` and this rewrites every future session at once.
+
 ### Sync, idempotency, and completion
 
 `train sync` first prints the batch it is about to create
@@ -1886,6 +1964,7 @@ tagged `brick`), not a Garmin multisport workout — that schema is unverified.
   "event_date": "2026-11-15",
   "start_date": "2026-08-24",
   "weeks": 12,
+  "test_week": false,             # true = week 0 is a testing week
   "created": "2026-08-24",
   "spec": {...},                  # the normalised description, for re-expansion
   "targets": {"run_5k_seconds": 1440, "bike_ftp": 250, "swim_css_100m": 105,
