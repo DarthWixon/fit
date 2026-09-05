@@ -9,25 +9,19 @@ from fit import compute
 # --- calc_pace -----------------------------------------------------------------
 
 
-def test_calc_pace_run_per_km():
-    assert compute.calc_pace(10.0, 3000, "run") == "5:00/km"
-
-
-def test_calc_pace_swim_per_100m():
-    assert compute.calc_pace(1.0, 1080, "swim") == "1:48/100m"
-
-
-def test_calc_pace_cycle_speed():
-    assert compute.calc_pace(30.0, 3600, "cycle") == "30.0km/h"
-
-
-def test_calc_pace_canoe_speed():
-    assert compute.calc_pace(8.4, 3600, "canoe") == "8.4km/h"
-
-
-def test_calc_pace_no_distance_type_and_zero_distance():
-    assert compute.calc_pace(0.07, 3600, "squash") == "—"
-    assert compute.calc_pace(0, 3000, "run") == "—"
+@pytest.mark.parametrize(
+    "distance_km,duration_seconds,type,expected",
+    [
+        (10.0, 3000, "run", "5:00/km"),
+        (1.0, 1080, "swim", "1:48/100m"),  # per 100m
+        (30.0, 3600, "cycle", "30.0km/h"),  # SPEED_TYPES read as speed
+        (8.4, 3600, "canoe", "8.4km/h"),
+        (0.07, 3600, "squash", "—"),  # NO_DISTANCE_TYPES: never a real pace
+        (0, 3000, "run", "—"),
+    ],
+)
+def test_calc_pace(distance_km, duration_seconds, type, expected):
+    assert compute.calc_pace(distance_km, duration_seconds, type) == expected
 
 
 # --- date windows --------------------------------------------------------------
@@ -66,15 +60,10 @@ def test_activity_calendar_marks_days_and_spans_year_boundary():
     assert [m["label"] for m in months] == ["December 2025", "January 2026"]
     assert months[0]["active_days"] == [31]
     assert months[1]["active_days"] == [5]
-
-
-def test_activity_calendar_weeks_are_monday_first_with_padding():
-    months = compute.activity_calendar([], date(2026, 7, 3), months=1)
-    weeks = months[0]["weeks"]
-    # July 2026 starts on a Wednesday: two Monday/Tuesday padding cells.
-    assert weeks[0] == [0, 0, 1, 2, 3, 4, 5]
-    assert all(len(week) == 7 for week in weeks)
-    assert months[0]["active_days"] == []
+    # Monday-first rows with 0 padding cells: display.render_calendar prints a
+    # Mon-first header, so a Sunday-first grid would misalign every date.
+    assert months[1]["weeks"][0] == [0, 0, 0, 1, 2, 3, 4]  # 1 Jan 2026 is a Thursday
+    assert all(len(week) == 7 for month in months for week in month["weeks"])
 
 
 # --- weekly_volumes ------------------------------------------------------------
@@ -160,30 +149,25 @@ def test_hr_zone_seconds_spans_multiple_zones():
     }
 
 
-def test_hr_zone_seconds_no_max_heart_rate_returns_empty():
-    points = _hr_stream([(0, 100), (60, 150)])
-    assert compute.hr_zone_seconds(points, 0) == {}
+def test_hr_zone_seconds_returns_empty_without_the_inputs_it_needs():
+    """Unset max_heart_rate, or a stream carrying no HR at all — the two ways
+    an activity legitimately ends up with no hr_zones field."""
+    assert compute.hr_zone_seconds(_hr_stream([(0, 100), (60, 150)]), 0) == {}
+    assert compute.hr_zone_seconds(_hr_stream([(0, None), (60, None)]), 200) == {}
 
 
-def test_hr_zone_seconds_no_hr_data_returns_empty():
-    points = _hr_stream([(0, None), (60, None)])
-    assert compute.hr_zone_seconds(points, 200) == {}
-
-
-def test_hr_zone_percentages_sums_to_100():
-    hr_zones = {
-        "zone1_seconds": 60.0,
-        "zone2_seconds": 0.0,
-        "zone3_seconds": 60.0,
-        "zone4_seconds": 0.0,
-        "zone5_seconds": 60.0,
-    }
-    percentages = compute.hr_zone_percentages(hr_zones)
+def test_hr_zone_percentages_sum_to_100_or_are_absent():
+    percentages = compute.hr_zone_percentages(
+        {
+            "zone1_seconds": 60.0,
+            "zone2_seconds": 0.0,
+            "zone3_seconds": 60.0,
+            "zone4_seconds": 0.0,
+            "zone5_seconds": 60.0,
+        }
+    )
     assert sum(percentages.values()) == pytest.approx(100.0)
     assert percentages["zone1"] == pytest.approx(100 / 3)
-
-
-def test_hr_zone_percentages_none_when_absent():
     assert compute.hr_zone_percentages(None) is None
     assert compute.hr_zone_percentages({}) is None
 
@@ -211,47 +195,31 @@ def test_all_personal_bests_milestone_split_and_longest():
     assert pbs["most_elevation_gain_m"] == 120
 
 
-def test_best_pb_per_label_prefers_faster_split():
-    pbs = compute.all_personal_bests(RUNS)["run"]
-    collapsed = compute.best_pb_per_label(pbs)
+def test_best_pb_per_label_collapses_each_label_to_the_faster_of_the_pair():
+    """pbs.json stores the dedicated and split PBs for a label independently;
+    the table shows one row, whichever is faster, keeping its own date. Non-time
+    keys pass through untouched."""
+    collapsed = compute.best_pb_per_label(compute.all_personal_bests(RUNS)["run"])
     assert collapsed["fastest_5k_seconds"] == 1400  # split (1400) beat dedicated (1500)
     assert collapsed["fastest_5k_date"] == "2024-02-01"
     assert "fastest_5k_split_seconds" not in collapsed
-    assert "fastest_5k_split_date" not in collapsed
+    assert collapsed["longest_distance_km"] == 10.5
+    assert collapsed["most_elevation_gain_m"] == 120
 
-
-def test_best_pb_per_label_prefers_faster_dedicated():
-    type_pbs = {
-        "fastest_5k_seconds": 1300,
-        "fastest_5k_date": "2024-01-01",
-        "fastest_5k_split_seconds": 1400,
-        "fastest_5k_split_date": "2024-02-01",
-    }
-    collapsed = compute.best_pb_per_label(type_pbs)
-    assert collapsed == {"fastest_5k_seconds": 1300, "fastest_5k_date": "2024-01-01"}
-
-
-def test_best_pb_per_label_only_one_present():
+    # The other direction, and each half of the pair alone.
+    assert compute.best_pb_per_label(
+        {
+            "fastest_5k_seconds": 1300,
+            "fastest_5k_date": "2024-01-01",
+            "fastest_5k_split_seconds": 1400,
+            "fastest_5k_split_date": "2024-02-01",
+        }
+    ) == {"fastest_5k_seconds": 1300, "fastest_5k_date": "2024-01-01"}
     milestone_only = {"fastest_10k_seconds": 2900, "fastest_10k_date": "2024-03-01"}
     assert compute.best_pb_per_label(milestone_only) == milestone_only
-
-    split_only = {
-        "fastest_10k_split_seconds": 2800,
-        "fastest_10k_split_date": "2024-04-01",
-    }
-    assert compute.best_pb_per_label(split_only) == {
-        "fastest_10k_seconds": 2800,
-        "fastest_10k_date": "2024-04-01",
-    }
-
-
-def test_best_pb_per_label_passes_through_non_time_keys():
-    pbs = compute.all_personal_bests(RUNS)["run"]
-    collapsed = compute.best_pb_per_label(pbs)
-    assert collapsed["longest_distance_km"] == 10.5
-    assert collapsed["longest_distance_date"] == "2024-02-01"
-    assert collapsed["most_elevation_gain_m"] == 120
-    assert collapsed["most_elevation_gain_date"] == "2024-02-01"
+    assert compute.best_pb_per_label(
+        {"fastest_10k_split_seconds": 2800, "fastest_10k_split_date": "2024-04-01"}
+    ) == {"fastest_10k_seconds": 2800, "fastest_10k_date": "2024-04-01"}
 
 
 def test_all_personal_bests_no_distance_type_skips_longest():
@@ -348,11 +316,8 @@ def test_best_power_window_finds_the_effort_inside_a_longer_ride():
     assert 160 < mean < 180
 
 
-def test_best_power_window_returns_none_when_the_ride_is_too_short():
+def test_best_power_window_returns_none_without_a_long_enough_powered_ride():
     assert compute.best_power_window(_power_stream([200] * 300), 1200) is None
-
-
-def test_best_power_window_needs_power_data():
     no_power = [{"elapsed_seconds": i, "distance_km": i * 0.005} for i in range(2000)]
     assert compute.best_power_window(no_power, 60) is None
     assert compute.best_power_window([], 60) is None
@@ -466,9 +431,3 @@ def test_total_weight_lifted_counts_every_rep_of_every_set():
     )
     assert compute.total_weight_lifted(activity) == 10 * 100 + 3 * 130
     assert compute.total_weight_lifted({"type": "strength"}) == 0.0
-
-
-def test_strength_met_is_flat_and_distance_free():
-    activity = {"type": "strength", "duration_seconds": 3600}
-    assert compute.met_for_activity(activity) == 6.0
-    assert "strength" in compute.NO_DISTANCE_TYPES

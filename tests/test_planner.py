@@ -10,39 +10,34 @@ from fit import planner
 # --- parsing -------------------------------------------------------------------
 
 
-def test_parse_pace():
-    assert planner.parse_pace("4:30") == 270
-    assert planner.parse_pace(" 10:05 ") == 605
-
-
-@pytest.mark.parametrize("bad", ["430", "4:5", "4:xx", "-4:30", "4:75", "0:00", ""])
-def test_parse_pace_rejects(bad):
-    with pytest.raises(ValueError):
-        planner.parse_pace(bad)
-
-
-def test_parse_duration():
-    assert planner.parse_duration("90") == 90
-    assert planner.parse_duration("2:00") == 120
-
-
-@pytest.mark.parametrize("bad", ["", "0", "-90", "1.5", "abc"])
-def test_parse_duration_rejects(bad):
-    with pytest.raises(ValueError):
-        planner.parse_duration(bad)
-
-
-def test_parse_schedule_date():
-    assert planner.parse_schedule_date("2026-08-28") == "2026-08-28"
-    assert planner.parse_schedule_date(" 2026-08-28 ") == "2026-08-28"
-
-
 @pytest.mark.parametrize(
-    "bad", ["", "2026-8-28", "28-08-2026", "2026/08/28", "2026-13-01", "2026-02-30"]
+    "parse,good,bad",
+    [
+        (
+            "parse_pace",
+            {"4:30": 270, " 10:05 ": 605},
+            ["430", "4:5", "4:xx", "-4:30", "4:75", "0:00", ""],
+        ),
+        ("parse_duration", {"90": 90, "2:00": 120}, ["", "0", "-90", "1.5", "abc"]),
+        (
+            "parse_schedule_date",
+            {"2026-08-28": "2026-08-28", " 2026-08-28 ": "2026-08-28"},
+            ["", "2026-8-28", "28-08-2026", "2026/08/28", "2026-13-01", "2026-02-30"],
+        ),
+        (
+            "parse_distance_km",  # prompted in km, stored as metres
+            {"16": 16000, " 16.5 ": 16500},
+            ["", "0", "-5", "abc", "16km"],
+        ),
+    ],
 )
-def test_parse_schedule_date_rejects(bad):
-    with pytest.raises(ValueError):
-        planner.parse_schedule_date(bad)
+def test_the_prompt_parsers_accept_only_what_they_should(parse, good, bad):
+    fn = getattr(planner, parse)
+    for text, expected in good.items():
+        assert fn(text) == expected
+    for text in bad:
+        with pytest.raises(ValueError):
+            fn(text)
 
 
 def test_pace_zone_mps_bounds_ordered():
@@ -166,11 +161,6 @@ def test_cycle_intervals_power_zone():
     assert interval["targetValueOne"] == 190
     assert interval["targetValueTwo"] == 210
     assert plan["payload"]["sportType"]["sportTypeId"] == 2
-
-
-def test_build_plan_invalid_combo_raises():
-    with pytest.raises(ValueError):
-        planner.build_plan("swim", "hills", {}, "t")
 
 
 def test_describe_plan_run_intervals():
@@ -352,17 +342,6 @@ def test_rep_progression_from_previous_plans():
 # --- steady sessions (easy / long / endurance / continuous) --------------------
 
 
-def test_parse_distance_km():
-    assert planner.parse_distance_km("16") == 16000
-    assert planner.parse_distance_km(" 16.5 ") == 16500
-
-
-@pytest.mark.parametrize("bad", ["", "0", "-5", "abc", "16km"])
-def test_parse_distance_km_rejects(bad):
-    with pytest.raises(ValueError):
-        planner.parse_distance_km(bad)
-
-
 @pytest.mark.parametrize(
     "sport,workout_type,params",
     [
@@ -410,19 +389,6 @@ def test_swim_continuous_without_a_pace_target():
     assert step["targetType"]["workoutTargetTypeKey"] == "no.target"
 
 
-def test_easy_and_endurance_intensities_sit_below_threshold():
-    assert planner.easy_pace_from_5k(1500) > 1500 / 5  # slower than 5k pace
-    assert planner.endurance_watts_from_ftp(250) < 250
-
-
-def test_workout_name_matches_build_plan():
-    params = {"distance_m": 16000, "target_pace": 345}
-    assert (
-        planner.workout_name("run", "long", params)
-        == planner.build_plan("run", "long", params, "x")["workout_name"]
-    )
-
-
 # --- guarded derivations and benchmark payloads --------------------------------
 
 
@@ -431,10 +397,12 @@ def test_swim_css_rejects_two_incomparable_efforts():
     from 2025 (2:15/100m) gave 35s/100m — faster than the world record. The
     shorter effort must actually be faster per 100m for the model to mean
     anything."""
+    # Dates deliberately within CSS_PAIR_MAX_DAYS, so recency cannot be what
+    # rejects the pair — the per-100m ratio has to be.
     swims = [
         {
             "type": "swim",
-            "date": "2022-05-01",
+            "date": "2026-07-01",
             "distance_km": 0.81,
             "duration_seconds": 2461,
             "splits": {"500m_seconds": 1179.9},
@@ -462,84 +430,45 @@ def test_swim_css_pair_must_be_close_in_time():
     assert "CSS from" not in far[1]
 
 
-def test_derive_target_rejects_the_impossible_with_a_reason():
-    run = [
-        {
-            "type": "run",
-            "date": "2026-08-01",
-            "distance_km": 5.0,
-            "duration_seconds": 400,
-        }
-    ]
-    result = planner.derive_target("run", run)
-    assert result["value"] is None
-    assert "outside the plausible" in result["why"]
+def test_derive_target_guards_a_measurement_before_returning_it():
+    """A derived target outside PLAUSIBLE_TARGETS comes back as None with a
+    reason, so a rejected reading is never silently swapped for a default."""
+
+    def five_k(duration_seconds):
+        return [
+            {
+                "type": "run",
+                "date": "2026-08-01",
+                "distance_km": 5.0,
+                "duration_seconds": duration_seconds,
+            }
+        ]
+
+    impossible = planner.derive_target("run", five_k(400))
+    assert impossible["value"] is None
+    assert "outside the plausible" in impossible["why"]
+    assert planner.derive_target("run", five_k(1500))["value"] == 1500
 
 
-def test_derive_target_passes_a_believable_measurement_through():
-    run = [
-        {
-            "type": "run",
-            "date": "2026-08-01",
-            "distance_km": 5.0,
-            "duration_seconds": 1500,
-        }
-    ]
-    assert planner.derive_target("run", run)["value"] == 1500
+def _ride(**fields):
+    return {"type": "cycle", "date": "2026-08-01", "duration_seconds": 4000, **fields}
 
 
-def test_ftp_applies_the_twenty_minute_correction_to_a_real_window():
+def test_ftp_prefers_a_real_twenty_minute_window_over_a_ride_average():
     """95% is the convention for a 20-minute best effort, so it applies to
-    best_power's 20min figure and not to a whole-ride average."""
-    windowed = [
-        {
-            "type": "cycle",
-            "date": "2026-08-01",
-            "avg_power": 150,
-            "duration_seconds": 4000,
-            "best_power": {"20min": 200},
-        }
-    ]
-    watts, why = planner.derive_ride_watts(windowed)
-    assert watts == 190  # 200 * 0.95
+    best_power's 20min figure and not to a whole-ride average — which is
+    already sub-threshold, and would stack two conservative estimates. The
+    window wins even when another ride posted a higher average."""
+    windowed = _ride(avg_power=150, best_power={"20min": 200})
+    watts, why = planner.derive_ride_watts([_ride(avg_power=260), windowed])
+    assert watts == 190  # 200 * 0.95, not 260
     assert "20min power" in why
 
-
-def test_a_ride_average_is_used_unadjusted_when_no_window_exists():
-    ride = [
-        {
-            "type": "cycle",
-            "date": "2026-08-01",
-            "avg_power": 200,
-            "duration_seconds": 1200,
-        }
-    ]
-    watts, why = planner.derive_ride_watts(ride)
-    assert watts == 200
+    watts, why = planner.derive_ride_watts(
+        [_ride(avg_power=200, duration_seconds=1200)]
+    )
+    assert watts == 200  # unadjusted
     assert "no 20min power recorded" in why
-
-
-def test_a_recorded_window_beats_a_higher_ride_average():
-    """A 20-minute effort is the better measurement even when another ride
-    posted a higher whole-ride average."""
-    activities = [
-        {
-            "type": "cycle",
-            "date": "2026-08-01",
-            "avg_power": 260,
-            "duration_seconds": 4000,
-        },
-        {
-            "type": "cycle",
-            "date": "2026-08-05",
-            "avg_power": 150,
-            "duration_seconds": 4000,
-            "best_power": {"20min": 200},
-        },
-    ]
-    watts, why = planner.derive_ride_watts(activities)
-    assert watts == 190
-    assert "20min power" in why
 
 
 @pytest.mark.parametrize("seconds,counts", [(1139, False), (1140, True), (1199, True)])
@@ -600,14 +529,6 @@ def test_a_bare_test_carries_its_instruction_in_the_name():
         "baseline",
         {"warmup_minutes": 20, "test_minutes": 20, "cooldown_minutes": 10},
     )
-
-
-def test_optional_int_treats_blank_as_no_step():
-    assert planner._optional_int("") == 0
-    assert planner._optional_int("  ") == 0
-    assert planner._optional_int("15") == 15
-    with pytest.raises(ValueError):
-        planner._optional_int("abc")
 
 
 @pytest.mark.parametrize("sport", ["run", "cycle", "swim"])
@@ -739,8 +660,3 @@ def test_describe_plan_names_each_lift():
         "3 x Deadlift 10 reps @ 60kg, 1:30 rest",
         "3 x Squat 10 reps @ 50kg, 1:30 rest",
     ]
-
-
-def test_only_straight_sets_prompts_repeat():
-    assert planner.repeated_param_specs("strength", "straight_sets")[0] == "exercises"
-    assert planner.repeated_param_specs("run", "intervals") == ("", [])

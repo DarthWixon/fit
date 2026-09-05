@@ -224,24 +224,22 @@ def _stream(samples, distance=True):
     ]
 
 
-def test_attach_best_power_stores_the_curve():
-    activity = importers._attach_best_power({}, _stream([200] * 2000))
-    assert activity["best_power"] == {"1min": 200, "5min": 200, "20min": 200}
-
-
-def test_attach_best_power_omits_the_key_when_there_is_no_power():
-    stream = [{"elapsed_seconds": i, "distance_km": i * 0.005} for i in range(2000)]
-    assert "best_power" not in importers._attach_best_power({}, stream)
-
-
-def test_attach_best_power_keeps_only_the_windows_the_ride_covers():
-    """A ten-minute ride has a 1min and 5min figure but no 20min one."""
+def test_attach_best_power_stores_only_the_windows_the_ride_covers():
+    """A ten-minute ride has a 1min and 5min figure but no 20min one, and a
+    ride with no power at all gets no key rather than an empty dict."""
+    assert importers._attach_best_power({}, _stream([200] * 2000))["best_power"] == {
+        "1min": 200,
+        "5min": 200,
+        "20min": 200,
+    }
     assert set(
         importers._attach_best_power({}, _stream([200] * 600))["best_power"]
     ) == {
         "1min",
         "5min",
     }
+    no_power = [{"elapsed_seconds": i, "distance_km": i * 0.005} for i in range(2000)]
+    assert "best_power" not in importers._attach_best_power({}, no_power)
 
 
 def test_an_indoor_ride_with_no_distance_still_yields_power():

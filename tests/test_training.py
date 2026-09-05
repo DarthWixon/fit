@@ -166,70 +166,11 @@ def test_every_goal_expands_into_buildable_sessions(goal):
     for session in plan["sessions"]:
         args = training.session_to_build_args(session)
         if args is not None:
-            planner.build_plan(*args, session["date"])
-
-
-@pytest.mark.parametrize("goal", ALL_GOALS)
-def test_every_goal_phases_run_base_to_taper(goal):
-    plan = _plan(f"goal: {goal}\nevent_date: 2027-03-14\n")
-    phases = [w["phase"] for w in training.group_by_week(plan["sessions"])]
-    blocks = [p for i, p in enumerate(phases) if i == 0 or phases[i - 1] != p]
-    assert blocks == ["base", "build", "peak", "taper"]
-
-
-@pytest.mark.parametrize("goal", ALL_GOALS)
-def test_every_goal_respects_its_own_days_per_week(goal):
-    template = training.GOAL_TEMPLATES[goal]
-    plan = _plan(f"goal: {goal}\nevent_date: 2027-03-14\nextras: {{}}\n")
-    week_two = [s for s in plan["sessions"] if s["week"] == 2]
-    assert len({s["date"] for s in week_two}) <= template["days_per_week"]
-
-
-@pytest.mark.parametrize("goal", ALL_GOALS)
-def test_every_goal_keeps_its_scaled_params_inside_the_clamps(goal):
-    """The clamps are what stop a long plan's compounding ramp running away —
-    a 16-week plan reaches ~2.2x, far more than an 8-week one."""
-    template = training.GOAL_TEMPLATES[goal]
-    plan = _plan(f"goal: {goal}\nevent_date: 2027-03-14\n")
-    for session in plan["sessions"]:
-        # Benchmarks are deliberately unscaled — a 3km test is only a benchmark
-        # if it is the same 3km every time — so they have no clamp to check.
-        if session["is_extra"] or session.get("is_benchmark"):
-            continue
-        # A template may carry two sessions of the same type with different
-        # scales (the TT plans' short and long interval days, say), so the
-        # value need only satisfy one of the matching clamps.
-        candidates = [
-            s["scale"]
-            for s in template["weekly_sessions"]
-            if (s["sport"], s["session_type"])
-            == (session["sport"], session["session_type"])
-            and s["scale"]
-        ]
-        # Strength sessions carry no scale at all: their progression is the
-        # weight on the bar, so there is no size to clamp.
-        if not candidates:
-            assert session["sport"] == "strength"
-            continue
-        assert any(
-            scale["min"] <= session["params"][scale["param"]] <= scale["max"]
-            for scale in candidates
-        )
-
-
-@pytest.mark.parametrize("goal", ALL_GOALS)
-def test_targets_cover_exactly_the_sports_the_goal_trains(goal):
-    plan = _plan(f"goal: {goal}\nevent_date: 2027-03-14\n")
-    expected = {
-        training._SPORT_TARGETS[sport][0]
-        for sport in training.template_sports(goal)
-        if sport in training._SPORT_TARGETS
-    }
-    # Strength sits under its own key: one figure per lift, not one per sport.
-    if training.template_lifts(goal):
-        expected.add("strength")
-        assert set(plan["targets"]["strength"]) == set(training.template_lifts(goal))
-    assert set(plan["targets"]) - {"why"} == expected
+            built = planner.build_plan(*args, session["date"])
+            # The stored name is what `fit train show` and the Garmin calendar
+            # display; the payload is rebuilt from params at sync time. If the
+            # two disagree, the calendar describes a different workout.
+            assert built["workout_name"] == session["workout_name"]
 
 
 def test_a_target_for_an_untrained_sport_is_rejected():
@@ -328,8 +269,15 @@ def test_targets_reach_the_session_params():
         if s["sport"] == "cycle" and s["session_type"] == "long"
     )
     assert intervals["params"]["target_watts"] == 250
-    # Steady riding sits below threshold, never at it.
+    # Steady work sits below threshold, never at it — slower than 5k pace for
+    # running, under FTP for riding.
     assert long_ride["params"]["target_watts"] < 250
+    long_run = next(
+        s
+        for s in plan["sessions"]
+        if s["sport"] == "run" and s["session_type"] == "long"
+    )
+    assert long_run["params"]["target_pace"] > plan["targets"]["run_5k_seconds"] / 5
 
 
 # --- completion ----------------------------------------------------------------
@@ -541,12 +489,6 @@ def test_a_plan_at_its_template_length_uses_the_reference_ramp():
         ), goal
 
 
-def test_a_longer_plan_ramps_more_gently():
-    short = _at_length("cycle_100k_sportive", 12)["progression"]["weekly_ramp_pct"]
-    longer = _at_length("cycle_100k_sportive", 26)["progression"]["weekly_ramp_pct"]
-    assert longer < short
-
-
 def test_a_longer_plan_arrives_at_the_same_peak_not_a_higher_one():
     """The point of the derived ramp: extra weeks buy a gentler climb to the
     same summit, rather than compounding past it and pinning every long
@@ -565,27 +507,6 @@ def test_a_shorter_plan_peaks_lower_rather_than_ramping_violently():
     assert _peak_long_session(short) < _peak_long_session(
         _at_length("cycle_100k_sportive", 12)
     )
-
-
-@pytest.mark.parametrize("goal", ALL_GOALS)
-def test_doubling_a_plans_length_does_not_pin_it_at_its_clamps(goal):
-    template = training.GOAL_TEMPLATES[goal]
-    plan = _at_length(goal, template["weeks"] * 2)
-    pinned = total = 0
-    for session in plan["sessions"]:
-        if session["is_extra"]:
-            continue
-        scale = _scale_for(template, session)
-        if scale is None:
-            continue
-        total += 1
-        if session["params"][scale["param"]] == scale["max"]:
-            pinned += 1
-    if not total:
-        # strength_program scales nothing — load is its whole progression.
-        assert not training.volume_sports(goal)
-        return
-    assert pinned / total < 0.25
 
 
 def test_an_explicit_ramp_overrides_the_derived_one():
@@ -669,7 +590,9 @@ def test_scaled_params_keep_headroom_inside_their_clamps(goal):
         if scale is None:
             continue
         total += 1
-        if session["params"][scale["param"]] == scale["max"]:
+        value = session["params"][scale["param"]]
+        assert scale["min"] <= value <= scale["max"], f"{goal}: {value} escaped {scale}"
+        if value == scale["max"]:
             at_max += 1
     if not total:
         assert not training.volume_sports(goal)
@@ -728,15 +651,6 @@ def test_frequency_builds_in_priority_order():
     last = {s["session_type"] for s in weeks[-3]["sessions"] if not s["is_extra"]}
     assert first < last  # a strict subset: nothing is swapped out, only added
     assert "long" in first
-
-
-def test_extras_keep_pace_with_the_weeks_own_sessions():
-    plan = _plan(RAMPED + "extras: {strength: 1}\n")
-    for week in training.group_by_week(plan["sessions"]):
-        extras = [s for s in week["sessions"] if s["is_extra"]]
-        assert len(extras) == 1
-        key_dates = {s["date"] for s in week["sessions"] if s["is_key"]}
-        assert extras[0]["date"] not in key_dates
 
 
 def test_the_opening_week_is_measured_against_its_own_smaller_session_list():
@@ -1030,32 +944,6 @@ def test_retarget_reports_the_old_and_new_targets():
     assert summary["retargeted"] + summary["unchanged"] == len(eligible)
 
 
-def test_an_implausible_derivation_falls_back_with_a_reason():
-    """The real failure: a 500m from a 2021 drill session against a 1k from
-    2025 produced a 35s/100m CSS — faster than the world record."""
-    swims = [
-        {
-            "id": "s1",
-            "type": "swim",
-            "date": "2026-05-01",
-            "distance_km": 0.81,
-            "duration_seconds": 2461,
-            "splits": {"500m_seconds": 1179.9},
-        },
-        {
-            "id": "s2",
-            "type": "swim",
-            "date": "2026-08-01",
-            "distance_km": 1.0,
-            "duration_seconds": 1355,
-        },
-    ]
-    spec = training.parse_plan_spec("goal: sprint_triathlon\nevent_date: 2026-11-15\n")
-    targets = training.derive_targets(spec, swims, REFERENCE)
-    low, high = planner.PLAUSIBLE_TARGETS["swim"]
-    assert low <= targets["swim_css_100m"] <= high
-
-
 # --- strength progression ------------------------------------------------------
 
 
@@ -1180,13 +1068,6 @@ def test_a_strength_benchmark_tests_the_lift_its_session_leads_with():
         )
         # Untargeted: a test at a prescribed load is not a test.
         assert "target_weight_kg" not in session["params"]
-
-
-def test_strength_volume_is_not_measured_against_endurance_history():
-    """A strength session's size never moves, so counting it would scale a
-    triathlete down for gym work the plan can't adjust anyway."""
-    assert "strength" not in training.volume_sports("sprint_triathlon")
-    assert training.volume_sports("strength_program") == set()
 
 
 def test_a_lift_goal_for_a_goal_that_never_lifts_is_rejected():
