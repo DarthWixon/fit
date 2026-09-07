@@ -443,6 +443,10 @@ GOAL_TEMPLATES = {
                 recovery=420,
                 cooldown_minutes=10,
             ),
+            # A squat/press day and a deadlift/press day: each session pairs one
+            # heavy lower-body lift with a pressing lift, rather than stacking
+            # both squat and deadlift into one session. Both rest 180s now that
+            # each day carries a heavy compound.
             _session(
                 "strength",
                 "straight_sets",
@@ -452,7 +456,7 @@ GOAL_TEMPLATES = {
                 rest=180,
                 exercises=[
                     {"exercise": "squat", "sets": 4, "reps": 6},
-                    {"exercise": "deadlift", "sets": 3, "reps": 5},
+                    {"exercise": "bench_press", "sets": 3, "reps": 10},
                 ],
             ),
             _session(
@@ -461,9 +465,9 @@ GOAL_TEMPLATES = {
                 day=4,
                 priority=5,
                 warmup_minutes=10,
-                rest=90,
+                rest=180,
                 exercises=[
-                    {"exercise": "bench_press", "sets": 3, "reps": 10},
+                    {"exercise": "deadlift", "sets": 3, "reps": 5},
                     {"exercise": "shoulder_press", "sets": 3, "reps": 10},
                 ],
             ),
