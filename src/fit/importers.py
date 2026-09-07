@@ -65,15 +65,55 @@ FIT_SPORT_CODE_MAP = {
 # should not silently reclassify a gym session as a run.
 FIT_STRENGTH_SUB_SPORTS = {"strength_training", 20}
 
-# Deliberately no FIT_EXERCISE_CATEGORY_MAP. Unlike the sport codes above,
-# fitparse's bundled profile decodes the `set` message's `category` field to a
-# name already, and its exercise_category enum covers everything in scope
-# (bench_press=0, deadlift=8, shoulder_press=24, squat=28) plus an explicit
-# unknown=65534. There is no gap to paper over, so adding a map would only
-# create a second, staler source of truth. A category that arrives as a bare
-# int (a future firmware's addition) is named "unknown_<int>" rather than
-# dropped -- see _fit_exercise_name.
-#
+# fitparse==1.2.0's bundled profile does define the exercise_category enum and
+# decodes a *scalar* `category` field to its name (which is all the synthetic
+# tests/data/test_strength.fit exercises -- it writes scalars). But a real
+# Garmin watch writes the `set` message's `category` as a FIT *array*, and
+# fitparse does not run the enum renderer over array elements: fields.get(
+# "category") then comes back as a list of raw uint16s (e.g. [28]) rather than
+# ["squat"], so every lift in a real gym session lands in _fit_exercise_name's
+# "unknown_<int>" fallback. This table is the FIT exercise_category enum
+# (0..32), used to resolve those ints back to names -- kept here as an explicit
+# map rather than reaching into fitparse.profile internals, matching how
+# FIT_SPORT_CODE_MAP is handled. 65534 is FIT's "not classified" sentinel and
+# is deliberately left out: it stays "unknown_65534" so an unclassified set
+# reads as unclassified rather than as a named lift.
+FIT_EXERCISE_CATEGORY_MAP = {
+    0: "bench_press",
+    1: "calf_raise",
+    2: "cardio",
+    3: "carry",
+    4: "chop",
+    5: "core",
+    6: "crunch",
+    7: "curl",
+    8: "deadlift",
+    9: "flye",
+    10: "hip_raise",
+    11: "hip_stability",
+    12: "hip_swing",
+    13: "hyperextension",
+    14: "lateral_raise",
+    15: "leg_curl",
+    16: "leg_raise",
+    17: "lunge",
+    18: "olympic_lift",
+    19: "plank",
+    20: "plyo",
+    21: "pull_up",
+    22: "push_up",
+    23: "row",
+    24: "shoulder_press",
+    25: "shoulder_stability",
+    26: "shrug",
+    27: "sit_up",
+    28: "squat",
+    29: "total_body",
+    30: "triceps_extension",
+    31: "warm_up",
+    32: "run",
+}
+
 # `category_subtype` is the undecoded one (a uint16 indexing per-category
 # <category>_exercise_name enums, e.g. squat_exercise_name 2 = back_squats).
 # It is deliberately ignored for now: PBs key on the category, so a front
@@ -452,18 +492,21 @@ def import_tcx(path: str, max_heart_rate: int = 0) -> dict:
 def _fit_exercise_name(category) -> str:
     """One exercise name from a `set` message's category field.
 
-    fitparse decodes known categories to a name already (see the note by
-    FIT_STRENGTH_SUB_SPORTS). The FIT profile defines category as an array, so
-    a list is unwrapped to its first entry. Anything that arrives as a bare int
-    is named "unknown_<int>" -- kept rather than dropped, so the session's real
-    volume survives, and kept distinct per code so two unmapped exercises don't
-    merge into one PB line."""
+    A real Garmin watch writes `category` as a FIT array and fitparse does not
+    enum-render array elements, so this arrives as a list of raw uint16s (e.g.
+    [28]) rather than ["squat"]; the list is unwrapped to its first entry and
+    resolved via FIT_EXERCISE_CATEGORY_MAP (see the note there). A scalar string
+    -- fitparse's scalar-field path, as in the synthetic test fixture -- is
+    taken as-is. A code the map doesn't cover (a future firmware's addition, or
+    FIT's 65534 "not classified" sentinel) is named "unknown_<int>" -- kept
+    rather than dropped, so the session's real volume survives, and kept
+    distinct per code so two unmapped exercises don't merge into one PB line."""
     if isinstance(category, (list, tuple)):
         category = category[0] if category else None
     if isinstance(category, str):
         return category.lower()
     if isinstance(category, int):
-        return f"unknown_{category}"
+        return FIT_EXERCISE_CATEGORY_MAP.get(category, f"unknown_{category}")
     return "unknown"
 
 

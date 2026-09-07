@@ -171,10 +171,15 @@ def test_import_fit_strength_session():
 
 
 def test_fit_exercise_name_handles_every_category_shape():
-    # fitparse decodes known categories itself; the FIT profile defines the
-    # field as an array, and an unmapped code must stay distinguishable.
+    # A scalar string (fitparse's scalar-field path) is taken as-is; a real
+    # watch's array of raw uint16s is unwrapped and resolved via the enum map;
+    # an unmapped code (and FIT's 65534 sentinel) stays distinguishable.
     assert importers._fit_exercise_name("DEADLIFT") == "deadlift"
     assert importers._fit_exercise_name(["squat"]) == "squat"
+    assert importers._fit_exercise_name([28]) == "squat"
+    assert importers._fit_exercise_name(28) == "squat"
+    assert importers._fit_exercise_name([0]) == "bench_press"
+    assert importers._fit_exercise_name([65534]) == "unknown_65534"
     assert importers._fit_exercise_name(4242) == "unknown_4242"
     assert importers._fit_exercise_name(None) == "unknown"
 

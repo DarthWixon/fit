@@ -553,11 +553,22 @@ worth naming.
 **Strength sessions have no distinct FIT sport**: a gym session arrives as
 sport 10 (`"training"`) with sub_sport 20 (`"strength_training"`), so
 `import_fit` checks `FIT_STRENGTH_SUB_SPORTS` *before* the sport map — sport
-10 isn't in `FIT_SPORT_MAP` and would otherwise default to `"run"`. There is
-deliberately **no** `FIT_EXERCISE_CATEGORY_MAP`: unlike the sport codes,
-fitparse decodes the `set` message's `category` to a name already and its
-enum covers everything in scope, so a map would only add a staler second
-source of truth. See "Strength sessions".
+10 isn't in `FIT_SPORT_MAP` and would otherwise default to `"run"`. See
+"Strength sessions".
+
+**`FIT_EXERCISE_CATEGORY_MAP` — real files need it.** fitparse *does* decode a
+*scalar* `set.category` to a name (all the synthetic `tests/data/test_strength.fit`
+exercises are scalars, which is why an earlier draft assumed no map was needed).
+But a real Garmin watch writes `category` as a FIT *array*, and fitparse does
+not enum-render array elements — so `fields.get("category")` comes back as
+`[28]`, not `["squat"]`, and every lift in a real gym session fell into
+`_fit_exercise_name`'s `"unknown_<int>"` fallback. `FIT_EXERCISE_CATEGORY_MAP`
+is the FIT `exercise_category` enum (0–32), kept as an explicit table rather
+than reaching into `fitparse.profile` internals (same call as
+`FIT_SPORT_CODE_MAP`). `_fit_exercise_name` unwraps the list, resolves the int
+through the map, and still falls back to `"unknown_<int>"` for a code the map
+lacks — including FIT's `65534` "not classified" sentinel, deliberately left
+out so an unclassified set reads as unclassified rather than a named lift.
 
 **Canoe mapping assumption**: there is no canoe-specific FIT `sport` — Garmin
 records paddling as `19` (paddling) or `41` (kayaking). Both are folded to
@@ -996,7 +1007,9 @@ deeper than every other type's.
 
 **Import is FIT-only**, from `set` messages rather than a point stream. Rest
 sets (`set_type == "rest"`) are dropped, consecutive sets of the same exercise
-group into one entry, and a category fitparse can't name is kept as
+group into one entry, and the `set.category` code is resolved to a name via
+`importers.FIT_EXERCISE_CATEGORY_MAP` (real watches array-encode it, so fitparse
+hands back raw ints — see "importers.py"). A code the map lacks is kept as
 `"unknown_<int>"` rather than dropped — an unrecognised exercise still counts
 toward the session's volume and load, and keeping the code distinct stops two
 unmapped exercises merging into one PB line. `category_subtype` (front vs back
