@@ -1,37 +1,6 @@
-"""Filesystem boundary for fit. The only module that touches disk.
+"""Filesystem boundary. The only module that touches disk.
 
-Activity dicts have the shape:
-    {
-        "id": "2024-01-15T08:30:00",      # ISO 8601, used as filename key
-        "type": "run",                     # "run" | "cycle" | "walk" | "hike" | "swim" | "squash" | "canoe"
-        "date": "2024-01-15",
-        "distance_km": 10.2,
-        "duration_seconds": 3120,
-        "elevation_gain_m": 45,            # optional
-        "avg_heart_rate": 152,             # optional
-        "max_heart_rate": 171,             # optional
-        "avg_power": 187,                  # optional, watts; TCX/FIT only
-        "best_power": {"20min": 241, ...}, # optional, watts; FIT only, see "Power windows"
-        "hr_zones": {"zone1_seconds": 120.0, ...},  # optional, see "HR zones"
-        "splits": {"5k_seconds": 1423, ...},  # optional, see "Split PBs"
-        "source": "garmin",                # "garmin" | "strava"
-    }
-
-pbs.json has the shape:
-    {
-        "computed_from": 47,
-        "run": {"fastest_5k_seconds": 1423, "fastest_5k_date": "2024-03-12", ...},
-        "cycle": {...},
-    }
-
-fitness.json has the shape:
-    {
-        "baseline_date": "2026-07-01",
-        "baseline_value": 11.68   # raw EWMA units (MET-hours), unrescaled
-    }
-Unlike pbs.json, this has no "computed_from"/staleness field — it is never
-auto-invalidated by new activities, only replaced by an explicit reset
-(see cli.fitness_reset). See "Fitness index" in CLAUDE.md.
+Dict shapes (activity, pbs.json, fitness.json) are in CLAUDE.md.
 """
 
 import json
@@ -135,9 +104,8 @@ def _read_json(path: Path, default=None):
 
 
 def read_activities_with_warnings() -> tuple[list[dict], list[str]]:
-    """All activity dicts, plus one warning string per corrupt file skipped —
-    returned rather than printed, since printing is a display.py concern,
-    not storage.py's."""
+    """Activity dicts + a warning per corrupt file. Returned, not printed:
+    printing is display.py's job."""
     activities = []
     warnings = []
     for file_path in sorted(activities_dir().glob("*.json")):
@@ -162,9 +130,8 @@ def write_plan(plan: dict) -> None:
 
 
 def read_plans() -> list[dict]:
-    """All saved plan dicts, silently skipping unparseable files — a corrupt
-    plan just drops out of the rep-progression defaults, which is the only
-    reason plans are read back."""
+    """Saved plans, silently skipping corrupt files: a lost plan only drops out
+    of the rep-progression defaults."""
     plans = []
     for file_path in sorted(plans_dir().glob("*.json")):
         try:
@@ -180,16 +147,14 @@ def training_plan_path() -> Path:
 
 
 def write_training_plan(plan: dict) -> None:
-    """The single active training plan (see training.py). One plan at a time,
-    so unlike write_plan there is no per-id filename."""
+    """The one active plan, so no per-id filename (unlike write_plan)."""
     _write_json_atomic(training_plan_path(), plan)
 
 
 def read_training_plan() -> dict | None:
-    """The active training plan, or None if there isn't one. A corrupt file
-    raises rather than being skipped: unlike a single dropped plan file in
-    read_plans, this is the whole feature's state and silently losing it would
-    quietly unschedule nothing while claiming success."""
+    """The active plan, or None. A corrupt file raises rather than being
+    skipped (cf. read_plans): this is the whole feature's state, and losing it
+    silently would make `train clear` unschedule nothing yet report success."""
     return _read_json(training_plan_path(), default=None)
 
 

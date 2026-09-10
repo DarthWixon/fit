@@ -1,6 +1,4 @@
-"""Typer app. One function per subcommand. Each function: call storage -> call
-compute -> call display. Nothing else.
-"""
+"""Typer app. One function per subcommand: storage -> compute -> display."""
 
 import tempfile
 from datetime import date as date_cls
@@ -24,8 +22,7 @@ app = typer.Typer()
 
 
 def _load_activities() -> list[dict]:
-    """Shared preamble for every command that reads history: make sure the
-    data dir exists, read all activities, surface corrupt-file warnings."""
+    """ensure_data_dir -> read -> surface corrupt-file warnings."""
     storage.ensure_data_dir()
     activities, warnings = storage.read_activities_with_warnings()
     display.render_warnings(warnings)
@@ -52,8 +49,7 @@ def _windowed_pbs(activities: list[dict], start: str, end: str) -> dict:
 
 
 def _pbs_for_window(activities: list[dict], months: int, today: date_cls) -> dict:
-    """PBs for a --months/pbs_window_months value: cached all-time when 0,
-    windowed fresh-compute otherwise. Shared by `pbs` and `_dashboard_window`."""
+    """Cached all-time when months is 0, windowed fresh-compute otherwise."""
     if not months:
         return _get_fresh_pbs(activities)
     start = compute.months_ago(today, months)
@@ -63,12 +59,9 @@ def _pbs_for_window(activities: list[dict], months: int, today: date_cls) -> dic
 def _write_new_baseline(
     value: float, activities: list[dict], baseline_date: date_cls
 ) -> dict:
-    """Builds {"baseline_date", "baseline_value", "baseline_from"} and persists
-    it — shared by _get_or_init_fitness_baseline (lazy init) and fitness_reset
-    (explicit re-anchor). "baseline_from" is how many activities sat on or
-    before baseline_date at the moment it was written, so a later backfill
-    behind that date can be *detected* without breaking the baseline's
-    stickiness (compute.baseline_drift)."""
+    """Build and persist the fitness.json dict. "baseline_from" records how much
+    history sat behind the anchor, so a later backfill can be *detected*
+    without breaking stickiness (compute.baseline_drift)."""
     date_iso = baseline_date.isoformat()
     baseline = {
         "baseline_date": date_iso,
@@ -80,9 +73,8 @@ def _write_new_baseline(
 
 
 def _get_or_init_fitness_baseline(activities: list[dict]) -> dict:
-    """Lazy-cache-if-missing, mirroring _get_fresh_pbs — but unlike pbs.json,
-    fitness.json's baseline is sticky: never auto-recomputed once set, only
-    replaced by explicit `fit fitness-reset`."""
+    """Lazy init. Unlike pbs.json the baseline is sticky once set: only
+    `fit fitness-reset` replaces it."""
     stored = storage.read_fitness_baseline()
     if stored:
         return stored
@@ -106,12 +98,8 @@ def _fitness_snapshot(
     baseline: dict,
     window: tuple[str, str] | None = None,
 ) -> dict:
-    """activities must always be the full, unfiltered list — never narrowed by
-    --sport/--timerange — so the index stays "one combined index" and the
-    headline stays "as of today" regardless of dashboard filters. baseline is
-    the _get_or_init_fitness_baseline() dict ({} = no data yet). window, if
-    given, only narrows the trend series returned for display, not the
-    headline value."""
+    """activities must be the full, unfiltered list, so the index stays one
+    combined index as of today. window narrows only the trend series."""
     if not baseline:
         return _EMPTY_FITNESS_SNAPSHOT
 
@@ -136,11 +124,8 @@ def _dashboard_window(
     config_months: int,
     today: date_cls,
 ) -> dict:
-    """Resolve the dashboard's window precedence: --timerange beats
-    pbs_window_months beats all-time. Returns the resolved activity list, the
-    PBs to show, and the window labelling render_dashboard needs:
-    {"activities", "pbs", "window_months", "window_label", "date_window"}.
-    Raises ValueError on a malformed timerange."""
+    """--timerange beats pbs_window_months beats all-time ->
+    {activities, pbs, window_months, window_label, date_window}."""
     if timerange is not None:
         start, end = compute.parse_timerange(timerange, today)
         activities = compute.filter_by_date(all_activities, start, end)
@@ -303,8 +288,7 @@ def stats(week: bool = False, month: bool = False, year: bool = False) -> None:
 
 
 def _import_and_report(new_activities: list[dict]) -> None:
-    """Shared tail of every import path: dedupe, write, print new-PB messages,
-    recompute the PB cache, and print the imported/skipped summary."""
+    """Every import path's tail: dedupe, write, announce PBs, recompute cache."""
     pbs_before_import = storage.read_pbs()
 
     written = []
@@ -316,10 +300,8 @@ def _import_and_report(new_activities: list[dict]) -> None:
         storage.write_activity(activity)
         written.append(activity)
 
-    # Announced once for the batch, not once per activity: each activity
-    # compared separately against the same pre-import snapshot reports every
-    # category it beats, so an import of nine paddles announced nine "longest
-    # distance" PBs in file order (see compute.detect_new_pbs).
+    # Once for the batch, not once per activity: nine paddles once announced
+    # nine "longest distance" PBs, in file order.
     display.render_new_pb_messages(compute.detect_new_pbs(written, pbs_before_import))
 
     imported = len(written)
@@ -396,9 +378,8 @@ def garmin_sync(
                 tmp_paths.append(tmp.name)
             activity = importers.import_fit(tmp_paths[-1], max_hr)
             if activity["type"] == "strength":
-                # The original FIT carries the watch's own guess at each
-                # exercise; any correction made in the Connect app lives only
-                # in Garmin's server-side record, so fetch that and merge.
+                # Connect-app corrections live only in the server-side record;
+                # the original FIT keeps the watch's own guess.
                 activity = importers.apply_garmin_exercise_sets(
                     activity, garmin.get_exercise_sets(client, summary["activityId"])
                 )
@@ -411,10 +392,8 @@ def garmin_sync(
 
 
 def _prompt_params(specs: list[dict]) -> dict:
-    """typer.prompt each planner spec (Enter accepts the shown default),
-    re-prompting on a ValueError from the spec's parser. A spec with a
-    "derive" callable (see planner.recommend_defaults) gets its default
-    computed at prompt time from the answers collected so far."""
+    """Prompt each spec, re-prompting on ValueError. A "derive" spec computes
+    its default at prompt time from the answers so far."""
     params = {}
     for spec in specs:
         default = spec["derive"](params) if "derive" in spec else spec["default"]
@@ -429,8 +408,7 @@ def _prompt_params(specs: list[dict]) -> dict:
 
 
 def _prompt_optional_value(spec: dict, default: str):
-    """One prompt that may be answered blank, returning None when it is —
-    which is how a repeated group knows the user has finished adding."""
+    """Blank -> None, which is how a repeated group knows it is finished."""
     while True:
         raw = str(typer.prompt(spec["label"], default=default)).strip()
         if not raw:
@@ -442,11 +420,9 @@ def _prompt_optional_value(spec: dict, default: str):
 
 
 def _prompt_repeated_params(specs: list[dict]) -> list[dict]:
-    """Prompt one whole group of specs at a time, appending each answered
-    group to a list, until the first field is left blank. `fit plan --sport
-    strength` is the only caller — a gym session is several exercises, not one
-    flat answer per prompt — and planner.repeated_param_specs is what says so,
-    so this never names the combo itself."""
+    """Prompt whole groups into a list until the first field is blank.
+    planner.repeated_param_specs says which combos loop, so this never names
+    one itself."""
     first, rest = specs[0], specs[1:]
     entries: list[dict] = []
     while True:
@@ -493,10 +469,8 @@ def plan(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
-    # Validate --schedule up front: fail fast and offline, before the interactive
-    # prompts and the Garmin push, so a typo'd date never wastes either. Scheduling
-    # needs a pushed workout to attach to, so --schedule with --no-push is a
-    # contradiction rather than a silent no-op.
+    # Up front, so a typo fails fast and offline. --schedule needs a pushed
+    # workout to attach to, so with --no-push it is a contradiction.
     schedule_date = None
     if schedule is not None:
         if not push:
@@ -513,10 +487,12 @@ def plan(
         sport, type, activities, storage.read_plans(), date_cls.today()
     )
     for spec in specs:
-        rec = recs.get(spec["key"])
-        if rec and "derive" in rec:
+        # A rec may carry "derive", "default", or neither — a why-only rec
+        # reports a rejected measurement and leaves the spec's default alone.
+        rec = recs.get(spec["key"]) or {}
+        if "derive" in rec:
             spec["derive"] = rec["derive"]
-        elif rec:
+        elif "default" in rec:
             spec["default"] = rec["default"]
     display.render_plan_recommendations(recs)
 
@@ -592,8 +568,7 @@ def _require_training_plan() -> dict:
 
 
 def _show_plan(plan: dict, activities: list[dict], weeks: int | None) -> None:
-    """The shared `train import`/`train show` tail: match completion against
-    history, then render."""
+    """`train import`/`train show` tail: match completion, group, render."""
     sessions = training.match_completion(plan["sessions"], activities)
     grouped = training.group_by_week(sessions)
     if weeks:
@@ -669,9 +644,8 @@ def train_retarget(
     plan = _require_training_plan()
     activities = _load_activities()
 
-    # A plan file predating the stored spec, or naming a goal that no longer
-    # exists, cannot be re-derived — say so rather than KeyError-ing inside
-    # derive_targets.
+    # No stored spec, or a goal that no longer exists: say so rather than
+    # KeyError-ing inside derive_targets.
     spec = plan.get("spec")
     if not spec or spec.get("goal") not in templates.GOAL_TEMPLATES:
         typer.echo(
@@ -722,9 +696,9 @@ def train_sync(
         )
         return
 
-    # Confirm before touching the account: this creates a workout and a calendar
-    # entry per session, and `garmin.login()` resumes a saved session silently,
-    # so without this the whole batch can go out with no visible step in between.
+    # Confirm before touching the account: login() resumes silently and this
+    # creates a workout *and* a calendar entry per session, so a whole batch
+    # could otherwise go out with no visible step in between.
     display.render_training_sync_preview(due)
     if dry_run:
         return
@@ -754,8 +728,8 @@ def train_sync(
             scheduled += 1
         except Exception as exc:  # one bad session must not lose the rest
             failed.append(f"{session['date']} {session['workout_name']}: {exc}")
-        # Rewrite after every session: a crash mid-sync must never leave the
-        # plan file claiming less than what is actually on the calendar.
+        # After every session: a crash must never leave the plan claiming less
+        # than what is actually on the calendar.
         storage.write_training_plan(plan)
 
     display.render_training_synced(

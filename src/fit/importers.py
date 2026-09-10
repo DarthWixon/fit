@@ -1,8 +1,7 @@
-"""Parses external activity formats (TCX, FIT, Strava exports) into the
-standard activity dict shape (see storage.py's module docstring).
+"""Parses TCX, FIT and Strava exports into fit's activity dict shape.
 
-Uses stdlib xml.etree.ElementTree for TCX (no lxml). FIT is a binary format
-parsed via the fitparse library.
+stdlib ElementTree for TCX (no lxml); fitparse for FIT. Never dedupes and
+never imports storage — cli._import_and_report owns on-disk state.
 """
 
 import csv
@@ -17,10 +16,8 @@ from pathlib import Path
 
 from fit import compute
 
-# Per the Garmin TCX schema, Sport is only ever Running/Biking/Other — there's no
-# native Swimming value. Anything outside Running/Biking (walk, hike, swim) falls
-# through to the "run" default below, which is a known mislabeling, not something
-# worth working around here.
+# TCX's Sport is only Running/Biking/Other — no Swimming. Everything else
+# falls through to "run" below: a known mislabelling, not worth working around.
 TCX_SPORT_MAP = {
     "running": "run",
     "biking": "cycle",
@@ -32,52 +29,31 @@ FIT_SPORT_MAP = {
     "walking": "walk",
     "hiking": "hike",
     "swimming": "swim",
-    # No canoe-specific FIT sport exists; paddling activities decode (when they
-    # decode to a string at all) as one of these. Folded to "canoe" because this
-    # is a canoe-only setup -- revisit if kayaking is later split out.
+    # No canoe-specific FIT sport. Folded to "canoe" for this canoe-only setup.
     "paddling": "canoe",
     "kayaking": "canoe",
     "canoeing": "canoe",
 }
 
-# Some FIT sport enum codes aren't decoded to a string name by fitparse==1.2.0's
-# bundled profile -- e.g. Garmin's enum jumps straight from 48 ("floor_climbing")
-# to 254 ("all"), so codes Garmin added in between (64 = squash) come back from
-# fields.get("sport") as a bare, undecoded int rather than a string. import_fit
-# checks this table when the sport field isn't a string. Any int not listed here
-# (now, or from a future firmware/profile version) falls through to the same
-# "run" default an unrecognized string sport already gets -- see import_fit.
-# There is no canoe-specific FIT sport code: Garmin records paddling as 19
-# (paddling) or 41 (kayaking), both folded to "canoe" here since this is a
-# canoe-only setup (revisit the 41 mapping if kayaking is later split out).
+# fitparse's profile doesn't decode every sport enum (it jumps 48 -> 254), so
+# codes added in between arrive as bare ints. Anything unlisted defaults to
+# "run", as an unrecognised string sport already does.
 FIT_SPORT_CODE_MAP = {
     64: "squash",
     19: "canoe",
     41: "canoe",
 }
 
-# A gym session is not a distinct FIT `sport`: it arrives as sport 10
-# ("training") with sub_sport 20 ("strength_training"), both of which
-# fitparse==1.2.0's profile does decode to names. Keyed on the sub_sport
-# because that is the specific half -- sport 10 alone also covers cardio and
-# flexibility training. The raw int is accepted alongside the decoded name for
-# the same reason FIT_SPORT_CODE_MAP exists: a profile that stops decoding it
-# should not silently reclassify a gym session as a run.
+# A gym session is sport 10 ("training") + sub_sport 20. Keyed on the sub_sport
+# because sport 10 alone also covers cardio. The raw int is accepted too, so a
+# profile that stops decoding it can't reclassify a gym session as a run.
 FIT_STRENGTH_SUB_SPORTS = {"strength_training", 20}
 
-# fitparse==1.2.0's bundled profile does define the exercise_category enum and
-# decodes a *scalar* `category` field to its name (which is all the synthetic
-# tests/data/test_strength.fit exercises -- it writes scalars). But a real
-# Garmin watch writes the `set` message's `category` as a FIT *array*, and
-# fitparse does not run the enum renderer over array elements: fields.get(
-# "category") then comes back as a list of raw uint16s (e.g. [28]) rather than
-# ["squat"], so every lift in a real gym session lands in _fit_exercise_name's
-# "unknown_<int>" fallback. This table is the FIT exercise_category enum
-# (0..32), used to resolve those ints back to names -- kept here as an explicit
-# map rather than reaching into fitparse.profile internals, matching how
-# FIT_SPORT_CODE_MAP is handled. 65534 is FIT's "not classified" sentinel and
-# is deliberately left out: it stays "unknown_65534" so an unclassified set
-# reads as unclassified rather than as a named lift.
+# fitparse decodes a *scalar* `category` but not array elements — and a real
+# watch array-encodes it, so every lift arrives as [28] rather than ["squat"].
+# This is the FIT exercise_category enum (0-32), kept explicit rather than
+# reaching into fitparse.profile. 65534 ("not classified") is left out on
+# purpose, so an unclassified set reads as unclassified.
 FIT_EXERCISE_CATEGORY_MAP = {
     0: "bench_press",
     1: "calf_raise",
@@ -114,29 +90,18 @@ FIT_EXERCISE_CATEGORY_MAP = {
     32: "run",
 }
 
-# `category_subtype` is the undecoded one (a uint16 indexing per-category
-# <category>_exercise_name enums, e.g. squat_exercise_name 2 = back_squats).
-# It is deliberately ignored for now: PBs key on the category, so a front
-# squat and a back squat share a line. Add the lookup, keyed by
-# (category, category_subtype), if that distinction turns out to matter.
+# `category_subtype` (front vs back squat) is ignored: PBs key on the category,
+# so both share a line. Adding it would change what PBs are keyed on.
 
-# Deliberately no "squash" entry: no Strava CSV/bulk-export fixture exists to
-# confirm the exact raw_type string Strava uses for squash (if any), and
-# guessing risks silently mismapping real data. An unmapped raw_type is
-# dropped -- _parse_strava_row returns (None, raw_type) and the row is skipped
-# in import_strava_csv/import_strava_export -- but the drop is now reported: a
-# per-type skipped-row summary is surfaced via warnings, not silent. Any other
-# currently-unmapped Strava activity type gets the same treatment, not
-# squash-specific.
+# No "squash" entry: no fixture confirms Strava's raw type string, and guessing
+# risks mismapping real data. Unmapped types drop with a warning.
 STRAVA_TYPE_MAP = {
     "run": "run",
     "ride": "cycle",
     "walk": "walk",
     "hike": "hike",
     "swim": "swim",
-    # Strava's "Canoeing" type (lowercased by _parse_strava_row). Kayaking,
-    # Rowing and Stand Up Paddling are deliberately left unmapped -- they
-    # drop-with-warning, matching this setup's canoe-only scope.
+    # Kayaking/Rowing/SUP are left unmapped: canoe-only setup.
     "canoeing": "canoe",
 }
 
@@ -148,17 +113,13 @@ FILENAME_COLUMNS = ["Filename"]
 
 
 # --- namespace-tolerant XML helpers ------------------------------------------------
-# TCX is namespaced XML, so ElementTree tags come back as "{uri}localname".
-# Some exporters (older Garmin, some phone apps) emit no namespace at all, so
-# every lookup tries the namespaced tag first and falls back to the bare tag.
+# Some exporters emit no namespace, so every lookup tries "{uri}tag" then "tag".
 
 
 def _parse_xml_root(path: str):
-    """Root element of a TCX file, tolerating leading whitespace before
-    the <?xml?> declaration. Strava's exported TCX files are padded with
-    spaces, which ElementTree otherwise rejects ('XML or text declaration not
-    at start of entity'). Reading raw bytes and lstrip-ing keeps the file's
-    own encoding declaration authoritative."""
+    """Root element, tolerating the leading whitespace Strava's TCX exports
+    carry (ElementTree otherwise rejects them). Bytes, so the file's own
+    encoding declaration stays authoritative."""
     with open(path, "rb") as f:
         return ET.fromstring(f.read().lstrip())
 
@@ -212,13 +173,10 @@ def _haversine_km(lat1, lon1, lat2, lon2) -> float:
 
 
 def _compute_splits(activity_type: str, points: list[dict]) -> dict:
-    """Best-effort split times from a transient (elapsed_seconds, distance_km)
-    point stream. Returns {} if none of the type's configured distances were
-    reached. Pure — the caller decides whether/how to attach the result.
+    """Split times from the transient point stream; {} if no distance reached.
 
-    Points without a distance are dropped first: an indoor ride can carry power
-    and heart rate with no distance at all, and those points are meaningful to
-    the other consumers even though a split cannot use them."""
+    Points without distance are dropped here only — an indoor ride's records
+    carry power and HR that the other consumers still need."""
     located = [p for p in points if p.get("distance_km") is not None]
     splits = {}
     for target_km, label in compute.SPLIT_DISTANCES_KM.get(activity_type, []):
@@ -235,9 +193,8 @@ def _base_activity(
     duration_seconds: float,
     source: str,
 ) -> dict:
-    """The five always-present activity fields (full shape in storage.py's
-    module docstring). Optional fields stay each importer's own concern —
-    their presence conditions deliberately differ by format."""
+    """The five always-present fields. Optional ones are each importer's own
+    concern — their presence conditions differ by format."""
     return {
         "id": start_time.strftime("%Y-%m-%dT%H:%M:%S"),
         "type": activity_type,
@@ -249,8 +206,7 @@ def _base_activity(
 
 
 def _attach_splits(activity: dict, points: list[dict]) -> dict:
-    """Attach best-effort splits from the transient point stream; the key is
-    omitted entirely (never an empty dict) when no split distance was reached."""
+    """Attach splits; the key is omitted entirely, never left empty."""
     splits = _compute_splits(activity["type"], points)
     if splits:
         activity["splits"] = splits
@@ -258,12 +214,8 @@ def _attach_splits(activity: dict, points: list[dict]) -> dict:
 
 
 def _attach_best_power(activity: dict, points: list[dict]) -> dict:
-    """Attach the best-power-per-duration curve from the transient point
-    stream; the key is omitted entirely (never an empty dict) when the format
-    carries no per-point power or the ride is shorter than every window.
-
-    Stored because it cannot be recovered later: the point stream is discarded
-    at import, exactly like splits and hr_zones."""
+    """Attach the power-duration curve; key omitted when there is none. Stored
+    because the point stream is discarded at import and cannot be recovered."""
     best = {}
     for window_seconds, label in compute.POWER_WINDOWS_S:
         watts = compute.best_power_window(points, window_seconds)
@@ -275,9 +227,8 @@ def _attach_best_power(activity: dict, points: list[dict]) -> dict:
 
 
 def _attach_hr_zones(activity: dict, points: list[dict], max_heart_rate: int) -> dict:
-    """Attach HR zone-seconds from the transient point stream; the key is
-    omitted entirely (never an empty dict) when zones can't be computed (no
-    max_heart_rate configured, or no per-point hr data in this format/file)."""
+    """Attach HR zone-seconds; key omitted when max_heart_rate is unset or the
+    file carries no per-point hr."""
     hr_zones = compute.hr_zone_seconds(points, max_heart_rate)
     if hr_zones:
         activity["hr_zones"] = hr_zones
@@ -285,7 +236,7 @@ def _attach_hr_zones(activity: dict, points: list[dict], max_heart_rate: int) ->
 
 
 def _tcx_start_time(activity_elem, laps, ns_uri):
-    """<Id> if present, else the first lap's StartTime attribute, else None."""
+    """<Id>, else the first lap's StartTime, else None."""
     id_elem = _find(activity_elem, "Id", ns_uri)
     if id_elem is not None:
         return _parse_iso_time(id_elem.text)
@@ -297,7 +248,7 @@ def _tcx_start_time(activity_elem, laps, ns_uri):
 
 
 def _tcx_lap_totals(lap, ns_uri) -> tuple[float, float]:
-    """(distance_m, time_s) contributed by one lap; 0.0 for either if absent."""
+    """(distance_m, time_s) for one lap; 0.0 if absent."""
     dist_elem = _find(lap, "DistanceMeters", ns_uri)
     time_elem = _find(lap, "TotalTimeSeconds", ns_uri)
     distance_m = float(dist_elem.text) if dist_elem is not None else 0.0
@@ -314,11 +265,8 @@ def _tcx_lap_heart_rate(lap, ns_uri) -> tuple[float | None, float | None]:
 
 
 def _tcx_lap_power(lap, ns_uri) -> float | None:
-    """Average power (watts) for one lap, from Garmin's ActivityExtension
-    <Extensions><LX><AvgWatts> block. That block lives in a different XML
-    namespace than the rest of the TCX doc, so (unlike _tcx_lap_totals/
-    _tcx_lap_heart_rate, which use ns_uri-scoped _find_path) it's matched by
-    tag suffix, matching how the TrackPointExtension namespace nests them."""
+    """Lap watts from <Extensions><LX><AvgWatts>. That block sits in a different
+    namespace, so it is matched by tag suffix rather than by ns_uri."""
     extensions = _find(lap, "Extensions", ns_uri)
     if extensions is None:
         return None
@@ -340,8 +288,7 @@ def _tcx_trackpoints(lap, ns_uri):
 def _tcx_trackpoint_elevation(
     trackpoint, ns_uri, prev_ele: float | None
 ) -> tuple[float, float | None]:
-    """(gain_delta, new_prev_ele) for one trackpoint; prev_ele passed through
-    unchanged if the trackpoint has no AltitudeMeters."""
+    """(gain_delta, new_prev_ele); prev_ele passes through if no altitude."""
     alt_elem = _find(trackpoint, "AltitudeMeters", ns_uri)
     if alt_elem is None:
         return 0.0, prev_ele
@@ -351,11 +298,9 @@ def _tcx_trackpoint_elevation(
 
 
 def _tcx_trackpoint_position(trackpoint, ns_uri):
-    """(lat, lon, time) if the trackpoint has both Position and Time, else None.
-    Trackpoint-level DistanceMeters varies by exporter (sometimes cumulative from
-    activity start, sometimes reset per lap) with no reliable way to tell which —
-    so the split stream is always derived from GPS position via haversine
-    instead carried across laps rather than reset per lap."""
+    """(lat, lon, time), else None. Trackpoint DistanceMeters is cumulative in
+    some exporters and lap-relative in others with no way to tell, so the split
+    stream comes from GPS position via haversine instead."""
     position_elem = _find(trackpoint, "Position", ns_uri)
     time_elem = _find(trackpoint, "Time", ns_uri)
     if position_elem is None or time_elem is None:
@@ -368,16 +313,14 @@ def _tcx_trackpoint_position(trackpoint, ns_uri):
 
 
 def _tcx_trackpoint_heart_rate(trackpoint, ns_uri) -> int | None:
-    """Per-trackpoint HeartRateBpm/Value, or None if the trackpoint has none.
-    Older/lap-summary-only exporters carry HR at the Lap level instead (see
-    _tcx_lap_heart_rate) — trackpoint-level HR is what powers the HR zone
-    breakdown, since that needs a per-sample time series, not a lap average."""
+    """Per-trackpoint HR, or None. HR zones need a per-sample series, which the
+    lap-level average (_tcx_lap_heart_rate) can't give."""
     hr_elem = _find_path(trackpoint, "HeartRateBpm/Value", ns_uri)
     return round(float(hr_elem.text)) if hr_elem is not None else None
 
 
 def _tcx_totals(laps, ns_uri) -> tuple[float, float]:
-    """(total_distance_m, total_time_s) summed over all laps."""
+    """(distance_m, time_s) over all laps."""
     total_distance_m = 0.0
     total_time_s = 0.0
     for lap in laps:
@@ -388,8 +331,7 @@ def _tcx_totals(laps, ns_uri) -> tuple[float, float]:
 
 
 def _tcx_heart_rate_stats(laps, ns_uri) -> tuple[int | None, int | None]:
-    """(avg, max) across laps — mean of lap averages, max of lap maxima —
-    each None if no lap carries that field."""
+    """(mean of lap averages, max of lap maxima); None if absent."""
     hr_avgs = []
     hr_maxes = []
     for lap in laps:
@@ -404,7 +346,7 @@ def _tcx_heart_rate_stats(laps, ns_uri) -> tuple[int | None, int | None]:
 
 
 def _tcx_power_avg(laps, ns_uri) -> int | None:
-    """Mean of the laps' AvgWatts values, or None if no lap has power."""
+    """Mean of lap AvgWatts, or None."""
     power_avgs = [
         p for p in (_tcx_lap_power(lap, ns_uri) for lap in laps) if p is not None
     ]
@@ -412,8 +354,7 @@ def _tcx_power_avg(laps, ns_uri) -> int | None:
 
 
 def _tcx_elevation_gain_m(laps, ns_uri) -> float:
-    """Summed positive altitude deltas, with the previous-altitude tracking
-    reset at each lap boundary."""
+    """Summed positive altitude deltas, reset at each lap boundary."""
     gain = 0.0
     for lap in laps:
         prev_ele = None
@@ -424,9 +365,8 @@ def _tcx_elevation_gain_m(laps, ns_uri) -> float:
 
 
 def _tcx_point_stream(laps, ns_uri, start_time) -> list[dict]:
-    """Cumulative (elapsed_seconds, distance_km) stream from GPS positions via
-    haversine, carried across laps rather than reset per lap (see
-    _tcx_trackpoint_position for why lap DistanceMeters isn't used)."""
+    """Cumulative (elapsed_seconds, distance_km, hr) stream from GPS via
+    haversine, carried across laps."""
     points = []
     distance_km = 0.0
     prev_point = None
@@ -490,17 +430,10 @@ def import_tcx(path: str, max_heart_rate: int = 0) -> dict:
 
 
 def _fit_exercise_name(category) -> str:
-    """One exercise name from a `set` message's category field.
-
-    A real Garmin watch writes `category` as a FIT array and fitparse does not
-    enum-render array elements, so this arrives as a list of raw uint16s (e.g.
-    [28]) rather than ["squat"]; the list is unwrapped to its first entry and
-    resolved via FIT_EXERCISE_CATEGORY_MAP (see the note there). A scalar string
-    -- fitparse's scalar-field path, as in the synthetic test fixture -- is
-    taken as-is. A code the map doesn't cover (a future firmware's addition, or
-    FIT's 65534 "not classified" sentinel) is named "unknown_<int>" -- kept
-    rather than dropped, so the session's real volume survives, and kept
-    distinct per code so two unmapped exercises don't merge into one PB line."""
+    """Exercise name from a `set` message's category: unwrap the array a real
+    watch writes, resolve via FIT_EXERCISE_CATEGORY_MAP, take a scalar string
+    as-is. An unmapped code becomes "unknown_<int>" — kept, so the session's
+    volume survives, and distinct, so two unmapped lifts don't merge."""
     if isinstance(category, (list, tuple)):
         category = category[0] if category else None
     if isinstance(category, str):
@@ -511,11 +444,8 @@ def _fit_exercise_name(category) -> str:
 
 
 def _append_set(exercises: list[dict], name: str, one_set: dict) -> None:
-    """Add one set to the exercises list, grouping it with the previous entry
-    when that entry is the same exercise. The single home of the
-    consecutive-sets-group-together rule, shared by the two things that build
-    an exercises list -- the FIT `set` messages and Garmin's own record of
-    them (apply_garmin_exercise_sets)."""
+    """Append one set, grouping with the previous entry if same exercise. The
+    single home of that rule, shared by both builders of an exercises list."""
     if exercises and exercises[-1]["name"] == name:
         exercises[-1]["sets"].append(one_set)
     else:
@@ -523,16 +453,10 @@ def _append_set(exercises: list[dict], name: str, one_set: dict) -> None:
 
 
 def _parse_fit_sets(fit_file) -> list[dict]:
-    """The `exercises` list for a strength activity, read from the FIT file's
-    `set` messages -- the strength counterpart to the point stream every other
-    sport builds.
+    """The `exercises` list, from the FIT `set` messages.
 
-    Rest sets are dropped (set_type "rest"); only the active ones are work.
-    Consecutive sets of the same exercise group into one entry, which is what a
-    straight-sets session looks like; alternating them (a superset) just
-    produces repeated entries, and compute._strength_pbs merges by name anyway.
-    A set with neither reps nor weight carries nothing and is skipped; weight
-    arrives from fitparse already scaled to kilograms."""
+    Rest sets are dropped; consecutive sets of one exercise group together.
+    A set with neither reps nor weight is skipped. fitparse scales weight to kg."""
     exercises: list[dict] = []
     for message in fit_file.get_messages("set"):
         fields = {field.name: field.value for field in message}
@@ -557,26 +481,17 @@ def _parse_fit_sets(fit_file) -> list[dict]:
 
 
 def apply_garmin_exercise_sets(activity: dict, exercise_sets: list[dict]) -> dict:
-    """Correct a strength activity's exercise names from Garmin Connect's own
-    record of the session (garmin.get_exercise_sets).
+    """Correct exercise names from Garmin's server-side record.
 
-    The FIT file fit imports is the *original* upload -- Garmin never rewrites
-    it, so a set the watch guessed wrong, or left as the 65534 "not classified"
-    sentinel, stays wrong there however many times you fix it in the app. Those
-    corrections live in the activity's server-side record instead, which is
-    what this merges back in.
+    The FIT fit downloads is the *original* upload, never rewritten, so a
+    Connect-app correction lives only on the server. Neither source is
+    complete, so each contributes what it holds: names from Garmin, weights
+    from the FIT (the server returns null for many). A Garmin weight wins when
+    present, and arrives in grams.
 
-    Neither source is complete on its own, so each contributes what it holds:
-    the names come from Garmin (that is the whole point), the weights from the
-    FIT file, which keeps them for sets the server reports as null. A Garmin
-    weight, when present, wins -- an edited load is a correction too, and it
-    arrives in grams.
-
-    Sets pair up positionally, active sets only. Anything that says the two
-    lists aren't the same session in the same order -- a differing set count,
-    or a rep count that disagrees on any pair -- abandons the merge and leaves
-    the FIT-derived exercises untouched, since a misaligned pairing would
-    rename sets to whatever sat at that index."""
+    Sets pair positionally, active only. A differing count or a disagreeing rep
+    count abandons the merge — a misaligned pairing would rename sets to
+    whatever sat at that index, which is worse than the wrong name."""
     flat = [
         (exercise["name"], one_set)
         for exercise in activity.get("exercises", [])
@@ -607,11 +522,9 @@ def apply_garmin_exercise_sets(activity: dict, exercise_sets: list[dict]) -> dic
 
 
 def _garmin_exercise_name(entry: dict) -> str:
-    """The exercise name from one Garmin exercise-set entry, or "" when it
-    names none. Garmin's `category` is the uppercased form of the same
-    FIT_EXERCISE_CATEGORY_MAP vocabulary importers already store ("BENCH_PRESS"),
-    so lowercasing is the whole conversion. `name` -- the sub-category, e.g.
-    BACK_SQUATS -- is ignored for the same reason FIT's `category_subtype` is."""
+    """Name from one Garmin entry, or "". `category` is the uppercased form of
+    the same vocabulary, so lowercasing is the whole conversion; the
+    sub-category `name` is ignored, as FIT's `category_subtype` is."""
     exercises = entry.get("exercises") or []
     category = exercises[0].get("category") if exercises else None
     return category.lower() if isinstance(category, str) else ""
@@ -634,15 +547,13 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
 
     raw_sport = fields.get("sport")
     if fields.get("sub_sport") in FIT_STRENGTH_SUB_SPORTS:
-        # Checked before the sport map: a gym session's own sport value is
-        # "training", which that map doesn't carry and would default to "run".
+        # Before the sport map: a gym session's sport is "training", which that
+        # map doesn't carry and would default to "run".
         activity_type = "strength"
     elif isinstance(raw_sport, str):
         activity_type = FIT_SPORT_MAP.get(raw_sport.lower(), "run")
     else:
-        # fitparse couldn't decode this enum value to a name (see
-        # FIT_SPORT_CODE_MAP above) -- it comes through as a raw int, or as
-        # None if the sport field is absent entirely.
+        # An undecoded enum arrives as a raw int (or None if absent).
         activity_type = FIT_SPORT_CODE_MAP.get(raw_sport, "run")
 
     distance_m = fields.get("total_distance") or 0.0
@@ -668,13 +579,10 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
         record_distance_m = record_fields.get("distance")
         record_timestamp = record_fields.get("timestamp")
         record_power = record_fields.get("power")
-        # Distance is no longer required: an indoor ride may report power and
-        # heart rate with none at all, and dropping those records would lose
-        # the FTP signal entirely. Heart rate alone is enough to keep a record
-        # too -- a strength session reports neither distance nor power, and
-        # dropping its records would leave hr_zones permanently empty for the
-        # one sport whose whole stream looks like that. _compute_splits and
-        # best_power_window each filter for what they need.
+        # Distance is not required: an indoor ride carries power and HR with
+        # none, and a gym session carries only HR. Dropping either would lose
+        # the FTP signal / leave hr_zones permanently empty. Each consumer
+        # filters for what it needs.
         if record_timestamp is None or (
             record_distance_m is None
             and record_power is None
@@ -693,12 +601,8 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
         )
 
     if activity_type == "strength":
-        # No splits and no power curve: there is no distance stream to slide a
-        # window over, and the effort lives in the weight on the bar. HR zones
-        # still apply -- a gym session with a chest strap has them like any
-        # other. distance_km stays whatever the session reported (usually 0);
-        # NO_DISTANCE_TYPES is what stops it being displayed, the same way
-        # squash's accelerometer noise is handled.
+        # No splits or power curve — no distance stream to sweep. HR zones still
+        # apply. distance_km stays as reported; NO_DISTANCE_TYPES hides it.
         activity["exercises"] = _parse_fit_sets(fit_file)
         return _attach_hr_zones(activity, points, max_heart_rate)
 
@@ -728,13 +632,9 @@ def _parse_strava_date(text: str) -> datetime:
 
 
 def _parse_strava_row(row: dict) -> tuple[dict | None, str | None]:
-    """Base activity fields from one Strava CSV row (id/type/date/distance_km/
-    duration_seconds/source) paired with None, or (None, skip_label) if the
-    row can't be imported — where skip_label names why, for the per-type
-    skipped-row summary: the raw type string for an unmapped type, or
-    "(no date)" for a missing date. Exactly one side is populated. Shared by
-    import_strava_csv and import_strava_export — does not resolve any linked
-    file."""
+    """(base activity, None), or (None, skip_label) naming why the row can't be
+    imported — the raw type, or "(no date)". Exactly one side is populated.
+    Resolves no linked file."""
     raw_type = _get_first(row, TYPE_COLUMNS)
     activity_type = STRAVA_TYPE_MAP.get((raw_type or "").lower())
     if activity_type is None:
@@ -757,9 +657,8 @@ def _parse_strava_row(row: dict) -> tuple[dict | None, str | None]:
 
 
 def _strava_skip_warnings(skipped: Counter) -> list[str]:
-    """One summary line naming each skipped Strava row category and its count,
-    e.g. 'skipped 100 Strava rows fit can't import: Workout x99, Surfing x1'.
-    Empty list when nothing was skipped."""
+    """One summary line per skipped-row tally, e.g. "skipped 100 Strava rows
+    fit can't import: Workout x99, Surfing x1". [] when nothing was skipped."""
     if not skipped:
         return []
     parts = ", ".join(f"{label} x{n}" for label, n in skipped.most_common())
@@ -801,9 +700,8 @@ def _import_strava_linked_file(file_path: Path, max_heart_rate: int = 0) -> dict
 
 
 def import_directory(dir_path: str, max_heart_rate: int = 0) -> list[dict]:
-    """A loose folder of .tcx/.fit files - e.g. a Garmin watch's mounted
-    GARMIN/ACTIVITY folder - NOT a Strava bulk export (see import_strava_export
-    for that; cli.py tells the two apart by checking for activities.csv)."""
+    """A loose folder of .tcx/.fit files (a mounted watch), not a Strava bulk
+    export — cli.py tells them apart by activities.csv."""
     activities = []
     for file_path in sorted(Path(dir_path).iterdir()):
         suffix = file_path.suffix.lower()
@@ -840,12 +738,19 @@ def import_strava_export(
                         export_path / filename, max_heart_rate
                     )
                 except Exception as exc:
-                    warnings.append(f"skipped {filename}: {exc}")
-                    continue
-                activity["id"] = base["id"]
-                activity["type"] = base["type"]
-                activity["date"] = base["date"]
-                activity["source"] = base["source"]
+                    # Fall back to the CSV row: it already has date, type,
+                    # distance and duration, so an unreadable file costs only
+                    # the track-derived extras, not the whole session.
+                    warnings.append(
+                        f"{filename} could not be read ({exc}) — imported from the "
+                        "CSV row instead, without splits or HR zones"
+                    )
+                    activity = dict(base)
+                else:
+                    activity["id"] = base["id"]
+                    activity["type"] = base["type"]
+                    activity["date"] = base["date"]
+                    activity["source"] = base["source"]
             else:
                 activity = dict(base)
 

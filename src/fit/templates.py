@@ -1,29 +1,19 @@
-"""The training content behind `fit train`: one template per goal.
+"""The training content behind `fit train`: one template per goal — plan
+length, phase structure and the weekly session mix, plus the two constructors
+that build them.
 
-Pure data and the two constructors that build it — plan length, phase
-structure and the weekly session mix for each goal fit knows how to train
-for. No engine logic: training.py reads these and does the periodising, so
-adding or recalibrating a goal never means touching the code that expands one.
-
-Imports nothing from fit. `_scale`'s clamps and `_session`'s fields are
-consumed by training._scaled and training._build_session respectively; the
-docstrings here describe what a template author needs to know, and training.py
-documents what the engine does with it.
+Imports nothing from fit, which is the point: adding or recalibrating a goal
+never touches the engine that expands one. These docstrings say what a
+template *author* needs; training.py says what the engine does with it.
 """
 
-# One profile per goal: plan length, phase structure (the taper comes from the
-# progression settings, so it is not listed here), and the weekly session mix.
-# Standard endurance-coaching shapes; every number here is a tunable constant.
-#
-# Phase lengths sum to weeks - training.PROGRESSION_DEFAULTS["taper_weeks"]. A
-# description that moves start_date reapportions them (see
-# training._assign_phases), so they need not sum exactly — but keeping them
-# tidy makes the intent readable.
+# Phase lengths sum to weeks - PROGRESSION_DEFAULTS["taper_weeks"] (the taper
+# is not listed here). A moved start_date reapportions them, so they need not
+# sum exactly — but keeping them tidy makes the intent readable.
 
 
 def _scale(param: str, base: int, low: int, high: int, step: int) -> dict:
-    """The single session param that grows with the week's volume multiplier,
-    with the clamp it may never escape (see training._scaled)."""
+    """The one param that grows with the week's multiplier, and its clamp."""
     return {"param": param, "base": base, "min": low, "max": high, "step": step}
 
 
@@ -39,25 +29,18 @@ def _session(
 ) -> dict:
     """One weekly session template.
 
-    day       0=Mon .. 6=Sun, in the template's own week; the whole week is
-              rotated if the description names a different rest_day
-    priority  1 = drop last, used to trim the week when days_per_week is lower
-              than the template's default. Multi-sport goals interleave the
-              sports here rather than ranking every long session first, so a
-              trimmed week keeps one session of each discipline: a triathlon
-              plan with the swimming cut out of it is not a triathlon plan.
-              (Below three training days there are not enough slots for that
-              to hold, and the lowest-priority sports do drop out.)
-    key       a hard session (quality or long); extras are never placed on
-              these days
-    brick     runs straight off the session sharing its day (triathlon only)
-    scale     the single param that grows with the week's volume multiplier,
-              or None for a session that does not scale. Strength is the only
-              one: its progression is the weight on the bar, and ramping sets
-              or reps as well would be two progressions at once — you hold
-              3x10 and add load, which is the whole method
-    params    the fixed planner.build_plan params for the session type; the
-              intensity one is filled in later by training._apply_target
+    day       0=Mon, in the template's own week; rotated as a whole if the
+              description names a different rest_day
+    priority  1 = drop last, when days_per_week trims the week. Multi-sport
+              goals interleave the sports rather than ranking every long
+              session first, so a trimmed week keeps one of each discipline
+    key       a hard session; extras are never placed on these days
+    brick     runs straight off the session sharing its day
+    scale     the one param that grows, or None. Only strength is None: its
+              progression is load, and ramping sets too would be two
+              progressions at once
+    params    fixed build_plan params; the intensity one is filled in by
+              training._apply_target
     """
     return {
         "sport": sport,
@@ -261,10 +244,8 @@ GOAL_TEMPLATES = {
                 recovery=300,
                 cooldown_minutes=10,
             ),
-            # The TT-specific session: three sustained blocks that lengthen
-            # toward race duration, rather than more short reps. Scaling the
-            # block in seconds also gives the ramp somewhere to go — a 2-5 rep
-            # count is too coarse to express a progression at all.
+            # Blocks lengthen toward race duration rather than multiplying:
+            # a 2-5 rep count is too coarse to express a progression.
             _session(
                 "cycle",
                 "intervals",
@@ -443,10 +424,8 @@ GOAL_TEMPLATES = {
                 recovery=420,
                 cooldown_minutes=10,
             ),
-            # A squat/press day and a deadlift/press day: each session pairs one
-            # heavy lower-body lift with a pressing lift, rather than stacking
-            # both squat and deadlift into one session. Both rest 180s now that
-            # each day carries a heavy compound.
+            # Each day pairs one heavy lower-body lift with a press, rather
+            # than stacking squat and deadlift into one session.
             _session(
                 "strength",
                 "straight_sets",
@@ -549,12 +528,9 @@ GOAL_TEMPLATES = {
                 priority=5,
                 scale=_scale("distance_m", 1000, 800, 2000, 100),
             ),
-            # Supplementary strength: two sessions, sharing the days the hard
-            # endurance work already occupies rather than claiming days of
-            # their own, and ranked last so a trimmed week loses the gym
-            # before it loses a discipline. They carry no scale — the load
-            # ramps instead (see _session), which is why they don't move the
-            # volume measurement either.
+            # Supplementary: shares the days hard endurance work already
+            # occupies, ranked last so a trimmed week loses the gym before a
+            # discipline. No scale — the load ramps instead.
             _session(
                 "strength",
                 "straight_sets",
@@ -589,11 +565,9 @@ GOAL_TEMPLATES = {
         "rest_day": 0,
         "phases": [("base", 6), ("build", 5), ("peak", 3)],
         "weekly_sessions": [
-            # The clamps matter more here than anywhere else: at 16 weeks the
-            # 8%/week ramp compounds to ~2.2x, which would otherwise put a
-            # 108km ride and a 22km run in an Olympic-distance plan. These caps
-            # hold the long sessions at roughly 2.2x the bike leg and 1.6x the
-            # run leg, which is what the distance actually calls for.
+            # Clamps matter most here: at 16 weeks the ramp compounds to
+            # ~2.2x, which without these caps would put a 108km ride and a
+            # 22km run in an Olympic-distance plan.
             _session(
                 "cycle",
                 "long",
@@ -692,12 +666,10 @@ GOAL_TEMPLATES = {
     },
     # --- strength --------------------------------------------------------
     #
-    # The one goal with no endurance event behind it, and the only one whose
-    # sessions are all unscaled: nothing here grows in size, because the whole
-    # progression is the number on the bar (see _session's `scale`). The
-    # phases and taper still apply — they are what decides which weeks deload
-    # and which back off before the day you re-test — so `event_date` is the
-    # day you plan to find out, rather than a race.
+    # No endurance event behind it, and the only goal whose sessions are all
+    # unscaled: the whole progression is the number on the bar. Phases and
+    # taper still decide which weeks deload, so `event_date` is the day you
+    # plan to re-test rather than a race.
     "strength_program": {
         "label": "Strength block",
         "description": "linear progression on the four barbell lifts",
