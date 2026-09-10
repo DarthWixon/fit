@@ -510,6 +510,18 @@ def _fit_exercise_name(category) -> str:
     return "unknown"
 
 
+def _append_set(exercises: list[dict], name: str, one_set: dict) -> None:
+    """Add one set to the exercises list, grouping it with the previous entry
+    when that entry is the same exercise. The single home of the
+    consecutive-sets-group-together rule, shared by the two things that build
+    an exercises list -- the FIT `set` messages and Garmin's own record of
+    them (apply_garmin_exercise_sets)."""
+    if exercises and exercises[-1]["name"] == name:
+        exercises[-1]["sets"].append(one_set)
+    else:
+        exercises.append({"name": name, "sets": [one_set]})
+
+
 def _parse_fit_sets(fit_file) -> list[dict]:
     """The `exercises` list for a strength activity, read from the FIT file's
     `set` messages -- the strength counterpart to the point stream every other
@@ -540,12 +552,69 @@ def _parse_fit_sets(fit_file) -> list[dict]:
         if weight is not None:
             one_set["weight_kg"] = round(float(weight), 2)
 
-        name = _fit_exercise_name(fields.get("category"))
-        if exercises and exercises[-1]["name"] == name:
-            exercises[-1]["sets"].append(one_set)
-        else:
-            exercises.append({"name": name, "sets": [one_set]})
+        _append_set(exercises, _fit_exercise_name(fields.get("category")), one_set)
     return exercises
+
+
+def apply_garmin_exercise_sets(activity: dict, exercise_sets: list[dict]) -> dict:
+    """Correct a strength activity's exercise names from Garmin Connect's own
+    record of the session (garmin.get_exercise_sets).
+
+    The FIT file fit imports is the *original* upload -- Garmin never rewrites
+    it, so a set the watch guessed wrong, or left as the 65534 "not classified"
+    sentinel, stays wrong there however many times you fix it in the app. Those
+    corrections live in the activity's server-side record instead, which is
+    what this merges back in.
+
+    Neither source is complete on its own, so each contributes what it holds:
+    the names come from Garmin (that is the whole point), the weights from the
+    FIT file, which keeps them for sets the server reports as null. A Garmin
+    weight, when present, wins -- an edited load is a correction too, and it
+    arrives in grams.
+
+    Sets pair up positionally, active sets only. Anything that says the two
+    lists aren't the same session in the same order -- a differing set count,
+    or a rep count that disagrees on any pair -- abandons the merge and leaves
+    the FIT-derived exercises untouched, since a misaligned pairing would
+    rename sets to whatever sat at that index."""
+    flat = [
+        (exercise["name"], one_set)
+        for exercise in activity.get("exercises", [])
+        for one_set in exercise["sets"]
+    ]
+    active = [s for s in exercise_sets if s.get("setType") == "ACTIVE"]
+    if not flat or len(active) != len(flat):
+        return activity
+
+    merged: list[dict] = []
+    for (fit_name, fit_set), entry in zip(flat, active):
+        reps = entry.get("repetitionCount")
+        if (
+            reps is not None
+            and fit_set.get("reps") is not None
+            and int(reps) != fit_set["reps"]
+        ):
+            return activity
+
+        one_set = dict(fit_set)
+        grams = entry.get("weight")
+        if grams is not None:
+            one_set["weight_kg"] = round(float(grams) / 1000, 2)
+        _append_set(merged, _garmin_exercise_name(entry) or fit_name, one_set)
+
+    activity["exercises"] = merged
+    return activity
+
+
+def _garmin_exercise_name(entry: dict) -> str:
+    """The exercise name from one Garmin exercise-set entry, or "" when it
+    names none. Garmin's `category` is the uppercased form of the same
+    FIT_EXERCISE_CATEGORY_MAP vocabulary importers already store ("BENCH_PRESS"),
+    so lowercasing is the whole conversion. `name` -- the sub-category, e.g.
+    BACK_SQUATS -- is ignored for the same reason FIT's `category_subtype` is."""
+    exercises = entry.get("exercises") or []
+    category = exercises[0].get("category") if exercises else None
+    return category.lower() if isinstance(category, str) else ""
 
 
 def import_fit(path: str, max_heart_rate: int = 0) -> dict:

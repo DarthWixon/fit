@@ -66,6 +66,15 @@ def login():
     return client
 
 
+def get_exercise_sets(client, garmin_activity_id) -> list[dict]:
+    """Garmin's own record of one strength activity's sets, as raw entries --
+    the corrections made in the Connect app, which the original FIT export
+    never carries (see importers.apply_garmin_exercise_sets, which merges
+    them). Returns [] for an activity Garmin holds no sets for."""
+    response = client.get_activity_exercise_sets(garmin_activity_id)
+    return response.get("exerciseSets", []) if response else []
+
+
 def push_workout(client, workout_payload: dict) -> dict:
     """Upload one workout-service payload to Garmin Connect. Returns the raw
     response dict (contains "workoutId"). The payload is built by planner.py

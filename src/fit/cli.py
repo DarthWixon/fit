@@ -362,7 +362,15 @@ def garmin_sync(
             with tempfile.NamedTemporaryFile(suffix=".fit", delete=False) as tmp:
                 tmp.write(fit_bytes)
                 tmp_paths.append(tmp.name)
-            new_activities.append(importers.import_fit(tmp_paths[-1], max_hr))
+            activity = importers.import_fit(tmp_paths[-1], max_hr)
+            if activity["type"] == "strength":
+                # The original FIT carries the watch's own guess at each
+                # exercise; any correction made in the Connect app lives only
+                # in Garmin's server-side record, so fetch that and merge.
+                activity = importers.apply_garmin_exercise_sets(
+                    activity, garmin.get_exercise_sets(client, summary["activityId"])
+                )
+            new_activities.append(activity)
 
         _import_and_report(new_activities)
     finally:

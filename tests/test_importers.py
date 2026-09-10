@@ -184,6 +184,81 @@ def test_fit_exercise_name_handles_every_category_shape():
     assert importers._fit_exercise_name(None) == "unknown"
 
 
+def _garmin_set(category, reps, grams, set_type="ACTIVE"):
+    exercises = [{"category": category, "name": "BACK_SQUATS"}] if category else []
+    return {
+        "setType": set_type,
+        "repetitionCount": reps,
+        "weight": grams,
+        "exercises": exercises,
+    }
+
+
+def test_garmin_exercise_sets_correct_names_without_losing_weights():
+    # The real shape this exists for: the watch left two sets of a squat ramp
+    # as the 65534 sentinel and guessed pull_up for a bench press, all fixed in
+    # the Connect app -- where Garmin reports the corrected names but a null
+    # weight for the sets it holds no load for.
+    activity = {
+        "type": "strength",
+        "exercises": [
+            {"name": "squat", "sets": [{"reps": 5, "weight_kg": 20.0}]},
+            {"name": "unknown_65534", "sets": [{"reps": 3, "weight_kg": 70.0}]},
+            {"name": "pull_up", "sets": [{"reps": 12, "weight_kg": 24.0}]},
+            {"name": "bench_press", "sets": [{"reps": 10, "weight_kg": 28.0}]},
+        ],
+    }
+    garmin_sets = [
+        _garmin_set("SQUAT", 5, None),
+        _garmin_set(None, 60, None, set_type="REST"),
+        _garmin_set("SQUAT", 3, None),
+        _garmin_set("BENCH_PRESS", 12, 24000.0),
+        _garmin_set("BENCH_PRESS", 10, 28000.0),
+    ]
+
+    merged = importers.apply_garmin_exercise_sets(activity, garmin_sets)["exercises"]
+
+    # Rest sets ignored; the renamed sets group with their neighbours.
+    assert [e["name"] for e in merged] == ["squat", "bench_press"]
+    # The FIT weight survives where Garmin reports null.
+    assert merged[0]["sets"] == [
+        {"reps": 5, "weight_kg": 20.0},
+        {"reps": 3, "weight_kg": 70.0},
+    ]
+    assert merged[1]["sets"] == [
+        {"reps": 12, "weight_kg": 24.0},
+        {"reps": 10, "weight_kg": 28.0},
+    ]
+
+
+def test_garmin_exercise_sets_abandon_a_merge_they_cannot_align():
+    # A pairing that isn't set-for-set would rename sets to whatever sat at
+    # that index, so a differing count or a disagreeing rep count leaves the
+    # FIT-derived names alone rather than guessing.
+    activity = {
+        "type": "strength",
+        "exercises": [{"name": "squat", "sets": [{"reps": 5, "weight_kg": 60.0}]}],
+    }
+    original = [dict(e) for e in activity["exercises"]]
+
+    too_many = [
+        _garmin_set("BENCH_PRESS", 5, None),
+        _garmin_set("BENCH_PRESS", 5, None),
+    ]
+    assert (
+        importers.apply_garmin_exercise_sets(activity, too_many)["exercises"]
+        == original
+    )
+
+    wrong_reps = [_garmin_set("BENCH_PRESS", 8, None)]
+    assert (
+        importers.apply_garmin_exercise_sets(activity, wrong_reps)["exercises"]
+        == original
+    )
+
+    assert importers.apply_garmin_exercise_sets(activity, [])["exercises"] == original
+
+
 def test_import_strava_csv_maps_and_drops_types(tmp_path):
     path = tmp_path / "activities.csv"
     path.write_text(STRAVA_CSV_FIXTURE)

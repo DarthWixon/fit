@@ -506,6 +506,10 @@ explicit parameter rather than a lookup, the same pattern `planner.py`'s pure
 functions use.
 
 Importers never check for duplicates themselves — they always return every activity
+- `apply_garmin_exercise_sets(activity: dict, exercise_sets: list[dict]) -> dict` —
+  corrects a strength activity's exercise *names* from Garmin's server-side
+  record of the session (`garmin.get_exercise_sets`), which is where Connect-app
+  edits live; pure, takes the raw entries in. See "Strength sessions"
 they parse. `cli.py`'s shared `_import_and_report` helper (the common tail of both
 `import_activity` and `garmin_sync`) is the single place that calls
 `activity_exists()` per activity to decide what to skip; this keeps `importers.py`
@@ -1007,7 +1011,8 @@ deeper than every other type's.
 
 **Import is FIT-only**, from `set` messages rather than a point stream. Rest
 sets (`set_type == "rest"`) are dropped, consecutive sets of the same exercise
-group into one entry, and the `set.category` code is resolved to a name via
+group into one entry (`importers._append_set`, the single home of that rule),
+and the `set.category` code is resolved to a name via
 `importers.FIT_EXERCISE_CATEGORY_MAP` (real watches array-encode it, so fitparse
 hands back raw ints — see "importers.py"). A code the map lacks is kept as
 `"unknown_<int>"` rather than dropped — an unrecognised exercise still counts
@@ -1031,6 +1036,26 @@ have. Same going-forward-only rule as `hr_zones` everywhere else.
 ---
 
 ## HR zones
+
+**The watch's guess is corrected from Garmin's server record.** The FIT file
+fit downloads is the *original* upload (`dl_fmt=ORIGINAL`), and Garmin never
+rewrites it — so an exercise the watch guessed wrong, or left as the 65534
+sentinel, stays wrong there no matter how many times it is fixed in the Connect
+app. Those corrections live in the activity's server-side record instead, which
+`garmin.get_exercise_sets` fetches and `importers.apply_garmin_exercise_sets`
+merges back in during `fit garmin-sync` (strength activities only).
+
+**Neither source is complete, so each contributes what it holds**: names from
+Garmin, weights from the FIT file. This is not belt-and-braces — a real session
+came back from the server with the corrected `SQUAT` category and `weight:
+null` on those same six sets, while the FIT held their 20–70kg. A Garmin weight,
+when present, still wins (an edited load is a correction too; it arrives in
+grams).
+
+Sets pair **positionally**, active sets only. A differing set count or a rep
+count that disagrees on any pair abandons the merge and leaves the FIT-derived
+names untouched — a misaligned pairing would rename sets to whatever sat at
+that index, which is worse than the wrong name it set out to fix.
 
 The dashboard's recent-activity table shows a per-activity breakdown of time
 spent in each of 5 heart-rate training zones, as a segmented colour bar (see
@@ -1304,13 +1329,19 @@ Key functions:
 
 `fit garmin-sync --days N` (default 14, `cli.py`) logs in, lists recent
 activities, downloads each as FIT bytes to a temp file, imports it via
-`importers.import_fit`, and hands the results to the same `_import_and_report`
+`importers.import_fit` (fetching and merging Garmin's own exercise-set record
+for a strength activity — see "Strength sessions"), and hands the results to
+the same `_import_and_report`
 tail every other import path shares (dedupe, write, save original, print new
 PBs, recompute PB cache). Temp files are cleaned up in a `finally` block.
 
 ---
 
 ## Workout planner
+- `get_exercise_sets(client, garmin_activity_id) -> list[dict]` — Garmin's own
+  record of one strength activity's sets, as raw entries; the Connect-app edits
+  the original FIT export never carries. `[]` when Garmin holds no sets. See
+  "Strength sessions".
 
 `fit plan --sport run --type intervals [--no-push] [--schedule DATE]` generates a
 structured workout interactively (typer prompts, Enter accepts each default),
