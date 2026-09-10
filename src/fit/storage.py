@@ -147,7 +147,11 @@ def training_plan_path() -> Path:
 
 
 def write_training_plan(plan: dict) -> None:
-    """The one active plan, so no per-id filename (unlike write_plan)."""
+    """The one active plan, so no per-id filename (unlike write_plan).
+
+    Holds only what cannot be derived: {spec, created, volume, pushed}. The
+    schedule itself is re-expanded from the spec on every command (see
+    training.expand_plan)."""
     _write_json_atomic(training_plan_path(), plan)
 
 

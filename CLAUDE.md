@@ -102,11 +102,18 @@ pbs = {
 `plans/<id>.json`: `{id, sport, workout_type, params, workout_name, payload}`,
 plus `garmin_workout_id` after a push and `scheduled_date` after a `--schedule`.
 
-`train/plan.json`: `{goal, event_date, start_date, weeks, test_week, created,
-spec, targets, volume, days_per_week, benchmark_weeks, progression, warnings,
-sessions}`. A session stores `params`, **not** a payload — a payload per session
-would bloat the file ~80x, and `planner.build_plan` rebuilds it at sync time.
-`workout_name` is stored so `fit train show` reads well without rebuilding.
+`train/plan.json` holds **only what cannot be derived** — about 400 bytes:
+
+```python
+{"spec": {...},            # the normalised description
+ "created": "2026-08-24",
+ "volume": {"start_scale": 0.83, "why": "..."},   # pinned at import
+ "pushed": [{"date": "2026-08-25", "sport": "run", "workout_id": 1,
+             "schedule_id": 2, "workout_name": "...", "params": {...}}]}
+```
+
+The schedule itself is re-expanded by `training.expand_plan` on every command.
+See "The plan is derived, not stored".
 
 ---
 
@@ -171,9 +178,25 @@ ramps, because that is what linear progression is and a weight that turns out
 too heavy is a failed rep, not a failed session. So strength sessions carry no
 `scale`, `volume_sports` excludes them, and the clamp tests exempt them.
 
-**Retargeting rewrites intensity only — structurally.** The template's `scale`
-rule is never persisted, so a stored session knows its own size but not the rule
-that produced it; volume is *unrecoverable*, not merely off-limits.
+**The plan is derived, not stored.** `expand_plan` is deterministic and re-runs
+on every `fit train` command, so targets always track your *measured* fitness —
+importing a faster 5k is what applies it, with no retarget step in between.
+Session dates are a pure function of the spec (only `params` depend on history),
+which is what makes `(date, sport)` a stable identity across re-derivations.
+
+Two things are deliberately **not** re-derived:
+
+- **Starting volume is pinned at import** (`plan["volume"]`). It is a decision
+  about where you were when the plan began; re-measuring it weekly would rewrite
+  session sizes as you train.
+- **A pushed session renders from the ledger**, not from a fresh derivation.
+  Garmin has no edit endpoint, so the watch holds the copy that was sent — the
+  plan must show that. When the live derivation moves away from it the session
+  is flagged `stale` and rendered `on watch*`; `fit train clear` is how you drop
+  it so it re-pushes at current fitness.
+
+This is why there is no `fit train retarget`: re-deriving isn't an operation you
+run, it's what every command already does.
 
 **Extras are local-only.** Garmin has no calendar-note or non-workout endpoint
 (`schedule_workout` takes a `workout_id`), so extras are never built or pushed.
@@ -524,20 +547,18 @@ user's — so `plan["weeks"]` stays the *periodised* count and only
 `_default_start_date` compensates. It is independent of `benchmarks:`: measuring
 once up front and re-measuring as you go are separate decisions.
 
-### Retargeting and sync
+### Sync and the ledger
 
-Applying a re-test: do the test → `fit garmin-sync` → **`fit train retarget`**,
-which re-derives targets and rewrites the sessions still ahead, in place. No
-login, no calendar change. `fit train import` remains the way to change a plan's
-*shape*, and refuses to replace a plan with future scheduled sessions (clearing
-needs Garmin; importing may be offline).
+Applying a re-test is just: do the test → `fit garmin-sync`. The plan re-derives
+from it. `fit train import` is how you change a plan's *shape*, and refuses to
+replace a plan with future ledger rows (clearing needs Garmin; importing may be
+offline).
 
-`retarget_sessions` will not touch four things: **extras** (no `params` — a
-`KeyError`), **benchmarks** (a test at a prescribed pace is not a test),
-**anything already scheduled on Garmin** (frozen, see above), and **volume**
-(structurally, see above). `workout_name` is regenerated whenever params change,
-or it would disagree with the payload eventually pushed. `--dry-run` matters more
-here than in `sync`: there is no backup of `plan.json`.
+`train sync` appends a ledger row per pushed session — the row stores the
+`params` and name that were **actually sent**, which is what lets a pushed
+session render frozen. `train clear` removes future rows, after which those
+sessions simply re-derive as ordinary planned ones; there is no per-session
+state to reset.
 
 `train sync` prints the batch and **asks before `garmin.login()` is even
 called** — `login()` resumes silently and one sync creates a workout *and* a
@@ -562,7 +583,7 @@ fit fitness                   fit fitness-reset [--as-of DATE]
 fit import <path>             TCX/FIT file, folder, or Strava export
 fit garmin-sync [--days N]    fit gs = --days 7
 fit plan --sport S --type T [--no-push] [--schedule DATE]
-fit train import|show|retarget|sync|clear
+fit train import|show|sync|clear
 fit history [N]               fit calendar        fit usage
 ```
 

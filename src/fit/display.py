@@ -39,7 +39,6 @@ def render_usage() -> None:
         "fit plan ... --schedule YYYY-MM-DD          also put it on the Garmin calendar\n"
         "fit train import <plan.yaml>                expand a goal into a full plan\n"
         "fit train show [--weeks N]                  the plan, with what's done\n"
-        "fit train retarget [--dry-run]              re-derive targets from your history\n"
         "fit train sync [--days N] [--dry-run]       push + schedule the next sessions\n"
         "fit train clear                             unschedule future sessions\n"
         "fit history [N]                             last N activities (default 10)\n"
@@ -624,7 +623,7 @@ def render_training_plan(summary: dict, weeks: list[dict]) -> None:
     )
     console.print(
         f"{summary['completed']}/{summary['sessions'] - summary['extras']} sessions "
-        f"done · {summary['scheduled']} scheduled on Garmin · "
+        f"done · {summary['scheduled']} on the Garmin calendar · "
         f"{summary['extras']} extras (tracked locally)"
     )
     targets = _format_targets(summary.get("targets", {}))
@@ -639,15 +638,22 @@ def render_training_plan(summary: dict, weeks: list[dict]) -> None:
     if summary.get("test_week"):
         console.print(
             "[dim]Week 0 is a test week: every target below was derived from "
-            "your history, so do the tests, `fit garmin-sync`, then `fit train "
-            "retarget` to rebuild the plan at your measured fitness.[/dim]"
+            "your history, so do the tests and `fit garmin-sync` — the plan "
+            "re-derives from them automatically.[/dim]"
         )
     benchmark_weeks = summary.get("benchmark_weeks") or []
     if benchmark_weeks:
         console.print(
             f"[dim]Re-test weeks: {', '.join(str(w) for w in benchmark_weeks)} — "
-            "do the test, sync it back, then `fit train retarget` to rebuild "
-            "the rest at your new fitness.[/dim]"
+            "do the test and `fit garmin-sync`; the plan re-derives from it "
+            "automatically.[/dim]"
+        )
+    if summary.get("stale"):
+        console.print(
+            f"[dim]{summary['stale']} session(s) marked * were pushed at an "
+            "earlier target and can't be updated — Garmin has no edit endpoint. "
+            "`fit train clear` removes them so they re-push at your current "
+            "fitness.[/dim]"
         )
     for warning in summary.get("warnings", []):
         console.print(f"[yellow]note:[/yellow] {warning}")
@@ -681,10 +687,14 @@ def _format_session_name(session: dict) -> str:
 
 
 def _format_session_garmin(session: dict) -> str:
+    """A pushed session is a frozen copy on the account; "stale" means the live
+    derivation has moved on from what the watch holds."""
     if session.get("is_extra"):
         return "[dim]—[/dim]"
-    if session.get("status") == "scheduled":
-        return "[green]scheduled[/green]"
+    if session.get("stale"):
+        return "[yellow]on watch*[/yellow]"
+    if session.get("pushed"):
+        return "[green]on watch[/green]"
     return "[dim]planned[/dim]"
 
 
@@ -718,74 +728,6 @@ def render_training_synced(summary: dict) -> None:
             "[dim]They will appear in the Garmin Connect calendar on the "
             "watch's next sync.[/dim]"
         )
-
-
-def render_training_retargeted(summary: dict, dry_run: bool = False) -> None:
-    """One line per target that moved, never one per session: intensity is a
-    pure function of the target, so 80 session lines would add nothing."""
-    old, new = summary["old_targets"], summary["new_targets"]
-    moved = [
-        key
-        for key, _ in _TARGET_LABELS.items()
-        if new.get(key) is not None and old.get(key) != new.get(key)
-    ]
-    # A lift moves when its *measured* start does; the goal is where the plan
-    # was always aiming, so quoting that would hide what the re-test told you.
-    old_lifts, new_lifts = old.get("strength") or {}, new.get("strength") or {}
-    moved_lifts = [
-        lift
-        for lift, entry in new_lifts.items()
-        if (old_lifts.get(lift) or {}).get("current_e1rm_kg")
-        != entry.get("current_e1rm_kg")
-    ]
-
-    if not moved and not moved_lifts:
-        console.print(
-            "Targets unchanged — nothing to rewrite. "
-            "[dim]Your latest history derives the same numbers the plan already has.[/dim]"
-        )
-        return
-
-    verb = "Would retarget" if dry_run else "Retargeted"
-    console.print(
-        f"{verb} {summary['retargeted']} future session(s) · "
-        f"{summary['unchanged']} already on target · "
-        f"{summary['frozen']} left scheduled on Garmin · {summary['past']} in the past"
-    )
-    for key in moved:
-        label = _TARGET_LABELS[key][0]
-        was = (
-            _format_target_value(key, old[key])
-            if old.get(key) is not None
-            else "not set"
-        )
-        console.print(
-            f"  [bold]{label}[/bold] {was} → {_format_target_value(key, new[key])}"
-        )
-        why = (new.get("why") or {}).get(key)
-        if why:
-            console.print(f"    [dim]{why}[/dim]")
-
-    for lift in moved_lifts:
-        was = (old_lifts.get(lift) or {}).get("current_e1rm_kg")
-        console.print(
-            f"  [bold]{lift.replace('_', ' ').capitalize()}[/bold] "
-            f"{f'{was:g}kg' if was is not None else 'not set'} → "
-            f"{new_lifts[lift]['current_e1rm_kg']:g}kg e1RM, "
-            f"aiming at {new_lifts[lift]['goal_e1rm_kg']:g}kg"
-        )
-        why = (new.get("why") or {}).get(f"{lift}_e1rm_kg")
-        if why:
-            console.print(f"    [dim]{why}[/dim]")
-
-    if summary["frozen"]:
-        console.print(
-            f"[dim]note: {summary['frozen']} session(s) already on your Garmin "
-            "calendar keep their old targets — a pushed workout can't be edited. "
-            "Run `fit train clear` first if you want those rewritten too.[/dim]"
-        )
-    if dry_run:
-        console.print("[dim](dry run — nothing written)[/dim]")
 
 
 def render_training_cleared(summary: dict) -> None:

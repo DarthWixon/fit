@@ -282,24 +282,15 @@ def test_one_activity_cannot_complete_two_sessions():
 # --- sync windows --------------------------------------------------------------
 
 
-def test_sync_window_is_idempotent_once_scheduled():
+def test_sync_window_is_idempotent_once_pushed():
     sessions = [
-        {"date": "2026-08-26", "is_extra": False, "status": "planned"},
-        {"date": "2026-08-27", "is_extra": False, "status": "scheduled"},
-        {"date": "2026-09-30", "is_extra": False, "status": "planned"},  # beyond it
-        {"date": "2026-08-26", "is_extra": True, "status": "planned"},  # never pushed
+        {"date": "2026-08-26", "is_extra": False, "pushed": False},
+        {"date": "2026-08-27", "is_extra": False, "pushed": True},
+        {"date": "2026-09-30", "is_extra": False, "pushed": False},  # beyond it
+        {"date": "2026-08-26", "is_extra": True, "pushed": False},  # never pushed
     ]
     due = training.sync_window(sessions, REFERENCE, 14)
     assert [s["date"] for s in due] == ["2026-08-26"]
-
-    # The other half of the same horizon: `fit train clear` unschedules only
-    # what is still ahead. A past session is already done — reaching for it
-    # would be a pointless live Garmin call per session.
-    past_and_future = sessions + [
-        {"date": "2026-01-05", "is_extra": False, "status": "scheduled"}
-    ]
-    pending = training.future_scheduled(past_and_future, REFERENCE)
-    assert [s["date"] for s in pending] == ["2026-08-27"]
 
 
 # --- starting volume -----------------------------------------------------------
@@ -737,9 +728,9 @@ def test_benchmarks_take_turns_between_a_multisport_goals_disciplines():
     assert all(a != b for a, b in zip(sports, sports[1:]))
 
 
-# --- retargeting ---------------------------------------------------------------
+# --- statelessness: live derivation + the Garmin ledger -------------------------
 
-RETARGET_SPEC = "goal: run_half\nevent_date: 2027-02-07\nstart_date: 2026-08-24\n"
+LIVE_SPEC = "goal: run_half\nevent_date: 2027-02-07\nstart_date: 2026-08-24\n"
 SLOW_5K = [
     {
         "id": "a",
@@ -760,102 +751,116 @@ FAST_5K = SLOW_5K + [
 ]
 
 
-def _retargeted(plan_activities=SLOW_5K, new_activities=FAST_5K):
-    """A plan built on slow history, then retargeted against faster history."""
-    spec = training.parse_plan_spec(RETARGET_SPEC)
-    plan = training.expand_plan(spec, plan_activities, REFERENCE)
-    targets = training.derive_targets(spec, new_activities, REFERENCE)
-    return plan, training.retarget_sessions(plan, targets, REFERENCE)
+def _paces(plan):
+    return {
+        (s["date"], s["session_type"]): s["params"].get("target_pace")
+        for s in plan["sessions"]
+        if not s["is_extra"] and "target_pace" in s.get("params", {})
+    }
 
 
 def _volume_of(plan):
+    intensity = ("target_pace", "target_watts", "target_pace_100m")
     return {
         (s["date"], s["sport"], s["session_type"]): {
-            k: v for k, v in s["params"].items() if k not in training._INTENSITY_PARAMS
+            k: v for k, v in s["params"].items() if k not in intensity
         }
         for s in plan["sessions"]
         if not s["is_extra"]
     }
 
 
-def test_retarget_rewrites_only_future_unscheduled_sessions():
-    spec = training.parse_plan_spec(RETARGET_SPEC)
-    plan = training.expand_plan(spec, SLOW_5K, REFERENCE)
-    future = [
-        s for s in plan["sessions"] if not s["is_extra"] and s["date"] >= "2026-08-24"
-    ]
-    future[3]["status"] = "scheduled"
-    frozen = dict(future[3]["params"])
+def test_targets_follow_new_history_with_no_retarget_step():
+    """The whole point of storing only the description: importing a faster 5k
+    is what applies it — there is no command in between."""
+    spec = training.parse_plan_spec(LIVE_SPEC)
+    slow = training.expand_plan(spec, SLOW_5K, REFERENCE)
+    fast = training.expand_plan(spec, FAST_5K, REFERENCE)
 
-    summary = training.retarget_sessions(
-        plan, training.derive_targets(spec, FAST_5K, REFERENCE), REFERENCE
-    )
-    assert summary["retargeted"] > 0
-    assert summary["frozen"] == 1
-    # A pushed workout is a frozen copy on the Garmin account with no update
-    # endpoint, so rewriting it locally would only desynchronise the two.
-    assert future[3]["params"] == frozen
-
-    # Benchmarks stay untargeted (a test at a prescribed pace is not a test)
-    # and extras have no "params" at all — touching one is a KeyError.
-    for session in plan["sessions"]:
-        if session.get("is_benchmark"):
-            assert not any(k in session["params"] for k in training._INTENSITY_PARAMS)
-        if session["is_extra"]:
-            assert "params" not in session
+    assert slow["targets"]["run_5k_seconds"] == 1916
+    assert fast["targets"]["run_5k_seconds"] == 1374
+    slow_paces, fast_paces = _paces(slow), _paces(fast)
+    assert slow_paces and slow_paces.keys() == fast_paces.keys()
+    assert all(fast_paces[k] < slow_paces[k] for k in slow_paces)
 
 
-def test_retarget_never_changes_volume():
-    """The load-bearing invariant: a session's `scale` rule is not stored, so
-    volume is not recoverable from a session alone — only intensity is."""
-    spec = training.parse_plan_spec(RETARGET_SPEC)
-    plan = training.expand_plan(spec, SLOW_5K, REFERENCE)
-    before = _volume_of(plan)
-    training.retarget_sessions(
-        plan, training.derive_targets(spec, FAST_5K, REFERENCE), REFERENCE
-    )
-    assert _volume_of(plan) == before
-
-    # A second pass against the same targets changes nothing and says so.
-    again = training.retarget_sessions(
-        plan, training.derive_targets(spec, FAST_5K, REFERENCE), REFERENCE
-    )
-    assert again["retargeted"] == 0 and again["changed"] == []
+def test_re_deriving_never_changes_volume():
+    """Only intensity tracks fitness. Session sizes come from the multiplier
+    and the pinned starting volume, so they must be identical."""
+    spec = training.parse_plan_spec(LIVE_SPEC)
+    slow = training.expand_plan(spec, SLOW_5K, REFERENCE)
+    fast = training.expand_plan(spec, FAST_5K, REFERENCE, volume=slow["volume"])
+    assert _volume_of(fast) == _volume_of(slow)
 
 
-def test_retarget_regenerates_the_workout_name():
-    """A stale name would disagree with the payload that gets pushed."""
-    plan, _ = _retargeted()
-    for session in plan["sessions"]:
-        if session["is_extra"]:
-            continue
-        assert session["workout_name"] == planner.workout_name(
-            session["sport"], session["session_type"], session["params"]
-        )
+def test_a_pinned_volume_survives_a_fitter_athlete():
+    """Starting volume is a decision about where you were, taken once."""
+    spec = training.parse_plan_spec(LIVE_SPEC)
+    pinned = {"start_scale": 0.6, "why": "pinned at import"}
+    plan = training.expand_plan(spec, FAST_5K, REFERENCE, volume=pinned)
+    assert plan["volume"] == pinned
 
 
-def test_retarget_matches_the_intensity_of_a_fresh_expansion():
-    """The contract, made executable: retargeting gets you the same intensities
-    a fresh import would. Only intensities — a fresh expansion also re-measures
-    volume from newer history, which retarget deliberately does not."""
-    spec = training.parse_plan_spec(RETARGET_SPEC)
-    plan, _ = _retargeted()
+def _pushed_plan(activities=SLOW_5K):
+    """A plan with its first two real sessions pushed to Garmin."""
+    spec = training.parse_plan_spec(LIVE_SPEC)
+    plan = training.expand_plan(spec, activities, REFERENCE)
+    due = [s for s in plan["sessions"] if not s["is_extra"]][:2]
+    ledger = [training.ledger_entry(s, 100 + i, 200 + i) for i, s in enumerate(due)]
+    return spec, plan, ledger
+
+
+def test_a_pushed_session_keeps_what_was_actually_sent():
+    """Garmin has no edit endpoint, so the watch holds the old copy — the plan
+    must show that, not a fresh derivation."""
+    spec, _, ledger = _pushed_plan(SLOW_5K)
+    # Re-derive against faster history: unpushed sessions move, pushed do not.
     fresh = training.expand_plan(spec, FAST_5K, REFERENCE)
-    fresh_by_key = {
-        (s["date"], s["sport"], s["session_type"]): s for s in fresh["sessions"]
-    }
-    compared = 0
-    for session in plan["sessions"]:
-        other = fresh_by_key.get(
-            (session["date"], session["sport"], session["session_type"])
-        )
-        if not other or session["is_extra"] or session.get("is_benchmark"):
-            continue
-        for key in training._INTENSITY_PARAMS:
-            if key in session["params"] and key in other["params"]:
-                assert session["params"][key] == other["params"][key]
-                compared += 1
-    assert compared > 0
+    overlaid = training.apply_pushed(fresh["sessions"], ledger)
+
+    pushed = [s for s in overlaid if s["pushed"]]
+    assert len(pushed) == len(ledger)
+    for session, entry in zip(pushed, ledger):
+        assert session["params"] == entry["params"]
+        assert session["workout_name"] == entry["workout_name"]
+        assert session["garmin_workout_id"] == entry["workout_id"]
+        assert session["scheduled_workout_id"] == entry["schedule_id"]
+    # ...and it is flagged, since the live derivation has moved away from it.
+    assert all(s["stale"] for s in pushed)
+
+
+def test_a_pushed_session_is_not_stale_when_nothing_moved():
+    spec, _, ledger = _pushed_plan(SLOW_5K)
+    fresh = training.expand_plan(spec, SLOW_5K, REFERENCE)
+    overlaid = training.apply_pushed(fresh["sessions"], ledger)
+    assert not any(s["stale"] for s in overlaid)
+
+
+def test_the_ledger_key_survives_re_derivation():
+    """(date, sport) must still name the same session after re-expanding, or
+    the overlay would attach a workout to the wrong day."""
+    spec = training.parse_plan_spec(LIVE_SPEC)
+    a = training.expand_plan(spec, SLOW_5K, REFERENCE)
+    b = training.expand_plan(spec, FAST_5K, REFERENCE)
+    assert [training.ledger_key(s) for s in a["sessions"]] == [
+        training.ledger_key(s) for s in b["sessions"]
+    ]
+
+
+def test_sync_finds_only_what_is_not_already_pushed():
+    spec, plan, ledger = _pushed_plan()
+    overlaid = training.apply_pushed(plan["sessions"], ledger)
+    due = training.sync_window(overlaid, REFERENCE, 60)
+    assert due, "something should still be due"
+    assert not any(
+        training.ledger_key(s) in {(e["date"], e["sport"]) for e in ledger} for s in due
+    )
+
+
+def test_clear_takes_only_future_ledger_rows():
+    _, _, ledger = _pushed_plan()
+    past = [{**ledger[0], "date": "2026-01-05"}]
+    assert training.future_pushed(ledger + past, REFERENCE) == ledger
 
 
 # --- strength progression ------------------------------------------------------
@@ -887,6 +892,12 @@ def test_strength_weekly_e1rm_advances_only_on_build_weeks():
     assert weekly[4] == pytest.approx(105.0 * training.STRENGTH_TAPER_FACTOR)
 
 
+def _roles_of(plan):
+    """Week roles, from the phases the expanded sessions carry."""
+    phases = [w["phase"] for w in training.group_by_week(plan["sessions"]) if w["week"]]
+    return training._week_roles(phases, plan["spec"]["progression"]["build_recover"])
+
+
 def test_a_goal_further_off_than_the_plan_is_long_is_capped_and_warned():
     """Better to say the timeline doesn't reach than to prescribe a curve
     nobody could ride."""
@@ -895,7 +906,7 @@ def test_a_goal_further_off_than_the_plan_is_long_is_capped_and_warned():
     increment = training.lift_increment("deadlift")
     # Only build weeks advance, so they are the ones the cap applies to — a
     # deload week dips and the week after resumes, which is not a step.
-    roles = training.plan_week_roles(plan)
+    roles = _roles_of(plan)
     build = [v for v, role in zip(entry["by_week"], roles) if role == "build"]
     steps = [b - a for a, b in zip(build, build[1:])]
     assert max(steps) <= increment + 0.01
@@ -906,7 +917,7 @@ def test_a_goal_further_off_than_the_plan_is_long_is_capped_and_warned():
 def test_an_underived_goal_is_what_the_plans_length_can_deliver():
     plan = _plan(STRENGTH)
     for lift, entry in plan["targets"]["strength"].items():
-        roles = training.plan_week_roles(plan)
+        roles = _roles_of(plan)
         assert entry["goal_e1rm_kg"] == pytest.approx(
             training.reachable_e1rm(
                 entry["current_e1rm_kg"], roles, training.lift_increment(lift)
@@ -939,24 +950,24 @@ def test_each_week_gets_its_own_exercise_dicts():
     assert len(set(loads.values())) > 1
 
 
-def test_retargeting_strength_moves_load_but_never_sets_or_reps():
-    plan = _plan(STRENGTH)
-    before = [
-        (s["params"]["exercises"][0]["sets"], s["params"]["exercises"][0]["reps"])
-        for s in plan["sessions"]
-        if s["sport"] == "strength" and not s.get("is_benchmark")
-    ]
-    stronger = [_lifted("2026-08-20", lift, 3, 150.0) for lift in ("squat", "deadlift")]
-    targets = training.derive_targets(plan["spec"], stronger, REFERENCE)
-    summary = training.retarget_sessions(plan, targets, date(2026, 1, 1))
+def test_re_deriving_strength_moves_load_but_never_sets_or_reps():
+    def lifts(plan):
+        return [
+            (
+                s["params"]["exercises"][0]["sets"],
+                s["params"]["exercises"][0]["reps"],
+                s["params"]["exercises"][0]["target_weight_kg"],
+            )
+            for s in plan["sessions"]
+            if s["sport"] == "strength" and not s.get("is_benchmark")
+        ]
 
-    assert summary["retargeted"] > 0
-    after = [
-        (s["params"]["exercises"][0]["sets"], s["params"]["exercises"][0]["reps"])
-        for s in plan["sessions"]
-        if s["sport"] == "strength" and not s.get("is_benchmark")
-    ]
-    assert after == before
+    weak = _plan(STRENGTH)
+    stronger = [_lifted("2026-08-20", lift, 3, 150.0) for lift in ("squat", "deadlift")]
+    strong = _plan(STRENGTH, stronger)
+
+    assert [(a, b) for a, b, _ in lifts(strong)] == [(a, b) for a, b, _ in lifts(weak)]
+    assert [w for _, _, w in lifts(strong)] != [w for _, _, w in lifts(weak)]
 
 
 def test_a_strength_benchmark_tests_the_lift_its_session_leads_with():

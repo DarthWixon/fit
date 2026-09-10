@@ -2,6 +2,12 @@
 dated, periodised schedule with intensities derived from the user's history.
 No I/O — cli.py reads the text and hands it in.
 
+**Nothing derived is stored.** expand_plan re-runs on every command, so targets
+always reflect current fitness and there is no retarget step. The one thing
+that cannot be derived — what was pushed to Garmin — lives in a small ledger
+(see "the Garmin ledger" below), and a pushed session renders from what was
+actually sent.
+
 The description is thin by design; all training content lives in
 templates.GOAL_TEMPLATES, so recalibrating a goal never touches this file.
 """
@@ -38,15 +44,18 @@ MIN_PLAN_WEEKS = 4
 
 # --- benchmarks -----------------------------------------------------------
 #
-# Intensity is measured, never projected: a plan holds the fitness
-# derive_targets found at expansion and does not drift upward on the assumption
-# you will improve. A plan earns a faster pace by re-measuring — do the test,
-# garmin-sync, then `fit train retarget`.
+# Intensity is measured, never projected: a target is only ever a reading of
+# training you have actually done, never an assumption that you will improve.
+# It does track your *measured* fitness, since expand_plan re-derives on every
+# command — what it will not do is prescribe a pace you have not yet earned.
 #
 # Benchmarks land on recovery weeks (you test rested, so one test is comparable
 # with the next) and never scale. Whether a test can afford a warmup in the
 # same recording is a property of the sport: the recorded activity must BE the
 # test unless the split machinery can isolate it from within.
+#
+# Nothing has to be re-run after a test: expand_plan derives targets fresh on
+# every command, so importing the activity is what applies it.
 BENCHMARK_SESSIONS = {
     # Keeps its wrap: fastest_split isolates the 5k from the jogging around it.
     # 5km not 3km — 3km is in neither SPLIT_DISTANCES_KM nor MILESTONES_KM, so
@@ -877,8 +886,7 @@ def _apply_target(
     """Fill in the one intensity param each session type needs, in place.
 
     `week` is read only by strength, as an index into _attach_weekly_lifts'
-    table. Everywhere else intensity is a pure function of the target, which is
-    what makes retargeting easy to reason about."""
+    table. Everywhere else intensity is a pure function of the target."""
     if sport == "run":
         if session_type == "intervals":
             params["target_pace"] = planner.recommended_interval_pace(
@@ -965,10 +973,6 @@ def _build_session(
         "is_key": template_session["key"],
         "is_brick": template_session.get("brick", False),
         "is_extra": False,
-        "garmin_workout_id": None,
-        "scheduled_workout_id": None,
-        "scheduled_date": None,
-        "status": "planned",
     }
 
 
@@ -1006,10 +1010,6 @@ def _build_benchmark(
         "is_brick": False,
         "is_extra": False,
         "is_benchmark": True,
-        "garmin_workout_id": None,
-        "scheduled_workout_id": None,
-        "scheduled_date": None,
-        "status": "planned",
     }
 
 
@@ -1090,15 +1090,23 @@ def _build_extras(
                     "is_key": False,
                     "is_brick": False,
                     "is_extra": True,
-                    "status": "planned",
                 }
             )
     return built
 
 
-def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
+def expand_plan(
+    spec: dict, activities: list[dict], reference: date, volume: dict | None = None
+) -> dict:
     """The engine: spec + history -> the full plan dict (metadata, targets, and
     a flat list of dated sessions, oldest first). reference is today.
+
+    Nothing here is persisted — `fit train` re-runs this on every command, so
+    targets track your current fitness with no retarget step (see
+    storage.write_training_plan). `volume`, when given, is the
+    derive_volume_scale result pinned at import: the *starting* volume is a
+    decision made once about where you were then, and re-measuring it weekly
+    would rewrite session sizes as you train.
 
     Sessions before start_date or on/after the event are dropped."""
     template = GOAL_TEMPLATES[spec["goal"]]
@@ -1144,9 +1152,12 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
     # Measured against week 1's *own* session list, which is smaller when
     # frequency builds — otherwise a plan opening at two rides would look like
     # the user was training far below a week they were never asked to do.
-    start_scale, volume_why = derive_volume_scale(
-        spec, activities, reference, _week_seconds(week_sessions(0), targets)
-    )
+    if volume:
+        start_scale, volume_why = volume["start_scale"], volume["why"]
+    else:
+        start_scale, volume_why = derive_volume_scale(
+            spec, activities, reference, _week_seconds(week_sessions(0), targets)
+        )
     warnings = list(lift_warnings)
     growth = (max(multipliers) if multipliers else 1.0) / max(start_scale, 0.01)
     if growth > VOLUME_RAMP_WARN:
@@ -1328,7 +1339,8 @@ def plan_summary(plan: dict, today: date) -> dict:
         "sessions": len(sessions),
         "extras": len(sessions) - len(real),
         "completed": sum(1 for s in sessions if s.get("completed")),
-        "scheduled": sum(1 for s in real if s.get("status") == "scheduled"),
+        "scheduled": sum(1 for s in real if s.get("pushed")),
+        "stale": sum(1 for s in real if s.get("stale")),
         "targets": plan.get("targets", {}),
         "volume": plan.get("volume", {}),
         "benchmark_weeks": plan.get("benchmark_weeks", []),
@@ -1348,122 +1360,73 @@ def describe_session(session: dict) -> str:
     return name
 
 
+# --- the Garmin ledger ----------------------------------------------------
+#
+# A session is derived; what was *pushed* is a fact about a remote account and
+# cannot be. plan.json therefore stores only the description plus this ledger,
+# and everything else is re-expanded on every command. A pushed session renders
+# from what was actually sent, not from a fresh derivation, because Garmin has
+# no update endpoint and the watch holds the old copy.
+
+
+def ledger_key(session: dict) -> tuple:
+    """What identifies a session across re-derivations. Dates are a pure
+    function of the spec, so (date, sport) is stable — the same key
+    match_completion and scripts/diff_workout.py already use."""
+    return session["date"], session["sport"]
+
+
+def apply_pushed(sessions: list[dict], pushed: list[dict]) -> list[dict]:
+    """Copies of `sessions` overlaid with the ledger: a pushed session takes
+    back the params and name that were actually sent, and is flagged "stale"
+    when the live derivation has since moved away from them."""
+    by_key = {(e["date"], e["sport"]): e for e in pushed}
+    out = []
+    for session in sessions:
+        entry = by_key.get(ledger_key(session))
+        if entry is None:
+            out.append({**session, "pushed": False, "stale": False})
+            continue
+        stale = entry.get("params") != session.get("params")
+        out.append(
+            {
+                **session,
+                "params": entry.get("params", session.get("params")),
+                "workout_name": entry.get("workout_name", session.get("workout_name")),
+                "garmin_workout_id": entry.get("workout_id"),
+                "scheduled_workout_id": entry.get("schedule_id"),
+                "pushed": True,
+                "stale": stale,
+            }
+        )
+    return out
+
+
+def ledger_entry(session: dict, workout_id, schedule_id) -> dict:
+    """One ledger row: the identity, the ids, and exactly what was sent."""
+    return {
+        "date": session["date"],
+        "sport": session["sport"],
+        "workout_id": workout_id,
+        "schedule_id": schedule_id,
+        "workout_name": session["workout_name"],
+        "params": session["params"],
+    }
+
+
 def sync_window(sessions: list[dict], today: date, window_days: int) -> list[dict]:
-    """Unscheduled non-extra sessions in [today, today + window_days]. Re-running
-    sync simply finds fewer, which is what makes it idempotent."""
+    """Not-yet-pushed, non-extra sessions in [today, today + window_days].
+    Re-running sync finds fewer, which is what makes it idempotent."""
     end = (today + timedelta(days=window_days)).isoformat()
     return [
         s
         for s in sessions
         if not s.get("is_extra")
-        and s.get("status") == "planned"
+        and not s.get("pushed")
         and today.isoformat() <= s["date"] <= end
     ]
 
 
-# What _apply_target writes. Volume is not recoverable from a stored session —
-# the template's `scale` is never persisted — so a rewrite can only be
-# intensity, structurally.
-_INTENSITY_PARAMS = ("target_pace", "target_watts", "target_pace_100m")
-
-
-def _intensity_snapshot(params: dict) -> tuple:
-    """Everything _apply_target may write, comparable: the three scalar targets
-    plus each exercise's load. Volume params are absent by construction."""
-    return (
-        tuple(params.get(key) for key in _INTENSITY_PARAMS),
-        tuple(
-            exercise.get("target_weight_kg") for exercise in params.get("exercises", [])
-        ),
-    )
-
-
-def plan_week_roles(plan: dict) -> list[str]:
-    """Week roles recovered from a stored plan. Must agree with expand_plan's,
-    or a rewritten session sits at a different point on the curve."""
-    template = GOAL_TEMPLATES[plan["goal"]]
-    progression = plan.get("progression", {})
-    phase_by_week = _assign_phases(
-        plan["weeks"],
-        template["phases"],
-        progression.get("taper_weeks", PROGRESSION_DEFAULTS["taper_weeks"]),
-    )
-    return _week_roles(
-        phase_by_week,
-        progression.get("build_recover", PROGRESSION_DEFAULTS["build_recover"]),
-    )
-
-
-def retargetable(sessions: list[dict], today: date) -> list[dict]:
-    """Sessions a retarget may rewrite. Skipped: extras (no "params" — a
-    KeyError), benchmarks (a test at a prescribed pace is not a test), anything
-    already on Garmin (a pushed workout is frozen; there is no update
-    endpoint), and anything past. `>= today` matches sync_window."""
-    return [
-        s
-        for s in sessions
-        if not s.get("is_extra")
-        and not s.get("is_benchmark")
-        and s.get("status") == "planned"
-        and s["date"] >= today.isoformat()
-    ]
-
-
-def retarget_sessions(plan: dict, targets: dict, today: date) -> dict:
-    """Re-derive every retargetable session's intensity in place; returns
-    {old_targets, new_targets, retargeted, unchanged, frozen, past, changed}.
-
-    Mutates plan["sessions"]/["targets"] — "pure" here means no I/O, not no
-    mutation; cli.py writes afterwards. Intensity only: for strength that is
-    the weight on the bar, so 3x10 stays 3x10."""
-    old_targets = copy.deepcopy(plan.get("targets", {}))
-    # The lift table depends on the plan's length as well as the targets, which
-    # derive_targets does not know.
-    _attach_weekly_lifts(targets, plan_week_roles(plan))
-    eligible = retargetable(plan["sessions"], today)
-
-    real = [s for s in plan["sessions"] if not s.get("is_extra")]
-    frozen = sum(
-        1
-        for s in real
-        if s.get("status") == "scheduled" and s["date"] >= today.isoformat()
-    )
-    past = sum(1 for s in real if s["date"] < today.isoformat())
-
-    changed = []
-    for session in eligible:
-        sport, session_type = session["sport"], session["session_type"]
-        # A hand-edited plan could name a sport this goal never trained.
-        if sport == "strength":
-            if not targets.get("strength"):
-                continue
-        elif sport not in _SPORT_TARGETS or _SPORT_TARGETS[sport][0] not in targets:
-            continue
-        params = session["params"]
-        before = _intensity_snapshot(params)
-        _apply_target(sport, session_type, params, targets, session.get("week", 1))
-        if _intensity_snapshot(params) == before:
-            continue
-        # Derived from params, so a stale name would disagree with the payload.
-        session["workout_name"] = planner.workout_name(sport, session_type, params)
-        changed.append(session)
-
-    plan["targets"] = targets
-    return {
-        "old_targets": old_targets,
-        "new_targets": targets,
-        "retargeted": len(changed),
-        "unchanged": len(eligible) - len(changed),
-        "frozen": frozen,
-        "past": past,
-        "changed": changed,
-    }
-
-
-def future_scheduled(sessions: list[dict], today: date) -> list[dict]:
-    """Scheduled sessions still ahead — what `train clear` unschedules."""
-    return [
-        s
-        for s in sessions
-        if s.get("status") == "scheduled" and s["date"] >= today.isoformat()
-    ]
+def future_pushed(pushed: list[dict], today: date) -> list[dict]:
+    """Ledger rows still ahead of today — what `train clear` unschedules."""
+    return [e for e in pushed if e["date"] >= today.isoformat()]

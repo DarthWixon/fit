@@ -557,26 +557,45 @@ train_app = typer.Typer(help="Multi-week periodised training plans")
 app.add_typer(train_app, name="train")
 
 
-def _require_training_plan() -> dict:
-    """The active plan, or exit with the how-to-create-one message."""
+def _stored_plan() -> dict:
+    """The stored {spec, created, volume, pushed}, or exit with the
+    how-to-create-one message."""
     storage.ensure_data_dir()
-    plan = storage.read_training_plan()
-    if not plan:
+    stored = storage.read_training_plan()
+    if not stored:
         display.render_training_missing()
         raise typer.Exit(code=1)
+    if stored.get("spec", {}).get("goal") not in templates.GOAL_TEMPLATES:
+        typer.echo(
+            "This plan can't be read — it predates the stored plan spec, or its "
+            "goal no longer exists. Run `fit train import` to replace it.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return stored
+
+
+def _expand(stored: dict, activities: list[dict]) -> dict:
+    """Re-derive the schedule from the stored description, overlay the Garmin
+    ledger, and mark what has been completed. Every `fit train` command starts
+    here — the plan is never read back off disk, so its targets always reflect
+    current fitness (see training.expand_plan)."""
+    plan = training.expand_plan(
+        stored["spec"],
+        activities,
+        date_cls.today(),
+        volume=stored.get("volume"),
+    )
+    sessions = training.apply_pushed(plan["sessions"], stored.get("pushed", []))
+    plan["sessions"] = training.match_completion(sessions, activities)
     return plan
 
 
-def _show_plan(plan: dict, activities: list[dict], weeks: int | None) -> None:
-    """`train import`/`train show` tail: match completion, group, render."""
-    sessions = training.match_completion(plan["sessions"], activities)
-    grouped = training.group_by_week(sessions)
+def _show_plan(plan: dict, weeks: int | None) -> None:
+    grouped = training.group_by_week(plan["sessions"])
     if weeks:
         grouped = grouped[:weeks]
-    display.render_training_plan(
-        training.plan_summary({**plan, "sessions": sessions}, date_cls.today()),
-        grouped,
-    )
+    display.render_training_plan(training.plan_summary(plan, date_cls.today()), grouped)
 
 
 def _login_or_exit():
@@ -599,28 +618,35 @@ def train_import(
 
     existing = storage.read_training_plan()
     if existing:
-        pending = training.future_scheduled(
-            existing.get("sessions", []), date_cls.today()
-        )
+        pending = training.future_pushed(existing.get("pushed", []), date_cls.today())
         if pending:
             typer.echo(
                 f"The active plan still has {len(pending)} future session(s) on the "
                 "Garmin calendar. Run `fit train clear` first, or they will be left "
-                "there with nothing tracking them. To update this plan's targets "
-                "without touching the calendar, use `fit train retarget`.",
+                "there with nothing tracking them.",
                 err=True,
             )
             raise typer.Exit(code=1)
 
+    today = date_cls.today()
     try:
         spec = training.parse_plan_spec(Path(path).read_text())
-        plan = training.expand_plan(spec, activities, date_cls.today())
+        # Expanded once here to derive the starting volume, which is pinned:
+        # it is a decision about where you were when the plan began, and
+        # re-measuring it weekly would rewrite session sizes as you train.
+        plan = training.expand_plan(spec, activities, today)
     except (ValueError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
-    storage.write_training_plan(plan)
-    _show_plan(plan, activities, weeks)
+    stored = {
+        "spec": spec,
+        "created": today.isoformat(),
+        "volume": plan["volume"],
+        "pushed": [],
+    }
+    storage.write_training_plan(stored)
+    _show_plan(_expand(stored, activities), weeks)
 
 
 @train_app.command(name="show")
@@ -630,38 +656,7 @@ def train_show(
     ),
 ) -> None:
     """Show the active plan with each session marked planned or done."""
-    plan = _require_training_plan()
-    _show_plan(plan, _load_activities(), weeks)
-
-
-@train_app.command(name="retarget")
-def train_retarget(
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show what would change, then stop"
-    ),
-) -> None:
-    """Re-derive the plan's intensity targets from your latest history."""
-    plan = _require_training_plan()
-    activities = _load_activities()
-
-    # No stored spec, or a goal that no longer exists: say so rather than
-    # KeyError-ing inside derive_targets.
-    spec = plan.get("spec")
-    if not spec or spec.get("goal") not in templates.GOAL_TEMPLATES:
-        typer.echo(
-            "This plan can't be retargeted — it predates the stored plan spec, or "
-            "its goal no longer exists. Run `fit train clear` then "
-            "`fit train import` instead.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    today = date_cls.today()
-    targets = training.derive_targets(spec, activities, today)
-    summary = training.retarget_sessions(plan, targets, today)
-    if not dry_run:
-        storage.write_training_plan(plan)
-    display.render_training_retargeted(summary, dry_run=dry_run)
+    _show_plan(_expand(_stored_plan(), _load_activities()), weeks)
 
 
 @train_app.command(name="sync")
@@ -677,14 +672,12 @@ def train_sync(
     ),
 ) -> None:
     """Push and schedule the plan's next sessions onto the Garmin calendar."""
-    plan = _require_training_plan()
+    stored = _stored_plan()
+    plan = _expand(stored, _load_activities())
     window_days = days or storage.read_config()["train_sync_window_days"]
-    due = training.sync_window(plan["sessions"], date_cls.today(), window_days)
-    already = sum(
-        1
-        for s in plan["sessions"]
-        if not s.get("is_extra") and s.get("status") == "scheduled"
-    )
+    today = date_cls.today()
+    due = training.sync_window(plan["sessions"], today, window_days)
+    already = len(stored.get("pushed", []))
     if not due:
         display.render_training_synced(
             {
@@ -721,16 +714,17 @@ def train_sync(
             placed = garmin.schedule_workout(
                 client, workout_id, planner.parse_schedule_date(session["date"])
             )
-            session["garmin_workout_id"] = workout_id
-            session["scheduled_workout_id"] = placed.get("workoutScheduleId")
-            session["scheduled_date"] = session["date"]
-            session["status"] = "scheduled"
+            stored["pushed"].append(
+                training.ledger_entry(
+                    session, workout_id, placed.get("workoutScheduleId")
+                )
+            )
             scheduled += 1
         except Exception as exc:  # one bad session must not lose the rest
             failed.append(f"{session['date']} {session['workout_name']}: {exc}")
-        # After every session: a crash must never leave the plan claiming less
-        # than what is actually on the calendar.
-        storage.write_training_plan(plan)
+        # After every session: a crash must never leave the ledger claiming
+        # less than what is actually on the calendar.
+        storage.write_training_plan(stored)
 
     display.render_training_synced(
         {
@@ -745,26 +739,25 @@ def train_sync(
 @train_app.command(name="clear")
 def train_clear() -> None:
     """Remove the plan's future sessions from the Garmin calendar."""
-    plan = _require_training_plan()
-    pending = training.future_scheduled(plan["sessions"], date_cls.today())
+    stored = _stored_plan()
+    today = date_cls.today()
+    pending = training.future_pushed(stored.get("pushed", []), today)
     if not pending:
         display.render_training_cleared({"cleared": 0, "failed": []})
         return
 
     client = _login_or_exit()
     cleared, failed = 0, []
-    for session in pending:
-        schedule_id = session.get("scheduled_workout_id")
+    for entry in pending:
         try:
-            if schedule_id is not None:
-                garmin.unschedule_workout(client, schedule_id)
-            session["garmin_workout_id"] = None
-            session["scheduled_workout_id"] = None
-            session["scheduled_date"] = None
-            session["status"] = "planned"
+            if entry.get("schedule_id") is not None:
+                garmin.unschedule_workout(client, entry["schedule_id"])
+            # Dropped from the ledger, so it re-derives as an ordinary planned
+            # session again — there is no per-session state to reset.
+            stored["pushed"].remove(entry)
             cleared += 1
         except Exception as exc:
-            failed.append(f"{session['date']} {session['workout_name']}: {exc}")
-        storage.write_training_plan(plan)
+            failed.append(f"{entry['date']} {entry.get('workout_name', '')}: {exc}")
+        storage.write_training_plan(stored)
 
     display.render_training_cleared({"cleared": cleared, "failed": failed})
