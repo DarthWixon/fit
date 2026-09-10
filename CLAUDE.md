@@ -69,6 +69,7 @@ fit pbs --months 3           # personal bests over just the last N months (overr
 fit stats                    # breakdown, accepts --week / --month / --year
 fit fitness                  # current fitness index (baseline 100) + trend sparkline
 fit fitness-reset            # re-anchor the fitness index baseline to today
+fit fitness-reset --as-of 2026-09-05  # re-cut an existing anchor against the history you have now
 fit import ./run.fit         # import a file, folder of files, or Strava export
 fit garmin-sync --days 14    # pull recent activities from Garmin Connect (see "Garmin integration")
 fit plan --sport run --type intervals  # generate a workout interactively, push to the watch (see "Workout planner")
@@ -174,7 +175,9 @@ Key functions:
   file) over `DEFAULTS`, never raises on missing file or malformed lines
 - `read_pbs() -> dict`
 - `write_pbs(pbs: dict) -> None`
-- `read_fitness_baseline() -> dict` — `{}` if never initialized; see "Fitness index"
+- `read_fitness_baseline() -> dict` — `{}` if never initialized;
+  `{"baseline_date", "baseline_value", "baseline_from"}` otherwise (a file
+  written before `baseline_from` existed simply lacks it). See "Fitness index"
 - `write_fitness_baseline(baseline: dict) -> None`
 - `train_dir() -> Path`, `training_plan_path() -> Path`
 - `write_plan(plan: dict) -> None` — writes single plan file atomically, named by
@@ -311,6 +314,14 @@ Key functions:
   2026-09-05). `cli._import_and_report` therefore writes the batch first and
   announces afterwards, rather than announcing inside the write loop
 - `pbs_cache_is_valid(pbs: dict, activity_count: int) -> bool`
+- `baseline_activity_count(activities, baseline_date: str) -> int` — activities
+  dated on or before `baseline_date`; what `fitness.json` stores as
+  `baseline_from`
+- `baseline_drift(baseline: dict, activities: list[dict]) -> dict | None` —
+  `{"stored", "actual"}` when the history *behind* the baseline's date is no
+  longer what it was computed from, else `None` (including when the baseline
+  predates the check and carries no `baseline_from` — an unknown is not
+  evidence of no drift). Reports, never repairs; see "Fitness index"
 - `met_for_activity(activity: dict) -> float` — coarse MET value from `MET_TABLE`,
   banded by pace/speed; see "Fitness index"
 - `median_hr_by_type(activities: list[dict]) -> dict[str, float]` — median
@@ -422,11 +433,13 @@ Key functions:
   Time (the volume measure) leads Distance, and Distance shows `"—"` for any
   `compute.NO_DISTANCE_TYPES` member, same rule as the history table's
   `_format_distance`
-- `render_fitness_index(current_index: float | None, baseline_date: str | None, weekly_series: list[dict], window_label: str | None = None) -> None` —
+- `render_fitness_index(current_index: float | None, baseline_date: str | None, weekly_series: list[dict], window_label: str | None = None, drift: dict | None = None) -> None` —
   headline (always full-history/as-of-today) + trend sparkline (windowed by
   `window_label`/`--timerange` if the caller passes an already-windowed
   `weekly_series`); prints a "not enough data yet" line instead when
-  `current_index is None`
+  `current_index is None`. `drift` is `compute.baseline_drift`'s dict, warned
+  about under the headline with the `fit fitness-reset --as-of` line that
+  fixes it — the baseline itself is deliberately left alone
 - `render_fitness_reset(old_baseline: dict, new_baseline: dict) -> None` — prints
   old→new baseline values; `old_baseline == {}` (never initialized) gets a
   simpler "baseline set" message
@@ -493,6 +506,10 @@ Key functions:
 - `import_directory(dir_path: str, max_heart_rate: int = 0) -> list[dict]` — a
   loose folder of `.tcx`/`.fit` files (e.g. a mounted Garmin watch's
   `GARMIN/ACTIVITY` folder), not a Strava bulk export
+- `apply_garmin_exercise_sets(activity: dict, exercise_sets: list[dict]) -> dict` —
+  corrects a strength activity's exercise *names* from Garmin's server-side
+  record of the session (`garmin.get_exercise_sets`), which is where Connect-app
+  edits live; pure, takes the raw entries in. See "Strength sessions"
 - `import_by_extension(path: str, suffix: str, max_heart_rate: int = 0) -> dict` —
   dispatches to `import_tcx`/`import_fit` by suffix, raising
   `ValueError` for anything else; the single source of truth for extension
@@ -506,10 +523,6 @@ explicit parameter rather than a lookup, the same pattern `planner.py`'s pure
 functions use.
 
 Importers never check for duplicates themselves — they always return every activity
-- `apply_garmin_exercise_sets(activity: dict, exercise_sets: list[dict]) -> dict` —
-  corrects a strength activity's exercise *names* from Garmin's server-side
-  record of the session (`garmin.get_exercise_sets`), which is where Connect-app
-  edits live; pure, takes the raw entries in. See "Strength sessions"
 they parse. `cli.py`'s shared `_import_and_report` helper (the common tail of both
 `import_activity` and `garmin_sync`) is the single place that calls
 `activity_exists()` per activity to decide what to skip; this keeps `importers.py`
@@ -796,16 +809,18 @@ few intentionally compose one another, noted below):
   above for a `--months`/`pbs_window_months` value (0 = cached all-time via
   `_get_fresh_pbs`, else windowed via `_windowed_pbs`); shared by the `pbs`
   command and `_dashboard_window`
-- `_write_new_baseline(value) -> dict` — builds and persists a
-  `{"baseline_date", "baseline_value"}` fitness.json dict for `value` dated
-  today; shared by `_get_or_init_fitness_baseline` (lazy init) and
-  `fitness_reset` (explicit re-anchor)
+- `_write_new_baseline(value, activities, baseline_date) -> dict` — builds and
+  persists a `{"baseline_date", "baseline_value", "baseline_from"}`
+  fitness.json dict; shared by `_get_or_init_fitness_baseline` (lazy init,
+  dated today) and `fitness_reset` (explicit re-anchor, dated today or
+  `--as-of`)
 - `_get_or_init_fitness_baseline(activities) -> dict` — lazy-cache-if-missing,
   mirroring `_get_fresh_pbs`, via `_write_new_baseline`; `fitness.json`'s
   baseline is sticky rather than auto-recomputed (see "Fitness index")
 - `_fitness_snapshot(activities, today, baseline, window=None) -> dict` — the
-  `{"current", "baseline_date", "weekly"}` dict `render_dashboard`/`render_fitness_index`
-  consume; callers fetch `baseline` via `_get_or_init_fitness_baseline` first
+  `{"current", "baseline_date", "weekly", "drift"}` dict
+  `render_dashboard`/`render_fitness_index` consume; callers fetch `baseline`
+  via `_get_or_init_fitness_baseline` first
 - `_dashboard_window(all_activities, timerange, config_months, today) -> dict` —
   resolves the dashboard's `--timerange` / `pbs_window_months` / all-time precedence
   into `{"activities", "pbs", "window_months", "window_label", "date_window"}`,
@@ -1022,21 +1037,6 @@ squat) is deliberately ignored for now; it is an undecoded uint16 indexing
 per-category `<category>_exercise_name` enums, and adding it would change what
 PBs are keyed on.
 
-In the dashboard's recent-activity table, a gym session's effort column shows
-**tonnage** rather than the `"—"` a pace would be. It is the closest thing
-strength has to distance: two 45-minute sessions are not the same work, and
-because it counts reps and sets as well as load it registers a week where the
-plan grew rather than only one where the bar did.
-
-Splits and best-power are skipped for strength (there is no distance or power
-stream to sweep), but **HR zones are not**: the FIT record loop keeps records
-carrying only a heart rate, which is the exact shape a gym session's records
-have. Same going-forward-only rule as `hr_zones` everywhere else.
-
----
-
-## HR zones
-
 **The watch's guess is corrected from Garmin's server record.** The FIT file
 fit downloads is the *original* upload (`dl_fmt=ORIGINAL`), and Garmin never
 rewrites it — so an exercise the watch guessed wrong, or left as the 65534
@@ -1056,6 +1056,21 @@ Sets pair **positionally**, active sets only. A differing set count or a rep
 count that disagrees on any pair abandons the merge and leaves the FIT-derived
 names untouched — a misaligned pairing would rename sets to whatever sat at
 that index, which is worse than the wrong name it set out to fix.
+
+In the dashboard's recent-activity table, a gym session's effort column shows
+**tonnage** rather than the `"—"` a pace would be. It is the closest thing
+strength has to distance: two 45-minute sessions are not the same work, and
+because it counts reps and sets as well as load it registers a week where the
+plan grew rather than only one where the bar did.
+
+Splits and best-power are skipped for strength (there is no distance or power
+stream to sweep), but **HR zones are not**: the FIT record loop keeps records
+carrying only a heart rate, which is the exact shape a gym session's records
+have. Same going-forward-only rule as `hr_zones` everywhere else.
+
+---
+
+## HR zones
 
 The dashboard's recent-activity table shows a per-activity breakdown of time
 spent in each of 5 heart-rate training zones, as a segmented colour bar (see
@@ -1144,6 +1159,26 @@ current EWMA value is persisted to `fitness.json` as the baseline. From then on,
 sticky** — never auto-recomputed as new activities are added, only replaced by
 explicit `fit fitness-reset` (which re-anchors it to today's EWMA value and prints
 the old→new comparison).
+
+**The baseline is sticky, so its own history must be watched.** "100" means
+the rolling load on the baseline day, which only holds while the days *before*
+it stay put. An activity imported later but dated earlier — a backfill, a bulk
+export, another machine's import arriving over a sync — changes what that day's
+EWMA would be, so the index reads high or low by the difference with nothing on
+screen to say so. `fitness.json` therefore records `baseline_from` (how many
+activities sat on or before `baseline_date` when it was written), the same
+provenance check `pbs.json` does with `computed_from`, and
+`compute.baseline_drift` compares it on every render.
+
+The two behave oppositely on purpose: a stale `pbs.json` silently recomputes,
+a drifted baseline **only warns**. Auto-recomputing it would move the anchor
+under the user and make every past index value mean something different, which
+is the exact property the stickiness exists to prevent. The fix is theirs to
+run: `fit fitness-reset --as-of <baseline_date>` re-cuts the anchor *where it
+stands* against the history now on disk (as opposed to bare `fitness-reset`,
+which moves it to today). This was not hypothetical — a `fit-sync` pull of two
+activities dated a month before the anchor read as +9% when the real change was
++1.4%.
 
 **One combined index**, not per-sport — matches how Strava/Garmin/TrainingPeaks
 actually work. The current headline value and the underlying EWMA calculation are
@@ -1301,6 +1336,10 @@ Key functions:
   Garmin Connect activity summaries in range, not yet in fit's activity shape.
 - `download_activity_fit(client, garmin_activity_id) -> bytes` — raw FIT bytes
   for one activity; unwraps Garmin's zip-wrapped "original" export format.
+- `get_exercise_sets(client, garmin_activity_id) -> list[dict]` — Garmin's own
+  record of one strength activity's sets, as raw entries; the Connect-app edits
+  the original FIT export never carries. `[]` when Garmin holds no sets. See
+  "Strength sessions".
 - `push_workout(client, workout_payload: dict) -> dict` — uploads one
   workout-service payload (built by `planner.py` — this module never shapes
   workout dicts itself) and returns the raw response dict (contains
@@ -1338,10 +1377,6 @@ PBs, recompute PB cache). Temp files are cleaned up in a `finally` block.
 ---
 
 ## Workout planner
-- `get_exercise_sets(client, garmin_activity_id) -> list[dict]` — Garmin's own
-  record of one strength activity's sets, as raw entries; the Connect-app edits
-  the original FIT export never carries. `[]` when Garmin holds no sets. See
-  "Strength sessions".
 
 `fit plan --sport run --type intervals [--no-push] [--schedule DATE]` generates a
 structured workout interactively (typer prompts, Enter accepts each default),

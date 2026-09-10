@@ -60,11 +60,21 @@ def _pbs_for_window(activities: list[dict], months: int, today: date_cls) -> dic
     return _windowed_pbs(activities, start, today.isoformat())
 
 
-def _write_new_baseline(value: float) -> dict:
-    """Builds {"baseline_date", "baseline_value"} for `value` (dated today) and
-    persists it — shared by _get_or_init_fitness_baseline (lazy init) and
-    fitness_reset (explicit re-anchor)."""
-    baseline = {"baseline_date": date_cls.today().isoformat(), "baseline_value": value}
+def _write_new_baseline(
+    value: float, activities: list[dict], baseline_date: date_cls
+) -> dict:
+    """Builds {"baseline_date", "baseline_value", "baseline_from"} and persists
+    it — shared by _get_or_init_fitness_baseline (lazy init) and fitness_reset
+    (explicit re-anchor). "baseline_from" is how many activities sat on or
+    before baseline_date at the moment it was written, so a later backfill
+    behind that date can be *detected* without breaking the baseline's
+    stickiness (compute.baseline_drift)."""
+    date_iso = baseline_date.isoformat()
+    baseline = {
+        "baseline_date": date_iso,
+        "baseline_value": value,
+        "baseline_from": compute.baseline_activity_count(activities, date_iso),
+    }
     storage.write_fitness_baseline(baseline)
     return baseline
 
@@ -79,10 +89,15 @@ def _get_or_init_fitness_baseline(activities: list[dict]) -> dict:
     baseline_value = compute.compute_baseline_value(activities, date_cls.today())
     if not baseline_value:
         return {}
-    return _write_new_baseline(baseline_value)
+    return _write_new_baseline(baseline_value, activities, date_cls.today())
 
 
-_EMPTY_FITNESS_SNAPSHOT = {"current": None, "baseline_date": None, "weekly": []}
+_EMPTY_FITNESS_SNAPSHOT = {
+    "current": None,
+    "baseline_date": None,
+    "weekly": [],
+    "drift": None,
+}
 
 
 def _fitness_snapshot(
@@ -111,6 +126,7 @@ def _fitness_snapshot(
         "current": current,
         "baseline_date": baseline["baseline_date"],
         "weekly": weekly,
+        "drift": compute.baseline_drift(baseline, activities),
     }
 
 
@@ -239,21 +255,37 @@ def fitness() -> None:
     baseline = _get_or_init_fitness_baseline(activities)
     snapshot = _fitness_snapshot(activities, date_cls.today(), baseline)
     display.render_fitness_index(
-        snapshot["current"], snapshot["baseline_date"], snapshot["weekly"]
+        snapshot["current"],
+        snapshot["baseline_date"],
+        snapshot["weekly"],
+        drift=snapshot["drift"],
     )
 
 
 @app.command(name="fitness-reset")
-def fitness_reset() -> None:
+def fitness_reset(
+    as_of: str = typer.Option(
+        None,
+        "--as-of",
+        help="Re-anchor at this date (YYYY-MM-DD) instead of today — recomputes "
+        "the existing baseline against the history you have now",
+    ),
+) -> None:
     activities = _load_activities()
 
+    try:
+        anchor = date_cls.fromisoformat(as_of) if as_of else date_cls.today()
+    except ValueError:
+        typer.echo(f"invalid date: {as_of} (expected YYYY-MM-DD)", err=True)
+        raise typer.Exit(code=1)
+
     old_baseline = storage.read_fitness_baseline()
-    new_value = compute.compute_baseline_value(activities, date_cls.today())
+    new_value = compute.compute_baseline_value(activities, anchor)
     if not new_value:
         typer.echo("Not enough activity data to set a fitness baseline yet.", err=True)
         raise typer.Exit(code=1)
 
-    new_baseline = _write_new_baseline(new_value)
+    new_baseline = _write_new_baseline(new_value, activities, anchor)
     display.render_fitness_reset(old_baseline, new_baseline)
 
 

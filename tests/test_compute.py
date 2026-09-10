@@ -299,6 +299,42 @@ def test_fitness_ewma_seeds_first_day_and_decays():
     assert series[2]["value"] < series[1]["value"]  # rest days decay
 
 
+def test_baseline_drift_notices_a_backfill_behind_the_anchor():
+    # The real case this exists for: an activity imported later but *dated*
+    # before the baseline (another machine's import arriving over a sync)
+    # silently changes what the anchor day's EWMA would be.
+    baseline = {
+        "baseline_date": "2026-09-05",
+        "baseline_value": 2.05,
+        "baseline_from": 2,
+    }
+    settled = [{"date": "2026-09-01"}, {"date": "2026-09-05"}]
+    assert compute.baseline_drift(baseline, settled) is None
+
+    # Dated after the anchor: the baseline still means what it meant.
+    assert compute.baseline_drift(baseline, settled + [{"date": "2026-09-10"}]) is None
+
+    backfilled = settled + [{"date": "2026-08-11"}]
+    assert compute.baseline_drift(baseline, backfilled) == {"stored": 2, "actual": 3}
+
+    # A removed activity moves the anchor just as much as an added one.
+    assert compute.baseline_drift(baseline, settled[:1]) == {"stored": 2, "actual": 1}
+
+
+def test_baseline_drift_stays_quiet_without_provenance():
+    # A baseline written before this check existed (or by a machine still on
+    # the older version, arriving over the same sync) records no count. An
+    # unknown is not evidence of no drift, but there is nothing to report.
+    assert compute.baseline_drift({}, [{"date": "2026-01-01"}]) is None
+    assert (
+        compute.baseline_drift(
+            {"baseline_date": "2026-09-05", "baseline_value": 2.05},
+            [{"date": "2026-01-01"}],
+        )
+        is None
+    )
+
+
 def test_activity_load_hr_multiplier_clamped():
     activity = {"type": "run", "distance_km": 10.0, "duration_seconds": 3000}
     base = compute.activity_load(activity, {})

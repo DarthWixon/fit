@@ -779,6 +779,36 @@ def pbs_cache_is_valid(pbs: dict, activity_count: int) -> bool:
     return pbs.get("computed_from") == activity_count
 
 
+def baseline_activity_count(activities: list[dict], baseline_date: str) -> int:
+    """How many activities fall on or before baseline_date -- what
+    fitness.json stores as "baseline_from"."""
+    return sum(1 for a in activities if a.get("date") and a["date"] <= baseline_date)
+
+
+def baseline_drift(baseline: dict, activities: list[dict]) -> dict | None:
+    """{"stored": N, "actual": M} when the history *behind* the fitness
+    baseline's date is no longer the history it was computed from, else None.
+
+    The baseline is deliberately sticky (see "Fitness index" in CLAUDE.md) --
+    100 means "the rolling load on that day", and silently recomputing it would
+    make the index un-trustable. But that only holds while the days before it
+    stay put. An activity imported later yet *dated* earlier -- a backfill, a
+    bulk export, another machine's import arriving over a sync -- changes what
+    the EWMA on the baseline date would be today, so the index reads high or
+    low by the difference, with nothing on screen to say so. This is the
+    `computed_from` check pbs.json already does, applied to the one number that
+    is not allowed to auto-recompute: it reports rather than repairs.
+
+    None when there is no baseline, or when it predates this check (no
+    "baseline_from" key) -- an unknown is not evidence of no drift, and there
+    is nothing useful to say about a figure with no recorded provenance."""
+    if not baseline or "baseline_from" not in baseline:
+        return None
+    stored = baseline["baseline_from"]
+    actual = baseline_activity_count(activities, baseline["baseline_date"])
+    return None if stored == actual else {"stored": stored, "actual": actual}
+
+
 def _met_from_pace_bands(
     value_seconds: float, bands: list[tuple[float, float]]
 ) -> float:

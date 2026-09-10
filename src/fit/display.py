@@ -273,13 +273,18 @@ def render_fitness_index(
     baseline_date: str | None,
     weekly_series: list[dict],
     window_label: str | None = None,
+    drift: dict | None = None,
 ) -> None:
     """Headline + trend sparkline for the fitness index (see "Fitness index" in
     CLAUDE.md). current_index/baseline_date always reflect full history as of
     today — callers must not pre-filter by sport or time range. weekly_series
     ([{"week": ..., "index": ...}, ...] from compute.weekly_fitness_index) may
     be windowed by the caller (e.g. for --timerange) since only the trend
-    line, not the headline, is meant to narrow."""
+    line, not the headline, is meant to narrow. drift is
+    compute.baseline_drift's dict, warned about under the headline: the
+    baseline stays as it is (that is the point of it), so the only useful
+    response is to say the anchor no longer matches its own history and name
+    the command that re-cuts it."""
     if current_index is None:
         console.print("[dim]Fitness index: not enough data yet.[/dim]")
         return
@@ -288,6 +293,20 @@ def render_fitness_index(
         f"[cyan]Fitness Index[/cyan]: {current_index:.0f}  "
         f"[dim](Baseline 100 set {baseline_date})[/dim]"
     )
+    if drift:
+        moved = drift["actual"] - drift["stored"]
+        change = f"{moved:+d}" if moved else "changed"
+        console.print(
+            f"[yellow]warning[/yellow]: history on or before {baseline_date} has "
+            f"changed since the baseline was set "
+            f"({drift['stored']} -> {drift['actual']} activities, {change}), so "
+            f"the index is measured against a day that no longer looks the same."
+        )
+        console.print(
+            f"[dim]  re-anchor it where it stands with: "
+            f"fit fitness-reset --as-of {baseline_date}[/dim]"
+        )
+
     label = f"Fitness trend ({window_label})" if window_label else "Fitness trend"
     render_sparkline([w["index"] for w in weekly_series], label)
 
@@ -375,6 +394,7 @@ def render_dashboard(
             fitness["baseline_date"],
             trend_series,
             window_label=trend_label,
+            drift=fitness.get("drift"),
         )
         console.print()
 
