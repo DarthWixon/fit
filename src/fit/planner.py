@@ -12,7 +12,10 @@ Verified by live round-trip (scripts/diff_workout.py):
                                      as 62.5), reps end condition, timed rest,
                                      CARDIO warmup, bare category
   strength|cycle/baseline 2026-09-05 untargeted top set / open-target block
-Still unverified: the four steady types, fit's first single-step workouts.
+Still unverified: the five steady combos. Their only unsent leaf paths are
+targetValueOne/Two on a top-level step (proven nested, 2026-08-24); the
+real gap is power.zone, which cycle endurance/long alone send and no
+round-trip has confirmed.
 Re-run the diff after first pushing any unverified combo, and update this.
 """
 

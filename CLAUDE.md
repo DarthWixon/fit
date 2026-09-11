@@ -222,6 +222,13 @@ outside the data dir, so a zipped backup carries no login.
 a multi-week plan calls them per session rather than needing a batch endpoint.
 `unschedule_workout` takes the **schedule** id, not the workout id.
 
+**`schedule_workout` returns that id as `workoutScheduleId`** — verified live
+2026-09-11 (workout 1694161608 → schedule 1773688951). `garminconnect` passes the
+POST response through unshaped, so the key is Garmin's and nothing offline can
+confirm it; `cli.train_sync` stores it into the ledger and `train clear` needs it.
+Were it wrong, the row would take `None`, `train clear` would skip the unschedule
+call, drop the row anyway, and strand a calendar entry with nothing tracking it.
+
 **A pushed workout is frozen.** There is no update-or-delete endpoint, so
 anything already on the calendar can't be rewritten locally without
 desynchronising the two.
@@ -244,9 +251,23 @@ planner.py's docstring — keep both current):
 | `strength`/`straight_sets` | 2026-09-05 | `weightValue` is **kilograms** (62.5 → 62.5); reps end condition; timed rest; CARDIO warmup; bare `category` |
 | `strength`/`baseline`, `cycle`/`baseline` | 2026-09-05 | untargeted top set / open-target timed block survive as sent |
 
-**Still unverified: the four steady types** (`run` easy/long, `cycle`
-endurance/long, `swim` continuous) — fit's first single-step workouts. Run the
-diff on one before trusting a whole `fit train sync`, then update both tables.
+**Still unverified: the five steady combos** (`run` easy/long, `cycle`
+endurance/long, `swim` continuous). Four type *names*, five sport/type pairs:
+`long` is built twice, by `_run_long` and `_cycle_long`, so verifying one does
+not cover the other. Run the diff on each, then update both tables.
+
+Their payloads are **nearly** covered by what is proven, so scope the risk before
+spending a round trip on it. Being single-step is *not* the novelty — a bare
+`strength`/`baseline` is one step too and round-tripped clean on 2026-09-05. The
+only leaf paths no verified combo has sent are `targetValueOne`/`targetValueTwo`
+directly on an `ExecutableStepDTO` rather than nested in a `RepeatGroupDTO`, and
+those exact field names are the 2026-08-24 `run`/`intervals` row. So `run`
+easy/long and `swim` continuous re-use a proven target type (`pace.zone`) in a
+new position — low risk. **`cycle` endurance/long are the real gap**: they are
+the only sessions fit sends with `power.zone`, a transcribed id (2) that has
+never been echoed back by Garmin in any position. A wrong id there fails loudly
+on the bike, not silently in the data — the ride shows no target or a nonsense
+one — so it is cheap to defer, but it is untested, not merely unusual.
 
 Strength is shaped unlike every cardio combo, all forced by Garmin's own schema:
 load is **not** a target (`no.target` + `weightValue`/`weightUnit` on the step),
@@ -392,7 +413,7 @@ talks a goal through with an external bot, the bot emits the description, and
 **fit owns all the periodisation** — so the description stays thin.
 
 ```yaml
-goal: sprint_triathlon        # required; one of templates.GOAL_TEMPLATES
+goal: standard_triathlon      # required; one of templates.GOAL_TEMPLATES
 event_date: 2026-11-15        # required; the plan counts back from here
 start_date: 2026-08-24        # else event_date - template length
 days_per_week: 6              # or [2, 4] to build frequency
@@ -457,8 +478,12 @@ priority order, so later weeks only *add*; nothing is swapped out.
 
 ### Goal templates
 
-Ten goals in `templates.GOAL_TEMPLATES` — pure data, no engine logic, which is
+Four goals in `templates.GOAL_TEMPLATES` — pure data, no engine logic, which is
 the point of the split: adding or recalibrating a goal touches that file only.
+One per discipline (`run_10k`, `cycle_strength`, `standard_triathlon`,
+`strength_program`): the set was cut from ten on 2026-09-11 because the extras
+were the same shapes at different numbers, and `start_date` already re-lengthens
+a template. The two triathlons were structurally identical.
 
 **Priorities interleave the sports** rather than ranking every long session
 first, so trimming a week never strips a whole discipline. (Below three days
@@ -466,8 +491,8 @@ there aren't enough slots and the lowest-priority sports do drop out.)
 
 **Each session scales along exactly one axis** — `scale["param"]`, a training
 decision: distance for long sessions, duration for steady, rep *count* for most
-intervals, but rep *duration* for the TT plans' sustained-block day, where a 2–5
-rep count is too coarse to express a progression.
+intervals, but rep *duration* for `cycle_strength`'s sustained-block day, where
+a 2–5 rep count is too coarse to express a progression.
 
 **The clamps are load-bearing.** Peak volume depends on plan length (8 weeks
 ~1.36x, 12 ~1.59x, 16 ~2.2x), so `standard_triathlon`'s bases sit lower relative
@@ -479,10 +504,12 @@ at-max. When measuring, match each session to its template entry **by weekday as
 well as type** — two sessions of one type carry different scales, and matching on
 type alone reads one against the other's clamps.
 
-Two goal-specific shapes: `run_half` ranks its tempo block *above* intervals
-(half pace sits near threshold), and `cycle_100k_sportive` pairs a long ride with
-a same-weekend endurance ride (riding tired is the adaptation) and carries the
-only `hills` session, which deliberately has no target.
+**`hills` is gone** (2026-09-11). Its only template user was
+`cycle_100k_sportive`, and a workout type no goal can schedule is dead weight in
+`WORKOUT_TYPES`, two prompt specs and a builder. It was also the one type with no
+pace target — gradient makes pace meaningless — so nothing else now needs that
+shape outside `baseline`. Re-adding it means the builder and prompts back, not
+just a template entry.
 
 ### Targets and benchmarks
 
@@ -587,13 +614,12 @@ fit train import|show|sync|clear
 fit history [N]               fit calendar        fit usage
 ```
 
-Sport/type matrix (`planner.WORKOUT_TYPES`): run has intervals/tempo/hills/
-baseline/easy/long, cycle intervals/hills/baseline/endurance/long, swim
-intervals/continuous/baseline, strength straight_sets/baseline. Quality types
-are warmup → main → cooldown; the four *steady* types (run easy/long, cycle
-endurance/long, swim continuous) are a **single block** with a wider target
-band, because a warmup inside an easy run is just more easy running. `hills`
-deliberately has no pace target — gradient makes pace meaningless.
+Sport/type matrix (`planner.WORKOUT_TYPES`): run has intervals/tempo/baseline/
+easy/long, cycle intervals/baseline/endurance/long, swim intervals/continuous/
+baseline, strength straight_sets/baseline. Quality types are warmup → main →
+cooldown; the five *steady* combos (run easy/long, cycle endurance/long, swim
+continuous) are a **single block** with a wider target band, because a warmup
+inside an easy run is just more easy running.
 
 `fit plan` **saves before pushing**, so a failed push never loses the workout;
 the id and scheduled date are written back after each step succeeds, making the
@@ -613,7 +639,8 @@ not business logic, so it stays inline.
 `planner` or `training`.
 
 **The suite is small on purpose** and has been trimmed twice (192 → 154 → 195
-cases, having regrown in between). Three things do not earn a test:
+cases, having regrown in between; 199 now — the stateless-plan commit added
+four). Three things do not earn a test:
 
 1. **Restating a constant or one-line definition.** Assert direction through the
    pipeline that consumes it, not against the constant.
