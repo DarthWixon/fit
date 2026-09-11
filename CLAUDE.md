@@ -250,24 +250,22 @@ planner.py's docstring — keep both current):
 | `run`/`intervals` | 2026-08-24 | `targetValueOne`/`Two` = low/high m/s in that order; step numbering |
 | `strength`/`straight_sets` | 2026-09-05 | `weightValue` is **kilograms** (62.5 → 62.5); reps end condition; timed rest; CARDIO warmup; bare `category` |
 | `strength`/`baseline`, `cycle`/`baseline` | 2026-09-05 | untargeted top set / open-target timed block survive as sent |
+| `cycle`/`long` | 2026-09-11 | `power.zone` id 2 correct; `targetValueOne`/`Two` = low/high **watts** on a top-level step (120/170 as sent); one-step workout with a target accepted |
 
-**Still unverified: the five steady combos** (`run` easy/long, `cycle`
-endurance/long, `swim` continuous). Four type *names*, five sport/type pairs:
-`long` is built twice, by `_run_long` and `_cycle_long`, so verifying one does
-not cover the other. Run the diff on each, then update both tables.
+**Still unverified: four steady combos** (`run` easy/long, `cycle` endurance,
+`swim` continuous) — but the risk in them is now small, and worth scoping before
+spending a round trip. `cycle`/`long` on 2026-09-11 settled the two things that
+were actually open: `power.zone`'s transcribed id 2 is right, and
+`targetValueOne`/`Two` behave on a top-level `ExecutableStepDTO` exactly as they
+do nested in a `RepeatGroupDTO`. Being single-step was never the novelty — a
+bare `strength`/`baseline` is one step too and passed on 2026-09-05.
 
-Their payloads are **nearly** covered by what is proven, so scope the risk before
-spending a round trip on it. Being single-step is *not* the novelty — a bare
-`strength`/`baseline` is one step too and round-tripped clean on 2026-09-05. The
-only leaf paths no verified combo has sent are `targetValueOne`/`targetValueTwo`
-directly on an `ExecutableStepDTO` rather than nested in a `RepeatGroupDTO`, and
-those exact field names are the 2026-08-24 `run`/`intervals` row. So `run`
-easy/long and `swim` continuous re-use a proven target type (`pace.zone`) in a
-new position — low risk. **`cycle` endurance/long are the real gap**: they are
-the only sessions fit sends with `power.zone`, a transcribed id (2) that has
-never been echoed back by Garmin in any position. A wrong id there fails loudly
-on the bike, not silently in the data — the ride shows no target or a nonsense
-one — so it is cheap to defer, but it is untested, not merely unusual.
+What is left is inference, not observation. `cycle` endurance differs from the
+proven `cycle`/`long` only in a time rather than distance `endCondition`, both
+proven elsewhere. `run` easy/long and `swim` continuous pair a `pace.zone`
+proven *nested* with a top-level position proven *with power*; that exact
+combination has not been sent. Low risk, not zero. Diff one when one is next
+pushed, then update both tables.
 
 Strength is shaped unlike every cardio combo, all forced by Garmin's own schema:
 load is **not** a target (`no.target` + `weightValue`/`weightUnit` on the step),

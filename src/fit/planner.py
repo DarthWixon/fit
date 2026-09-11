@@ -12,10 +12,13 @@ Verified by live round-trip (scripts/diff_workout.py):
                                      as 62.5), reps end condition, timed rest,
                                      CARDIO warmup, bare category
   strength|cycle/baseline 2026-09-05 untargeted top set / open-target block
-Still unverified: the five steady combos. Their only unsent leaf paths are
-targetValueOne/Two on a top-level step (proven nested, 2026-08-24); the
-real gap is power.zone, which cycle endurance/long alone send and no
-round-trip has confirmed.
+  cycle/long             2026-09-11  power.zone id 2 correct; targetValueOne/
+                                     Two = low/high watts on a top-level step;
+                                     one-step workout with a target accepted
+Still unverified: run easy/long, cycle endurance, swim continuous — but only
+by inference now. cycle/long settled power.zone and the top-level target
+position; cycle endurance differs from it only in a time endCondition, and
+run/swim pair a nested-proven pace.zone with a power-proven position.
 Re-run the diff after first pushing any unverified combo, and update this.
 """
 

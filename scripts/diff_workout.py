@@ -108,19 +108,31 @@ def _load_session(session_date: str, sport: str | None) -> dict:
     `fit plan` file has — "payload", "workout_name", "garmin_workout_id" — so
     everything downstream of here treats the two sources identically.
 
-    A session stores `params` rather than a payload (a payload per session
-    would bloat plan.json ~80x), so the payload is rebuilt here exactly as
-    `fit train sync` rebuilds it at push time: same build_plan call, same
-    arguments. Diffing a rebuilt payload is therefore diffing what was sent.
+    plan.json stores no schedule — only {spec, created, volume, pushed} — so
+    the session is re-derived here the way every `fit train` command derives
+    it, then overlaid with the ledger. That overlay matters: for a session
+    already pushed it restores the `params` that were *actually sent*, so the
+    payload rebuilt below is the one Garmin was given rather than one built
+    from today's fitness.
     """
+    from datetime import date as date_cls
+
     from fit import planner, storage, training
 
-    plan = storage.read_training_plan()
-    if plan is None:
+    stored = storage.read_training_plan()
+    if stored is None:
         sys.exit("error: no active training plan — import one with `fit train import`.")
+    activities, _ = storage.read_activities_with_warnings()
+    derived = training.expand_plan(
+        stored["spec"],
+        activities,
+        date_cls.today(),
+        volume=stored.get("volume"),
+    )
+    sessions = training.apply_pushed(derived["sessions"], stored.get("pushed", []))
     matches = [
         s
-        for s in plan["sessions"]
+        for s in sessions
         if s.get("date") == session_date
         and not s.get("is_extra")
         and (sport is None or s.get("sport") == sport)
