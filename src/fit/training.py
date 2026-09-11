@@ -1430,3 +1430,25 @@ def sync_window(sessions: list[dict], today: date, window_days: int) -> list[dic
 def future_pushed(pushed: list[dict], today: date) -> list[dict]:
     """Ledger rows still ahead of today — what `train clear` unschedules."""
     return [e for e in pushed if e["date"] >= today.isoformat()]
+
+
+def unreadable_plan(stored: dict) -> list[dict] | None:
+    """None when `stored` is the current {spec, created, volume, pushed}
+    shape, else the sessions it claims are already on the Garmin calendar.
+
+    A missing "pushed" is not an empty ledger. Plans written before the
+    stateless rewrite kept no ledger at all — they stamped each session in a
+    top-level "sessions" list with its own garmin_workout_id and
+    scheduled_workout_id — so `stored.get("pushed", [])` reads as "nothing is
+    scheduled" and any guard built on it waves the file through, stranding
+    whatever is really on the calendar. That happened: three entries on
+    2026-09-11. The returned list may be empty; the file is still one this
+    version cannot reason about, so the caller must refuse either way.
+    """
+    if {"spec", "created", "volume", "pushed"} <= set(stored):
+        return None
+    return [
+        session
+        for session in stored.get("sessions", [])
+        if session.get("scheduled_workout_id") is not None
+    ]

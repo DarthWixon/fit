@@ -862,6 +862,33 @@ def test_clear_takes_only_future_ledger_rows():
     assert training.future_pushed(ledger + past, REFERENCE) == ledger
 
 
+def test_a_pre_stateless_plan_is_refused_rather_than_read_as_unpushed():
+    """A plan file older than the ledger has no "pushed" key, so a guard that
+    reads `.get("pushed", [])` sees an empty ledger and replaces the file —
+    stranding its calendar entries. That happened to three real sessions on
+    2026-09-11, so the shape is checked before the ledger is trusted."""
+    _, _, ledger = _pushed_plan()
+    current = {"spec": {}, "created": "2026-09-11", "volume": {}, "pushed": ledger}
+    assert training.unreadable_plan(current) is None
+
+    # The old shape: no ledger, push state stamped on each session instead.
+    legacy = {
+        "spec": {},
+        "created": "2026-09-05",
+        "volume": {},
+        "sessions": [
+            {"date": "2026-09-11", "scheduled_workout_id": 1767273144},
+            {"date": "2026-09-13", "scheduled_workout_id": None},
+        ],
+    }
+    stranded = training.unreadable_plan(legacy)
+    assert [s["scheduled_workout_id"] for s in stranded] == [1767273144]
+
+    # Empty is still a refusal, not an all-clear: absent push state in an
+    # unreadable file says nothing about what is on the calendar.
+    assert training.unreadable_plan({"spec": {}, "sessions": []}) == []
+
+
 # --- strength progression ------------------------------------------------------
 
 
