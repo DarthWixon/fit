@@ -11,7 +11,7 @@ from fit import planner, templates, training
 pytest.importorskip("yaml", reason="parse_plan_spec needs the optional [train] extra")
 
 REFERENCE = date(2026, 8, 24)
-MINIMAL = "goal: sprint_triathlon\nevent_date: 2026-11-15\n"
+MINIMAL = "goal: standard_triathlon\nevent_date: 2026-12-13\n"
 
 
 def _plan(text=MINIMAL, activities=None):
@@ -24,7 +24,7 @@ def _plan(text=MINIMAL, activities=None):
 
 def test_parse_plan_spec_defaults_from_the_goal_template():
     spec = training.parse_plan_spec(MINIMAL)
-    template = templates.GOAL_TEMPLATES["sprint_triathlon"]
+    template = templates.GOAL_TEMPLATES["standard_triathlon"]
     assert spec["days_per_week"] == template["days_per_week"]
     assert spec["rest_day"] == template["rest_day"]
     assert spec["progression"] == training.PROGRESSION_DEFAULTS
@@ -37,14 +37,14 @@ def test_parse_plan_spec_defaults_from_the_goal_template():
     [
         "event_date: 2026-11-15\n",  # no goal
         "goal: run_marathon\nevent_date: 2026-11-15\n",  # unknown goal
-        "goal: sprint_triathlon\n",  # no event_date
-        "goal: sprint_triathlon\nevent_date: 2026-11-15\nintensity: hard\n",
-        "goal: sprint_triathlon\nevent_date: 2026-11-15\nrest_day: nonesuch\n",
+        "goal: standard_triathlon\n",  # no event_date
+        "goal: standard_triathlon\nevent_date: 2026-11-15\nintensity: hard\n",
+        "goal: standard_triathlon\nevent_date: 2026-11-15\nrest_day: nonesuch\n",
         # `rest_day: no` is False under YAML 1.1, not the string "no".
-        "goal: sprint_triathlon\nevent_date: 2026-11-15\nrest_day: no\n",
-        "goal: sprint_triathlon\nevent_date: 2026-11-15\ndays_per_week: 9\n",
-        "goal: sprint_triathlon\nevent_date: 2026-11-15\ntargets: {run_10k: '44:00'}\n",
-        "goal: sprint_triathlon\nevent_date: 2026-11-15\nstart_date: 2026-12-01\n",
+        "goal: standard_triathlon\nevent_date: 2026-11-15\nrest_day: no\n",
+        "goal: standard_triathlon\nevent_date: 2026-11-15\ndays_per_week: 9\n",
+        "goal: standard_triathlon\nevent_date: 2026-11-15\ntargets: {run_10k: '44:00'}\n",
+        "goal: standard_triathlon\nevent_date: 2026-11-15\nstart_date: 2026-12-01\n",
         "- a list\n",
         "goal: [unclosed\n",
     ],
@@ -59,11 +59,11 @@ def test_parse_plan_spec_survives_yaml_coercion():
     unquoted 24:00 to the base-60 integer 1440. Both must land on the same
     normalised values as their quoted forms."""
     unquoted = training.parse_plan_spec(
-        "goal: sprint_triathlon\nevent_date: 2026-11-15\n"
+        "goal: standard_triathlon\nevent_date: 2026-11-15\n"
         "targets: {run_5k: 24:00, swim_css_100m: 1:45}\n"
     )
     quoted = training.parse_plan_spec(
-        "goal: sprint_triathlon\nevent_date: '2026-11-15'\n"
+        "goal: standard_triathlon\nevent_date: '2026-11-15'\n"
         "targets: {run_5k: '24:00', swim_css_100m: '1:45'}\n"
     )
     assert unquoted == quoted
@@ -74,7 +74,7 @@ def test_parse_plan_spec_survives_yaml_coercion():
 def test_plan_needs_a_minimum_number_of_weeks():
     with pytest.raises(ValueError):
         _plan(
-            "goal: sprint_triathlon\nevent_date: 2026-11-15\nstart_date: 2026-11-02\n"
+            "goal: standard_triathlon\nevent_date: 2026-11-15\nstart_date: 2026-11-02\n"
         )
 
 
@@ -84,8 +84,8 @@ def test_plan_needs_a_minimum_number_of_weeks():
 def test_expand_plan_covers_every_week_and_stops_before_the_event():
     plan = _plan()
     weeks = training.group_by_week(plan["sessions"])
-    assert plan["weeks"] == 12
-    assert [w["week"] for w in weeks] == list(range(1, 13))
+    assert plan["weeks"] == 16
+    assert [w["week"] for w in weeks] == list(range(1, 17))
     # Race day itself is not a training day.
     assert all(s["date"] < plan["event_date"] for s in plan["sessions"])
 
@@ -152,7 +152,7 @@ def test_a_target_for_an_untrained_sport_is_rejected():
     """Silently ignoring it would read as fit disagreeing, not as a no-op."""
     with pytest.raises(ValueError):
         training.parse_plan_spec(
-            "goal: run_5k\nevent_date: 2027-03-14\ntargets: {bike_ftp: 250}\n"
+            "goal: run_10k\nevent_date: 2027-03-14\ntargets: {bike_ftp: 250}\n"
         )
 
 
@@ -171,7 +171,7 @@ def test_rest_day_rotates_the_whole_week():
 
 @pytest.mark.parametrize("days_per_week", [6, 5, 4, 3])
 def test_trimming_the_week_keeps_every_discipline(days_per_week):
-    goal = "sprint_triathlon"
+    goal = "standard_triathlon"
     """A triathlon plan with the swimming cut out of it is not a triathlon
     plan — the template's priorities interleave the sports for this reason."""
     plan = _plan(
@@ -319,17 +319,18 @@ def _rides(weeks_back: int, per_week: int, seconds: int) -> list[dict]:
 
 
 def _week_hours(plan: dict) -> dict:
+    scalable = training.volume_sports(plan["spec"]["goal"])
     hours: dict = {}
     for session in plan["sessions"]:
         args = training.session_to_build_args(session)
-        if args:
+        if args and session["sport"] in scalable:
             hours[session["week"]] = (
                 hours.get(session["week"], 0) + planner.estimate_seconds(*args) / 3600
             )
     return hours
 
 
-SPORTIVE = "goal: cycle_100k_sportive\nevent_date: 2027-03-14\n"
+SPORTIVE = "goal: cycle_strength\nevent_date: 2027-03-14\n"
 
 
 def test_starting_volume_scales_down_for_a_rider_barely_training():
@@ -432,29 +433,27 @@ def test_a_longer_plan_arrives_at_the_same_peak_not_a_higher_one():
     """The point of the derived ramp: extra weeks buy a gentler climb to the
     same summit, rather than compounding past it and pinning every long
     session at its clamp."""
-    base = _peak_long_session(_at_length("cycle_100k_sportive", 12))
+    base = _peak_long_session(_at_length("cycle_strength", 12))
     for weeks in (16, 20, 26, 40):
-        assert _peak_long_session(
-            _at_length("cycle_100k_sportive", weeks)
-        ) == pytest.approx(base, rel=0.02)
+        assert _peak_long_session(_at_length("cycle_strength", weeks)) == pytest.approx(
+            base, rel=0.02
+        )
 
 
 def test_an_explicit_ramp_overrides_the_derived_one():
     """Otherwise the description's override silently does nothing."""
-    pinned = _at_length(
-        "cycle_100k_sportive", 26, "progression:\n  weekly_ramp_pct: 12\n"
-    )
+    pinned = _at_length("cycle_strength", 26, "progression:\n  weekly_ramp_pct: 12\n")
     assert pinned["progression"] == {**pinned["progression"], "weekly_ramp_pct": 12}
     assert pinned["progression"]["derived"] is False
-    assert _at_length("cycle_100k_sportive", 26)["progression"]["derived"] is True
+    assert _at_length("cycle_strength", 26)["progression"]["derived"] is True
 
 
 def test_a_shorter_plan_peaks_lower_rather_than_ramping_violently():
     """Chasing the full peak over four weeks would demand a ~70%/week ramp."""
-    short = _at_length("cycle_100k_sportive", 5)
+    short = _at_length("cycle_strength", 5)
     assert short["progression"]["weekly_ramp_pct"] == float(training.REFERENCE_RAMP_PCT)
     assert _peak_long_session(short) < _peak_long_session(
-        _at_length("cycle_100k_sportive", 12)
+        _at_length("cycle_strength", 12)
     )
 
 
@@ -493,26 +492,28 @@ def _scale_for(template: dict, session: dict) -> dict | None:
 
 
 def test_the_tt_block_session_progresses_by_extending_the_block():
-    """A 2-5 rep count is too coarse to express a progression at all; the TT
-    plans lengthen the sustained block toward race duration instead."""
-    for goal in ("cycle_25k_tt", "cycle_40k_tt"):
-        template = templates.GOAL_TEMPLATES[goal]
-        plan = _at_length(goal, template["weeks"])
-        entry = next(
-            e for e in template["weekly_sessions"] if e["scale"]["param"] == "work"
-        )
-        blocks = [
-            s["params"]["work"]
-            for s in sorted(plan["sessions"], key=lambda x: x["week"])
-            if (s["sport"], s["session_type"])
-            == (entry["sport"], entry["session_type"])
-            and date.fromisoformat(s["date"]).weekday() == entry["day"]
-        ]
-        assert len(set(blocks)) >= len(blocks) - 2, f"{goal}: barely progresses"
-        assert blocks[0] < max(blocks), f"{goal}: never grows"
-        assert not [
-            b for b in blocks if b in (entry["scale"]["min"], entry["scale"]["max"])
-        ]
+    """A 2-5 rep count is too coarse to express a progression at all, so the
+    sustained-block day lengthens the block toward race duration instead."""
+    goal = "cycle_strength"
+    template = templates.GOAL_TEMPLATES[goal]
+    plan = _at_length(goal, template["weeks"])
+    # Guarded: strength entries carry no scale at all.
+    entry = next(
+        e
+        for e in template["weekly_sessions"]
+        if e["scale"] and e["scale"]["param"] == "work"
+    )
+    blocks = [
+        s["params"]["work"]
+        for s in sorted(plan["sessions"], key=lambda x: x["week"])
+        if (s["sport"], s["session_type"]) == (entry["sport"], entry["session_type"])
+        and date.fromisoformat(s["date"]).weekday() == entry["day"]
+    ]
+    assert len(set(blocks)) >= len(blocks) - 2, f"{goal}: barely progresses"
+    assert blocks[0] < max(blocks), f"{goal}: never grows"
+    assert not [
+        b for b in blocks if b in (entry["scale"]["min"], entry["scale"]["max"])
+    ]
 
 
 @pytest.mark.parametrize("goal", ALL_GOALS)
@@ -544,7 +545,7 @@ def test_scaled_params_keep_headroom_inside_their_clamps(goal):
 
 
 RAMPED = (
-    "goal: cycle_100k_sportive\nevent_date: 2026-12-13\nstart_date: 2026-09-07\n"
+    "goal: cycle_strength\nevent_date: 2026-12-13\nstart_date: 2026-09-07\n"
     "days_per_week: [2, 4]\nvolume: 100\n"
 )
 
@@ -610,9 +611,7 @@ def test_the_opening_week_is_measured_against_its_own_smaller_session_list():
 )
 def test_days_per_week_range_rejects(bad):
     with pytest.raises(ValueError):
-        training.parse_plan_spec(
-            "goal: cycle_100k_sportive\nevent_date: 2026-12-13\n" + bad
-        )
+        training.parse_plan_spec("goal: cycle_strength\nevent_date: 2026-12-13\n" + bad)
 
 
 # --- benchmarks and pace progression -------------------------------------------
@@ -704,8 +703,8 @@ def test_a_test_week_measures_each_test_once():
 def test_benchmarks_replace_a_session_and_stay_unscaled_and_untargeted():
     """A test is only a benchmark if it stands in for a session rather than
     adding one, and is the same distance at an open effort every time."""
-    with_tests = _at_length("run_half", 12)
-    without = _at_length("run_half", 12, "benchmarks: false\n")
+    with_tests = _at_length("run_10k", 12)
+    without = _at_length("run_10k", 12, "benchmarks: false\n")
     assert len(with_tests["sessions"]) == len(without["sessions"])
     assert _benchmarks(with_tests) and not _benchmarks(without)
 
@@ -730,7 +729,7 @@ def test_benchmarks_take_turns_between_a_multisport_goals_disciplines():
 
 # --- statelessness: live derivation + the Garmin ledger -------------------------
 
-LIVE_SPEC = "goal: run_half\nevent_date: 2027-02-07\nstart_date: 2026-08-24\n"
+LIVE_SPEC = "goal: run_10k\nevent_date: 2027-02-07\nstart_date: 2026-08-24\n"
 SLOW_5K = [
     {
         "id": "a",

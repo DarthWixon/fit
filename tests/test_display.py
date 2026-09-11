@@ -19,7 +19,7 @@ from fit import display, training
 pytest.importorskip("yaml", reason="parse_plan_spec needs the optional [train] extra")
 
 REFERENCE = date(2026, 8, 24)
-PLAN = "goal: sprint_triathlon\nevent_date: 2026-11-15\nextras: {strength: 1}\n"
+PLAN = "goal: standard_triathlon\nevent_date: 2026-11-15\nextras: {strength: 1}\n"
 
 
 def _render(text, capsys):

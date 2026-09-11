@@ -91,6 +91,6 @@ def test_corrupt_files_warn_for_activities_and_drop_silently_for_plans(
     # And the third case: no training plan yet reads as None, not an
     # exception — cli._require_training_plan prints its own message on that.
     assert storage.read_training_plan() is None
-    training_plan = {"goal": "sprint_triathlon", "event_date": "2026-11-15"}
+    training_plan = {"goal": "standard_triathlon", "event_date": "2026-11-15"}
     storage.write_training_plan(training_plan)
     assert storage.read_training_plan() == training_plan
