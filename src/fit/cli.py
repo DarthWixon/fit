@@ -449,7 +449,7 @@ def plan(
         ...,
         "--type",
         help=(
-            "intervals | tempo | hills | baseline | straight_sets "
+            "intervals | tempo | baseline | straight_sets "
             "(availability varies by sport)"
         ),
     ),

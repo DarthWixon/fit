@@ -106,12 +106,7 @@ def test_run_intervals_payload():
     assert plan["workout_name"] == "Run intervals 6x800m @ 4:30/km"
 
 
-def test_hills_and_baseline_efforts_have_no_target():
-    hills = planner.build_plan("run", "hills", _params("run", "hills"), "t")
-    repeat = hills["payload"]["workoutSegments"][0]["workoutSteps"][1]
-    effort = repeat["workoutSteps"][0]
-    assert effort["targetType"]["workoutTargetTypeKey"] == "no.target"
-
+def test_baseline_efforts_have_no_target():
     baseline = planner.build_plan("run", "baseline", _params("run", "baseline"), "t")
     test_step = baseline["payload"]["workoutSegments"][0]["workoutSteps"][1]
     assert test_step["endCondition"]["conditionTypeKey"] == "distance"

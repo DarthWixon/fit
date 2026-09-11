@@ -35,9 +35,9 @@ SPORT_TYPES = {
 }
 
 WORKOUT_TYPES = {
-    "run": ["intervals", "tempo", "hills", "baseline", "easy", "long"],
+    "run": ["intervals", "tempo", "baseline", "easy", "long"],
     "swim": ["intervals", "continuous", "baseline"],
-    "cycle": ["intervals", "hills", "baseline", "endurance", "long"],
+    "cycle": ["intervals", "baseline", "endurance", "long"],
     "strength": ["straight_sets", "baseline"],
 }
 
@@ -46,7 +46,7 @@ WORKOUT_TYPES = {
 # stores, uppercased for the payload.
 STRENGTH_CATEGORIES = ("deadlift", "squat", "bench_press", "shoulder_press")
 
-# Quality workouts (intervals/tempo/hills/baseline) are warmup -> main ->
+# Quality workouts (intervals/tempo/baseline) are warmup -> main ->
 # cooldown. The steady types above (easy/long/endurance/continuous) are a
 # single block instead: a warmup inside an easy run is just more easy running,
 # and splitting it only makes the watch beep for no reason. Each has its own
@@ -316,38 +316,6 @@ _PARAM_SPECS = {
             "parse": _positive_int,
         },
     ],
-    ("run", "hills"): [
-        {
-            "key": "warmup_minutes",
-            "label": "Warmup (minutes)",
-            "default": 10,
-            "parse": _positive_int,
-        },
-        {
-            "key": "reps",
-            "label": "Number of hill reps",
-            "default": 8,
-            "parse": _positive_int,
-        },
-        {
-            "key": "effort",
-            "label": "Uphill effort (min:sec)",
-            "default": "0:45",
-            "parse": parse_duration,
-        },
-        {
-            "key": "recovery",
-            "label": "Recovery (min:sec)",
-            "default": "2:00",
-            "parse": parse_duration,
-        },
-        {
-            "key": "cooldown_minutes",
-            "label": "Cooldown (minutes)",
-            "default": 10,
-            "parse": _positive_int,
-        },
-    ],
     # Keeps warmup/cooldown: fastest_split isolates the 5k from what surrounds
     # it. 5000 because 3km is in neither SPLIT_DISTANCES_KM nor MILESTONES_KM.
     ("run", "baseline"): [
@@ -437,38 +405,6 @@ _PARAM_SPECS = {
             "key": "recovery",
             "label": "Recovery (min:sec)",
             "default": "4:00",
-            "parse": parse_duration,
-        },
-        {
-            "key": "cooldown_minutes",
-            "label": "Cooldown (minutes)",
-            "default": 10,
-            "parse": _positive_int,
-        },
-    ],
-    ("cycle", "hills"): [
-        {
-            "key": "warmup_minutes",
-            "label": "Warmup (minutes)",
-            "default": 15,
-            "parse": _positive_int,
-        },
-        {
-            "key": "reps",
-            "label": "Number of hill reps",
-            "default": 6,
-            "parse": _positive_int,
-        },
-        {
-            "key": "effort",
-            "label": "Climb effort (min:sec)",
-            "default": "1:00",
-            "parse": parse_duration,
-        },
-        {
-            "key": "recovery",
-            "label": "Recovery (min:sec)",
-            "default": "3:00",
             "parse": parse_duration,
         },
         {
@@ -800,24 +736,6 @@ def _run_tempo(params: dict) -> tuple[str, list[dict]]:
     return name, steps
 
 
-def _hills(sport_word: str, params: dict) -> tuple[str, list[dict]]:
-    # No target: gradient makes pace meaningless, so the watch just times reps.
-    steps = [
-        _step(1, "warmup", "time", params["warmup_minutes"] * 60, _no_target()),
-        _repeat(
-            2,
-            params["reps"],
-            [
-                _step(3, "interval", "time", params["effort"], _no_target()),
-                _step(4, "recovery", "time", params["recovery"], _no_target()),
-            ],
-        ),
-        _step(5, "cooldown", "time", params["cooldown_minutes"] * 60, _no_target()),
-    ]
-    name = f"{sport_word} hills {params['reps']}x{_format_mmss(params['effort'])}"
-    return name, steps
-
-
 def _baseline_steps(
     warmup: float,
     main_key: str,
@@ -1098,14 +1016,12 @@ def _strength_baseline(params: dict) -> tuple[str, list[dict]]:
 _BUILDERS = {
     ("run", "intervals"): _run_intervals,
     ("run", "tempo"): _run_tempo,
-    ("run", "hills"): lambda params: _hills("Run", params),
     ("run", "baseline"): _run_baseline,
     ("run", "easy"): _run_easy,
     ("run", "long"): _run_long,
     ("swim", "intervals"): _swim_intervals,
     ("swim", "continuous"): _swim_continuous,
     ("cycle", "intervals"): _cycle_intervals,
-    ("cycle", "hills"): lambda params: _hills("Cycle", params),
     ("cycle", "baseline"): _cycle_baseline,
     ("swim", "baseline"): _swim_baseline,
     ("cycle", "endurance"): _cycle_endurance,
