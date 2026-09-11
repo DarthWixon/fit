@@ -129,6 +129,7 @@ fit train show --weeks 2       # what's coming, and what you've already done
 fit train sync --dry-run       # exactly what would be pushed, without pushing
 fit train sync                 # push + schedule the next 14 days on Garmin
 fit train clear                # take future sessions back off the calendar
+fit train refresh              # clear + sync: re-push at your current fitness
 ```
 
 `sync` lists what it is about to create and asks before touching your Garmin

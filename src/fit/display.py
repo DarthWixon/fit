@@ -41,6 +41,7 @@ def render_usage() -> None:
         "fit train show [--weeks N]                  the plan, with what's done\n"
         "fit train sync [--days N] [--dry-run]       push + schedule the next sessions\n"
         "fit train clear                             unschedule future sessions\n"
+        "fit train refresh [--days N]                clear + sync at current fitness\n"
         "fit history [N]                             last N activities (default 10)\n"
         "fit calendar                                active days, last 2 months\n"
         "fit usage                                   this screen\n"

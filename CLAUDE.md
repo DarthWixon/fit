@@ -581,6 +581,11 @@ from it. `fit train import` is how you change a plan's *shape*, and refuses to
 replace a plan with future ledger rows (clearing needs Garmin; importing may be
 offline).
 
+`train refresh` is `clear` then `sync`, for applying a re-test to sessions the
+watch already holds. It confirms **before** the clear rather than letting `sync`
+ask for itself: answering no between the two steps would leave the calendar
+emptied and nothing re-pushed, which is worse than either end state.
+
 `train sync` appends a ledger row per pushed session — the row stores the
 `params` and name that were **actually sent**, which is what lets a pushed
 session render frozen. `train clear` removes future rows, after which those
@@ -610,7 +615,7 @@ fit fitness                   fit fitness-reset [--as-of DATE]
 fit import <path>             TCX/FIT file, folder, or Strava export
 fit garmin-sync [--days N]    fit gs = --days 7
 fit plan --sport S --type T [--no-push] [--schedule DATE]
-fit train import|show|sync|clear
+fit train import|show|sync|clear|refresh
 fit history [N]               fit calendar        fit usage
 ```
 

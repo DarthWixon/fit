@@ -784,3 +784,34 @@ def train_clear() -> None:
         storage.write_training_plan(stored)
 
     display.render_training_cleared({"cleared": cleared, "failed": failed})
+
+
+@train_app.command(name="refresh")
+def train_refresh(
+    days: int = typer.Option(
+        0,
+        "--days",
+        help="Schedule this many days ahead (0 = config train_sync_window_days)",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+) -> None:
+    """Re-push the next sessions at your current fitness: `clear` then `sync`.
+
+    What is already on the calendar was built against the targets you had when
+    it was pushed, and Garmin has no edit endpoint, so replacing it is the only
+    way to apply a new PB to sessions the watch already holds. Run it after
+    `fit garmin-sync` has imported the effort that moved them.
+    """
+    stored = _stored_plan()
+    pending = training.future_pushed(stored.get("pushed", []), date_cls.today())
+    # Confirm before the clear, not between the two steps: `sync` asks for
+    # itself, and answering no there would leave the calendar already emptied.
+    if not yes and not typer.confirm(
+        f"Unschedule {len(pending)} future session(s) and re-push at current "
+        "fitness?",
+        default=False,
+    ):
+        typer.echo("Nothing changed.")
+        return
+    train_clear()
+    train_sync(days=days, yes=True)
