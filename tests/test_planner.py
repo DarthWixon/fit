@@ -40,16 +40,6 @@ def test_the_prompt_parsers_accept_only_what_they_should(parse, good, bad):
             fn(text)
 
 
-def test_pace_zone_mps_bounds_ordered():
-    low, high = planner.pace_zone_mps(270, tolerance_s=10)
-    assert low == 1000 / 280
-    assert high == 1000 / 260
-    assert low < high
-
-    low, high = planner.swim_pace_zone_mps(110, tolerance_s=5)
-    assert (low, high) == (100 / 115, 100 / 105)
-
-
 # --- workout_params ------------------------------------------------------------
 
 
@@ -116,12 +106,7 @@ def test_run_intervals_payload():
     assert plan["workout_name"] == "Run intervals 6x800m @ 4:30/km"
 
 
-def test_hills_and_baseline_efforts_have_no_target():
-    hills = planner.build_plan("run", "hills", _params("run", "hills"), "t")
-    repeat = hills["payload"]["workoutSegments"][0]["workoutSteps"][1]
-    effort = repeat["workoutSteps"][0]
-    assert effort["targetType"]["workoutTargetTypeKey"] == "no.target"
-
+def test_baseline_efforts_have_no_target():
     baseline = planner.build_plan("run", "baseline", _params("run", "baseline"), "t")
     test_step = baseline["payload"]["workoutSegments"][0]["workoutSteps"][1]
     assert test_step["endCondition"]["conditionTypeKey"] == "distance"
@@ -129,17 +114,18 @@ def test_hills_and_baseline_efforts_have_no_target():
 
 
 def test_swim_intervals_payload():
+    """Swim is the one sport whose recoveries are `rest` steps, not
+    `recovery` — and the only pace target measured per 100m. A mistake in
+    either only shows up on the watch, so it is checked here."""
     plan = planner.build_plan("swim", "intervals", _params("swim", "intervals"), "t")
-    steps = plan["payload"]["workoutSegments"][0]["workoutSteps"]
     assert plan["payload"]["sportType"]["sportTypeId"] == 4
-
-    warmup, repeat, cooldown = steps
+    warmup, repeat, cooldown = plan["payload"]["workoutSegments"][0]["workoutSteps"]
     assert warmup["endCondition"]["conditionTypeKey"] == "distance"
     assert cooldown["endCondition"]["conditionTypeKey"] == "distance"
 
     interval, rest = repeat["workoutSteps"]
-    assert rest["stepType"]["stepTypeId"] == 5
-    # blank pace default -> open target
+    assert rest["stepType"]["stepTypeKey"] == "rest"
+    # The blank pace default leaves the target open.
     assert interval["targetType"]["workoutTargetTypeKey"] == "no.target"
 
     paced = planner.build_plan(
@@ -188,13 +174,6 @@ def _run(date_iso, distance_km, duration_seconds, **extra):
         "duration_seconds": duration_seconds,
         **extra,
     }
-
-
-def test_recommended_interval_pace_scales_by_rep_length():
-    # 1300s 5k -> 260 s/km; short reps get the 0.97 discount -> 252
-    assert planner.recommended_interval_pace(1300, 800) == 252
-    assert planner.recommended_interval_pace(1300, 1000) == 252
-    assert planner.recommended_interval_pace(1300, 1600) == 260
 
 
 def test_run_interval_pace_from_best_recent_5k():

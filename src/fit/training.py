@@ -1,20 +1,15 @@
-"""Multi-week periodised training plans: the pure engine behind `fit train`.
+"""The pure engine behind `fit train`: a YAML plan description becomes a full
+dated, periodised schedule with intensities derived from the user's history.
+No I/O — cli.py reads the text and hands it in.
 
-Takes a compact plan description (the YAML "standard form" an external AI bot
-emits — see parse_plan_spec), expands it into a full dated schedule of session
-intents, and derives every intensity target from the user's own history. No
-file I/O, no network, no typer: cli.py reads the description text and hands it
-in, the same split importers.py has with path reading. May import compute and
-planner (pure -> pure).
+**Nothing derived is stored.** expand_plan re-runs on every command, so targets
+always reflect current fitness and there is no retarget step. The one thing
+that cannot be derived — what was pushed to Garmin — lives in a small ledger
+(see "the Garmin ledger" below), and a pushed session renders from what was
+actually sent.
 
-The description is deliberately thin — goal plus preferences. All the training
-content lives in templates.GOAL_TEMPLATES, so the bot never has to know how to
-periodise anything, and recalibrating a goal never means touching this file.
-
-Scheduling stays built on the atomic seam that already exists: each expanded
-session is pushed with planner.build_plan -> garmin.push_workout and placed
-with garmin.schedule_workout one date at a time (cli.py wires that up), rather
-than through any batch-shaped entry point.
+The description is thin by design; all training content lives in
+templates.GOAL_TEMPLATES, so recalibrating a goal never touches this file.
 """
 
 import copy
@@ -26,61 +21,45 @@ from fit.templates import GOAL_TEMPLATES
 
 # --- progression shape ----------------------------------------------------
 
-# Standard endurance-coaching defaults, all overridable per description:
-# three build weeks then one recovery week, each build week ~8% bigger than
-# the last, and a two-week taper into the event.
+# Standard coaching defaults, all overridable per description.
 PROGRESSION_DEFAULTS = {
     "build_recover": [3, 1],
     "taper_weeks": 2,
 }
 
-# The ramp a goal template is calibrated against. It is not a plan default:
-# unless the description names one, the ramp is solved per plan from its actual
-# length (derive_weekly_ramp), so a longer block climbs more gently to the same
-# peak rather than compounding past it. This is the rate used to define what
-# that peak is, at each template's own length.
+# The rate templates are calibrated against, not a plan default: the ramp is
+# solved per plan from its actual length (derive_weekly_ramp). This defines
+# what peak a template is aiming at, at its own length.
 REFERENCE_RAMP_PCT = 8
 
-# A recovery week drops to 60% of the level the build block reached; the taper
-# steps down from 75% of peak to 45% across its weeks. Both are volume
-# multipliers applied to the template's base session sizes.
+# Volume multipliers on the template's base session sizes.
 RECOVERY_FACTOR = 0.6
 TAPER_START = 0.75
 TAPER_END = 0.45
 
-# Session size grows through the plan by the weekly multiplier alone — the
-# template gives each session one base size and a clamp, and the multiplier
-# ramps, dips and tapers it. Deliberately one mechanism rather than a separate
-# per-week growth increment on top, which would compound into nonsense.
+# Size grows by the weekly multiplier alone — one mechanism, not a separate
+# per-week increment on top, which would compound into nonsense.
 
 MIN_PLAN_WEEKS = 4
 
 # --- benchmarks -----------------------------------------------------------
 #
-# Intensity targets are measured, never projected: every session in a plan is
-# built against the fitness derive_targets found when the plan was expanded, and
-# it does not drift upward on the assumption you will improve. Guessing a future
-# pace risks prescribing work you cannot complete, which is worse than
-# prescribing work that is slightly easy.
+# Intensity is measured, never projected: a target is only ever a reading of
+# training you have actually done, never an assumption that you will improve.
+# It does track your *measured* fitness, since expand_plan re-derives on every
+# command — what it will not do is prescribe a pace you have not yet earned.
 #
-# The way a plan earns a faster pace is therefore to re-measure. A benchmark
-# lands on recovery weeks — you test rested, which is what makes one test
-# comparable to the next — cycling through the sports the goal trains, and
-# replacing that sport's quality session for the week. Its own numbers never
-# scale: a 5km test is only a benchmark if it is the same 5km every time.
+# Benchmarks land on recovery weeks (you test rested, so one test is comparable
+# with the next) and never scale. Whether a test can afford a warmup in the
+# same recording is a property of the sport: the recorded activity must BE the
+# test unless the split machinery can isolate it from within.
 #
-# Doing the test then re-running `fit train retarget` re-derives every target
-# from the updated history and rewrites the sessions still ahead of you.
-# Whether a test can afford a warmup inside the same recording depends on the
-# sport, not on taste: the recorded activity must BE the test unless the
-# sport's split machinery can isolate it from within.
+# Nothing has to be re-run after a test: expand_plan derives targets fresh on
+# every command, so importing the activity is what applies it.
 BENCHMARK_SESSIONS = {
-    # Run keeps its warmup and cooldown. compute.fastest_split finds the
-    # fastest 5k window anywhere in the track, so the test is isolated from the
-    # jogging around it. 5km rather than 3km because 3km appears in neither
-    # SPLIT_DISTANCES_KM nor MILESTONES_KM — a 3km effort is measurable
-    # nowhere, and the best 5k window containing it necessarily drags in 2km of
-    # warmup, which made the test worse than no test at all.
+    # Keeps its wrap: fastest_split isolates the 5k from the jogging around it.
+    # 5km not 3km — 3km is in neither SPLIT_DISTANCES_KM nor MILESTONES_KM, so
+    # a 3km effort was measurable nowhere.
     "run": {
         "session_type": "baseline",
         "params": {
@@ -89,46 +68,32 @@ BENCHMARK_SESSIONS = {
             "cooldown_minutes": 10,
         },
     },
-    # A normal workout again. It was briefly bare, because stored avg_power is
-    # a whole-activity mean and a warmup in the same recording diluted it —
-    # compute.best_power_window now recovers the 20-minute effort from wherever
-    # it sits in the ride, so the test no longer has to be the whole recording.
+    # Wrapped again: best_power_window recovers the 20-minute effort from
+    # wherever it sits, so the test needn't be the whole recording.
     "cycle": {
         "session_type": "baseline",
         "params": {"warmup_minutes": 20, "test_minutes": 20, "cooldown_minutes": 10},
     },
-    # Bare, and 1km: a whole swim of 1.000-1.060km lands in the existing
-    # fastest_1k milestone, which derive_swim_css already reads. Pool swims
-    # often carry no cumulative-distance stream, so the milestone — computed
-    # from distance and duration on every read — is the only measurement that
-    # can be relied on. A shorter test would have needed a new split distance
-    # and a reworked CSS model for a less reliable signal.
+    # Bare, and 1km: it lands in the fastest_1k milestone derive_swim_css reads.
+    # Pool swims often carry no distance stream, so the milestone (computed from
+    # distance and duration) is the only reliable measurement.
     "swim": {"session_type": "baseline", "params": {"test_distance_m": 1000}},
-    # A heavy triple, not a true single: compute.estimated_1rm reads a 3RM
-    # perfectly well, and a plan should not be sending anybody to a genuine
-    # one-rep max alone in a gym every few weeks. The lift is filled in from
-    # the session being replaced (see _build_benchmark) — which lift to test is
-    # a property of the week's session, not of the sport. No warmup step and no
-    # load: the ramp of lighter sets is the warmup, and compute._strength_pbs
-    # reads only the best set.
+    # A heavy triple, not a true single: estimated_1rm reads a 3RM fine, and a
+    # plan should not send anybody to a real 1RM alone in a gym every few weeks.
+    # _build_benchmark fills in the lift from the session being replaced.
     "strength": {"session_type": "baseline", "params": {"reps": 3}},
 }
 
 # --- starting volume ------------------------------------------------------
 #
-# A goal template's opening week assumes a base the user may not have. Rather
-# than make them guess a percentage, the opening week is measured against what
-# they are actually training now (derive_volume_scale), then converges back to
-# the template's own level by the last build week — so the plan starts where
-# they are but still arrives at a volume the event demands. `volume:` in the
-# description overrides the measurement.
+# A template's opening week assumes a base the user may not have, so it is
+# measured against what they train now (derive_volume_scale) and converges back
+# to the template's level by the last build week. `volume:` overrides.
 VOLUME_SCALE_MIN = 0.6
 VOLUME_SCALE_MAX = 1.25
-# How many recent weeks to measure. Long enough to survive one quiet week,
-# short enough to reflect current form rather than last season's.
+# Long enough to survive one quiet week, short enough to be current form.
 RECENT_VOLUME_WEEKS = 8
-# Growth from week 1 to the peak beyond this multiple is flagged: it means the
-# user is starting so far below the goal that the ramp itself is a risk.
+# Week-1-to-peak growth beyond this is flagged: the ramp itself is then a risk.
 VOLUME_RAMP_WARN = 2.2
 
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -146,9 +111,8 @@ _WEEKDAY_LOOKUP = {
     "thurs": 3,
 }
 
-# Extras (yoga/strength/...) are tracked locally only — never built as Garmin
-# workouts, never pushed. The Garmin calendar has no note/non-workout endpoint,
-# so there is nothing to schedule them onto.
+# Local-only: the Garmin calendar has no note/non-workout endpoint, so extras
+# are never built or pushed.
 EXTRA_DURATIONS_S = {
     "strength": 2700,
     "yoga": 1800,
@@ -157,9 +121,8 @@ EXTRA_DURATIONS_S = {
 }
 DEFAULT_EXTRA_DURATION_S = 1800
 
-# Used when history has nothing to derive from and the description gave no
-# override: a plan with plausible targets beats no plan at all, and `fit train
-# show` records where each target came from.
+# When history has nothing and the description gave no override: a plan with
+# plausible targets beats no plan. `fit train show` says where each came from.
 FALLBACK_TARGETS = {
     "run_5k_seconds": 1500,  # 25:00
     "bike_ftp": 200,
@@ -168,18 +131,14 @@ FALLBACK_TARGETS = {
 
 # --- strength progression -------------------------------------------------
 #
-# Strength is the one sport here whose plan projects intensity forward instead
-# of holding it. For run/bike/swim that would be reckless — prescribing a pace
-# you might not have by week 10 means prescribing work you cannot complete.
-# A barbell is different: the whole method *is* to add a little every week and
-# find out, and a weight that turns out to be too heavy is a failed rep rather
-# than a failed session. So volume is what stays fixed here and intensity is
-# what ramps — the exact opposite of every other sport in this file.
+# The one sport that projects intensity forward: volume stays fixed (3x10 stays
+# 3x10) and load ramps, which is the exact opposite of every other sport here.
+# That is what linear progression is, and a weight that turns out too heavy is
+# a failed rep, not a failed session.
 #
-# One increment per lift serves two purposes: it is the plate step a working
-# weight is rounded to, and the most a week may add. That is not a coincidence
-# worth factoring apart — "add one increment a week" is linear progression.
-# Upper body gets the smaller step because it genuinely progresses slower.
+# The increment is both the plate step a working weight rounds to and the most
+# a week may add — "add one increment a week" is the method. Upper body gets
+# the smaller step because it genuinely progresses slower.
 LIFT_INCREMENT_KG = {
     "deadlift": 2.5,
     "squat": 2.5,
@@ -189,19 +148,15 @@ LIFT_INCREMENT_KG = {
 DEFAULT_LIFT_INCREMENT_KG = 2.5
 
 # A deload drops the bar, it does not empty it. RECOVERY_FACTOR (0.6) is a
-# *volume* cut and would be far too deep here: 60% of a working weight stops
-# being training. Taper weeks hold more than a deload but still back off, since
-# by then the point is arriving fresh rather than adding anything.
+# *volume* cut — 60% of a working weight stops being training.
 STRENGTH_DELOAD_FACTOR = 0.85
 STRENGTH_TAPER_FACTOR = 0.8
 
-# Rejects the impossible, not the unusual — the same job PLAUSIBLE_TARGETS does
-# for the cardio sports, kept here rather than added to that dict because a
-# strength target is per lift and per plan, not one number per sport.
+# PLAUSIBLE_TARGETS' job, kept separate because a strength target is per lift,
+# not one number per sport.
 PLAUSIBLE_LIFT_E1RM_KG = (20.0, 400.0)
 
-# When history has no record of a lift at all. Deliberately light: a plan that
-# starts under you is a wasted week, one that starts over you is an injury.
+# Deliberately light: starting under you wastes a week, over you is an injury.
 FALLBACK_LIFT_E1RM_KG = {
     "deadlift": 80.0,
     "squat": 70.0,
@@ -236,9 +191,7 @@ _YAML_INSTALL_HINT = (
 
 
 def _yaml():
-    """Lazy import, mirroring garmin.py's optional-dependency pattern: only
-    `train import` parses YAML — show/sync/clear read the stored JSON and work
-    without PyYAML installed."""
+    """Lazy: only `train import` parses YAML; show/sync/clear read stored JSON."""
     try:
         import yaml
     except ImportError as exc:
@@ -247,10 +200,8 @@ def _yaml():
 
 
 def _as_date_string(value, field: str) -> str:
-    """Normalise a description date to 'YYYY-MM-DD'. PyYAML resolves an
-    unquoted 2026-06-14 to a datetime.date rather than a string, so accept
-    both forms and hand the text to planner.parse_schedule_date — the single
-    date-validation seam every scheduled date already passes through."""
+    """Normalise to 'YYYY-MM-DD'. YAML 1.1 resolves an unquoted date to a
+    datetime.date, so accept both and route text through parse_schedule_date."""
     if isinstance(value, date):
         return value.isoformat()
     if not isinstance(value, str):
@@ -262,10 +213,8 @@ def _as_date_string(value, field: str) -> str:
 
 
 def _as_seconds(value, field: str) -> int:
-    """Normalise a m:ss time target to seconds. YAML 1.1 resolves an unquoted
-    24:00 as a base-60 integer, which lands on exactly the seconds we want
-    (24*60 = 1440), so a bare int is accepted as already-seconds — quoted or
-    not, the description means the same thing."""
+    """m:ss -> seconds. YAML 1.1 resolves an unquoted 24:00 to the base-60 int
+    1440 — exactly the seconds meant — so a bare int is taken as seconds."""
     if isinstance(value, bool):
         raise ValueError(f"{field}: expected a time like '24:00', got {value!r}")
     if isinstance(value, int):
@@ -289,9 +238,8 @@ def _as_int(value, field: str, low: int, high: int) -> int:
 
 
 def _as_weight(value, field: str) -> float:
-    """A goal weight in kilograms. Accepts a plain number — a half-kilo is a
-    real barbell weight, so unlike _as_int this is not whole-numbers-only —
-    and rejects bools, which YAML 1.1 would otherwise hand through as 1/0."""
+    """Kilograms. Floats allowed (a half-kilo is a real plate); bools rejected,
+    since YAML 1.1 hands them through as 1/0."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{field}: expected a weight in kg, got {value!r}")
     low, high = PLAUSIBLE_LIFT_E1RM_KG
@@ -301,8 +249,7 @@ def _as_weight(value, field: str) -> float:
 
 
 def _as_weekday(value, field: str) -> int:
-    """'Mon'/'monday' -> 0. Guards the YAML 1.1 booleans too: an unquoted
-    `rest_day: no` would otherwise arrive as False."""
+    """'Mon'/'monday' -> 0. An unquoted `rest_day: no` arrives as False."""
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError(f"{field}: expected a weekday like Mon, got {value!r}")
     day = _WEEKDAY_LOOKUP.get(value.strip().lower())
@@ -312,22 +259,9 @@ def _as_weekday(value, field: str) -> int:
 
 
 def parse_plan_spec(text: str) -> dict:
-    """Parse and validate a YAML plan description into a normalised spec dict,
-    with every optional field defaulted from the goal template. Raises
-    ValueError with a specific message on anything malformed (including a
-    missing PyYAML).
-
-    The standard form — only goal and event_date are required:
-
-        goal: sprint_triathlon
-        event_date: 2026-06-14
-        start_date: 2026-03-23        # default: event_date - template length
-        days_per_week: 6
-        rest_day: Mon
-        extras: {strength: 2, yoga: 1}
-        targets: {run_5k: "24:00", bike_ftp: 250, swim_css_100m: "1:45"}
-        progression: {build_recover: [3, 1], weekly_ramp_pct: 8, taper_weeks: 2}
-    """
+    """YAML description -> normalised spec, every optional field defaulted from
+    the goal template. Only goal and event_date are required; the full standard
+    form is in CLAUDE.md and examples/training-plan.yaml."""
     yaml = _yaml()
     try:
         raw = yaml.safe_load(text)
@@ -391,9 +325,8 @@ def parse_plan_spec(text: str) -> dict:
         )
 
     if "days_per_week" in raw:
-        # Either a fixed count, or [start, end] to build frequency across the
-        # plan — adding a session a few weeks in is how people actually ease
-        # into a block, and it is not the same thing as scaling volume.
+        # A fixed count, or [start, end] to build frequency across the plan —
+        # a separate axis from scaling volume.
         value = raw["days_per_week"]
         if isinstance(value, list):
             if len(value) != 2:
@@ -417,8 +350,7 @@ def parse_plan_spec(text: str) -> dict:
             raise ValueError("benchmarks: expected true or false")
         spec["benchmarks"] = value
     if "volume" in raw:
-        # Percent of the template's opening week; without it, measured from
-        # the user's own recent training (see derive_volume_scale).
+        # Percent of the template's opening week; else measured from history.
         spec["volume"] = _as_int(raw["volume"], "volume", 40, 150)
     if "rest_day" in raw:
         spec["rest_day"] = _as_weekday(raw["rest_day"], "rest_day")
@@ -442,9 +374,8 @@ def parse_plan_spec(text: str) -> dict:
                 f"targets: unknown key(s) {', '.join(sorted(unknown_targets))} — "
                 f"valid: {', '.join(sorted(_TARGET_KEYS))}"
             )
-        # A target for a sport this goal never trains would be silently
-        # ignored, which reads as "fit disagreed with me" rather than "that
-        # setting does nothing here".
+        # Silently ignoring a target for an untrained sport reads as "fit
+        # disagreed with me" rather than "that setting does nothing here".
         usable = {
             override_key
             for sport, (_, override_key) in _SPORT_TARGETS.items()
@@ -506,7 +437,7 @@ def parse_plan_spec(text: str) -> dict:
 
 
 def _default_start_date(event_date: str, weeks: int) -> str:
-    """Monday of the week that is `weeks` weeks back from the event's week."""
+    """Monday `weeks` weeks back from the event's week."""
     event_monday = compute.week_start(event_date)
     return (event_monday - timedelta(weeks=weeks - 1)).isoformat()
 
@@ -517,11 +448,8 @@ def _default_start_date(event_date: str, weeks: int) -> str:
 def _plan_weeks(
     start_date: str, event_date: str, test_week: bool = False
 ) -> tuple[date, int]:
-    """(first Monday, number of whole ISO weeks through the event's week).
-
-    A test week is taken out of that span rather than bolted on the front of
-    it, so it raises the floor by one: the periodised plan still needs
-    MIN_PLAN_WEEKS of its own."""
+    """(first Monday, whole ISO weeks through the event's week). A test week
+    comes out of that span, so it raises the floor by one."""
     start_monday = compute.week_start(start_date)
     event_monday = compute.week_start(event_date)
     weeks = ((event_monday - start_monday).days // 7) + 1
@@ -536,11 +464,9 @@ def _plan_weeks(
 
 
 def _assign_phases(weeks: int, phases: list[tuple[str, int]], taper_weeks: int) -> list:
-    """One phase name per week. The taper always takes the final taper_weeks
-    (leaving at least one week for everything else); the template's remaining
-    phases share what's left in proportion to their template lengths, so a
-    plan started earlier or later than the template's own length still gets a
-    sensible base/build/peak split."""
+    """One phase per week. The taper takes the final taper_weeks; the rest
+    share what's left by largest-remainder apportionment, so any plan length
+    gets a sensible base/build/peak split."""
     taper = min(taper_weeks, weeks - 1)
     remaining = weeks - taper
     total_weight = sum(length for _, length in phases)
@@ -563,9 +489,8 @@ def _assign_phases(weeks: int, phases: list[tuple[str, int]], taper_weeks: int) 
 
 
 def _week_roles(phase_by_week: list[str], build_recover: list[int]) -> list[str]:
-    """'build' | 'recover' | 'taper' for each week — the single source of truth
-    for which weeks actually ramp. Shared by the multiplier curve and the ramp
-    derivation so the two can never drift apart."""
+    """'build' | 'recover' | 'taper' per week. Shared by the multiplier curve
+    and the ramp derivation, so the two can't disagree about which weeks ramp."""
     build_len, recover_len = build_recover
     cycle_length = build_len + recover_len
     roles, position = [], 0
@@ -579,10 +504,9 @@ def _week_roles(phase_by_week: list[str], build_recover: list[int]) -> list[str]
 
 
 def intended_peak(template: dict) -> float:
-    """The volume multiplier this goal reaches at its own default length with
-    the reference ramp — the peak that any length of this plan should arrive
-    at. Defined from the template rather than declared alongside it, so a
-    plan run at its default length behaves exactly as before."""
+    """The multiplier this goal reaches at its own default length under
+    REFERENCE_RAMP_PCT — the peak any length of it should arrive at. Derived,
+    not declared, so a default-length plan behaves exactly as before."""
     phases = _assign_phases(
         template["weeks"], template["phases"], PROGRESSION_DEFAULTS["taper_weeks"]
     )
@@ -600,27 +524,22 @@ def intended_peak(template: dict) -> float:
 def derive_weekly_ramp(
     template: dict, phase_by_week: list[str], build_recover: list[int]
 ) -> float:
-    """Percent-per-week ramp that lands on the template's intended peak by the
-    last build week, whatever the plan's length. A longer block should ascend
-    more gently to the same place, not try to climb higher — compounding a
-    fixed 8% over 26 weeks just pins every long session at its clamp and the
-    extra weeks buy nothing."""
+    """Ramp that lands on intended_peak by the last build week, whatever the
+    length. A longer block ascends more gently to the same place; compounding a
+    fixed 8% over 26 weeks just pins every session at its clamp."""
     builds = _week_roles(phase_by_week, build_recover).count("build")
     if builds <= 1:
         return float(REFERENCE_RAMP_PCT)
     solved = (intended_peak(template) ** (1 / (builds - 1)) - 1) * 100
-    # Never steeper than the reference: a plan shorter than the template's own
-    # length should arrive at a *lower* peak, which is what a short run-up
-    # honestly buys you. Chasing the full peak over four weeks would demand a
-    # 70%-a-week ramp, which is not a training plan.
+    # Never steeper than the reference: a short plan should reach a *lower*
+    # peak. Chasing the full one over four weeks would demand ~70% a week.
     return min(solved, float(REFERENCE_RAMP_PCT))
 
 
 def _week_multipliers(phase_by_week: list[str], progression: dict) -> list[float]:
-    """One volume multiplier per week. Build weeks ramp by weekly_ramp_pct;
-    every recovery week in the build/recover cycle dips to RECOVERY_FACTOR of
-    the level reached so far without advancing it; taper weeks step down from
-    TAPER_START to TAPER_END of the peak."""
+    """One multiplier per week: build weeks ramp, recovery weeks dip to
+    RECOVERY_FACTOR *without advancing*, taper weeks step TAPER_START ->
+    TAPER_END of the peak."""
     ramp = 1 + progression["weekly_ramp_pct"] / 100
     roles = _week_roles(phase_by_week, progression["build_recover"])
 
@@ -646,9 +565,8 @@ def _week_multipliers(phase_by_week: list[str], progression: dict) -> list[float
 
 
 def _select_sessions(templates: list[dict], days_per_week: int) -> list[dict]:
-    """Trim the template's week down to days_per_week training days, dropping
-    the lowest-priority sessions first. A session whose day is already taken
-    costs no extra day, so doubles survive as long as their day does."""
+    """Trim to days_per_week training days, lowest priority dropped first. A
+    session on an already-taken day costs no extra day, so doubles survive."""
     selected: list[dict] = []
     days: set[int] = set()
     for session in sorted(templates, key=lambda s: s["priority"]):
@@ -670,13 +588,9 @@ def _scaled(scale: dict, multiplier: float) -> int:
 # --- intensity targets ----------------------------------------------------
 
 
-# Which target each sport needs, so a single-sport goal never derives (or
-# reports) an intensity nothing in the plan uses. Strength is deliberately
-# absent: it needs one target per *lift*, not one per sport, and forcing it
-# into this shape would mean giving planner.derive_target a float path and
-# making PLAUSIBLE_TARGETS per-exercise — changes to code all three cardio
-# sports depend on, for one sport that does not fit. It is resolved alongside
-# these instead, in derive_targets.
+# Scopes derivation, so a single-sport goal never derives an intensity nothing
+# uses. Strength is absent on purpose — one target per *lift*, not per sport —
+# and is resolved alongside these in derive_targets.
 _SPORT_TARGETS = {
     "run": ("run_5k_seconds", "run_5k"),
     "swim": ("swim_css_100m", "swim_css_100m"),
@@ -689,18 +603,14 @@ def lift_increment(exercise: str) -> float:
 
 
 def _round_to_increment(value: float, increment: float) -> float:
-    """Loadable weight: a bar can only hold what the plates allow."""
+    """A bar only holds what the plates allow."""
     return round(round(value / increment) * increment, 2)
 
 
 def working_weight_from_1rm(e1rm_kg: float, reps: int, increment: float) -> float:
-    """The bar weight for `reps` reps, given a one-rep max — Epley's formula
-    from compute.estimated_1rm read backwards, so a PB and the target derived
-    from it can never disagree about the same set. Rounded to loadable plates.
-
-    Inverting the formula rather than applying a flat 75%-of-1RM keeps the
-    conversion honest across rep schemes: a set of five and a set of ten are
-    very different fractions of a max."""
+    """Bar weight for `reps` reps: compute.estimated_1rm read backwards, so a
+    PB and a target derived from it can't disagree. Inverting rather than
+    applying a flat 75% keeps it honest across rep schemes."""
     if e1rm_kg <= 0 or reps <= 0:
         return 0.0
     return _round_to_increment(e1rm_kg / (1 + reps / 30), increment)
@@ -709,16 +619,11 @@ def working_weight_from_1rm(e1rm_kg: float, reps: int, increment: float) -> floa
 def strength_weekly_e1rm(
     current_kg: float, goal_kg: float, roles: list[str], increment: float
 ) -> list[float]:
-    """One target e1RM per week, walking from current to goal.
+    """One target e1RM per week, current -> goal. Mirrors _week_multipliers'
+    shape so the two progressions agree about the week structure.
 
-    Mirrors _week_multipliers' shape so the two progressions can't disagree
-    about the week structure: build weeks advance, a recovery week dips
-    *without advancing* (so progression resumes where it left off rather than
-    resetting), and taper weeks back off from wherever the build ended.
-
-    The step is capped at one increment per week, so a goal further away than
-    the plan is long simply isn't reached — expand_plan warns rather than
-    quietly prescribing a curve nobody could ride."""
+    Capped at one increment per week, so a goal further off than the plan is
+    long simply isn't reached — expand_plan warns rather than prescribing it."""
     builds = roles.count("build")
     span = max(goal_kg - current_kg, 0.0)
     step = min(increment, span / max(builds - 1, 1)) if builds > 1 else 0.0
@@ -740,19 +645,14 @@ def strength_weekly_e1rm(
 
 
 def reachable_e1rm(current_kg: float, roles: list[str], increment: float) -> float:
-    """The most this plan's length can honestly add to a lift: one increment
-    per build week. Both the derived goal (when the description names none) and
-    the too-ambitious warning are measured against it."""
+    """The most this length can honestly add: one increment per build week.
+    Both the derived goal and the too-ambitious warning measure against it."""
     return current_kg + increment * max(roles.count("build") - 1, 0)
 
 
 def derive_lift_1rm(recent: list[dict], exercise: str) -> tuple[float, str] | None:
-    """(best e1RM, why) for one lift across the recent window, or None when
-    there is nothing to measure. The raw measurement, unguarded — same split
-    planner.derive_run_5k and friends have with planner.derive_target.
-
-    Public for the same reason they are: `fit plan --sport strength` should
-    read the same number `fit train` builds against."""
+    """(best e1RM, why), or None. The raw measurement, unguarded — same split
+    planner.derive_run_5k has with planner.derive_target."""
     strength = [a for a in recent if a.get("type") == "strength"]
     lift = compute.all_personal_bests(strength).get("strength", {}).get(exercise, {})
     value = lift.get("best_e1rm_kg")
@@ -764,14 +664,9 @@ def derive_lift_1rm(recent: list[dict], exercise: str) -> tuple[float, str] | No
 
 
 def derive_lift_target(recent: list[dict], exercise: str) -> dict:
-    """{"value": float | None, "why": str} — the plausibility-guarded front
-    door to derive_lift_1rm, mirroring planner.derive_target's contract.
-
-    A separate guard rather than an entry in PLAUSIBLE_TARGETS: that dict is
-    one bound per sport, and strength needs one per lift. value is None both
-    when there was nothing to measure and when what was measured is
-    impossible; why says which, so a rejected reading never silently becomes a
-    default."""
+    """{"value", "why"} — the guarded front door to derive_lift_1rm, mirroring
+    planner.derive_target. Separate from PLAUSIBLE_TARGETS because strength
+    needs one bound per lift, not one per sport."""
     derived = derive_lift_1rm(recent, exercise)
     if derived is None:
         return {"value": None, "why": "no recent history to derive from"}
@@ -787,15 +682,14 @@ def derive_lift_target(recent: list[dict], exercise: str) -> dict:
 
 
 def template_sports(goal: str) -> set:
-    """The sports a goal's weekly session mix actually uses."""
+    """Sports the goal's session mix uses."""
     return {session["sport"] for session in GOAL_TEMPLATES[goal]["weekly_sessions"]}
 
 
 def volume_sports(goal: str) -> set:
-    """The sports whose weekly volume the plan can actually scale — every sport
-    the goal trains except strength, whose sessions carry no scale (see
-    _week_seconds). Measuring a scale against training it cannot change would
-    only bias the result."""
+    """Sports the multiplier can actually scale — everything but strength,
+    whose sessions carry no scale. Measuring against training it cannot move
+    would only bias the result."""
     return {
         session["sport"]
         for session in GOAL_TEMPLATES[goal]["weekly_sessions"]
@@ -804,10 +698,8 @@ def volume_sports(goal: str) -> set:
 
 
 def template_lifts(goal: str) -> list[str]:
-    """The barbell lifts a goal's strength sessions use, in the order they
-    first appear — the strength counterpart to template_sports, and what
-    scopes target derivation so a plan never derives a lift it never
-    prescribes."""
+    """Lifts the goal prescribes, in first-appearance order. Scopes target
+    derivation so a plan never derives a lift it never prescribes."""
     lifts: list[str] = []
     for session in GOAL_TEMPLATES[goal]["weekly_sessions"]:
         for exercise in session["params"].get("exercises", []):
@@ -817,16 +709,12 @@ def template_lifts(goal: str) -> list[str]:
 
 
 def derive_targets(spec: dict, activities: list[dict], reference: date) -> dict:
-    """{"run_5k_seconds", "bike_ftp", "swim_css_100m", "strength": {...},
-    "why": {...}} — the intensities every session in the plan is built
-    against, limited to the sports the goal actually trains. Description
-    targets win; otherwise the same history derivation `fit plan` uses, over
-    the same recent window; otherwise a documented fallback.
+    """The intensities the whole plan is built against, scoped to the sports
+    the goal trains, each with a "why". Precedence: description targets ->
+    planner.derive_* over the recent window -> FALLBACK_TARGETS.
 
-    Strength sits under its own key because it needs one figure per lift
-    rather than one per sport, and because its target moves every week — the
-    per-week table is filled in by _attach_weekly_lifts, which is called once
-    the plan's length is known."""
+    Strength has its own key: one figure per lift, and its target moves weekly
+    (_attach_weekly_lifts fills that in once the length is known)."""
     recent = planner.recent_activities(activities, reference)
     overrides = spec.get("targets", {})
     targets: dict = {"why": {}}
@@ -837,10 +725,8 @@ def derive_targets(spec: dict, activities: list[dict], reference: date) -> dict:
             targets[key] = overrides[override_key]
             targets["why"][key] = "set in the plan description"
             continue
-        # planner.derive_target guards the measurement; a rejected one comes
-        # back as None with a why saying what was thrown away and why, so the
-        # fallback never looks like an absence of data when it was a bad
-        # reading.
+        # A rejected measurement comes back None with a why, so the fallback
+        # never looks like absent data when it was a bad reading.
         derived = planner.derive_target(sport, recent)
         if derived["value"] is not None:
             targets[key] = derived["value"]
@@ -858,20 +744,14 @@ def derive_targets(spec: dict, activities: list[dict], reference: date) -> dict:
 def _derive_lift_targets(
     lifts: list[str], overrides: dict, recent: list[dict], targets: dict
 ) -> dict:
-    """{lift: {"current_e1rm_kg", "goal_e1rm_kg", "goal_from"}} — where each
-    lift starts and where the plan is aiming it.
+    """{lift: {current_e1rm_kg, goal_e1rm_kg, goal_from}} — where each lift
+    starts and where the plan aims it.
 
-    `current` follows the same precedence every other target does: measured
-    from history, else a documented fallback. `goal` cannot be measured at all
-    — it is a decision about the future, not a reading of the past — so a
-    description's `<lift>_goal_kg` wins and otherwise it defaults to what the
-    plan's own length can deliver at one increment a build week (filled in by
-    _attach_weekly_lifts, which is where the week structure is known).
-
-    Deriving the goal rather than demanding one keeps strength inside the
-    derive-or-fall-back rule every other sport follows: a plan expands with no
-    `targets:` block at all, and somebody chasing a specific number still
-    supplies it."""
+    `current` is measured, like every other target. `goal` cannot be — it is a
+    decision about the future — so the description wins, else it defaults to
+    reachable_e1rm (filled in by _attach_weekly_lifts). Deriving it keeps
+    strength inside the derive-or-fall-back rule, so a plan expands with no
+    `targets:` at all."""
     resolved = {}
     for lift in lifts:
         derived = derive_lift_target(recent, lift)
@@ -893,12 +773,9 @@ def _derive_lift_targets(
 
 
 def _attach_weekly_lifts(targets: dict, roles: list[str]) -> list[str]:
-    """Fill in each lift's per-week e1RM path, in place, and return any
-    warnings. Called once the week structure is known — by expand_plan, and
-    again by retarget_sessions off the stored plan.
-
-    The table is what keeps _apply_target a lookup: the session already knows
-    its own week, so the only thing threaded through is an index."""
+    """Fill in each lift's per-week e1RM path in place; returns warnings. The
+    table is what keeps _apply_target a stateless lookup — the session already
+    knows its week, so only an index is threaded through."""
     warnings = []
     for lift, entry in targets.get("strength", {}).items():
         increment = lift_increment(lift)
@@ -931,17 +808,13 @@ def derive_volume_scale(
     reference: date,
     template_week_seconds: int,
 ) -> tuple[float, str]:
-    """(scale, why) for the plan's opening week. The description's `volume:`
-    wins; otherwise the user's *average* weekly training in this goal's sports
-    over the last RECENT_VOLUME_WEEKS is measured against the template's own
-    opening week. Clamped to [VOLUME_SCALE_MIN, VOLUME_SCALE_MAX] so one
-    freakish week can't rewrite the whole plan.
+    """(scale, why) for the opening week. `volume:` wins; else the *mean*
+    weekly training in the goal's sports over RECENT_VOLUME_WEEKS, measured
+    against the template's opening week and clamped.
 
-    The mean, not the median: with training this sparse the median collapses to
-    zero the moment more than half the weeks are empty, which would hand
-    somebody barely riding the full template volume — exactly backwards. Weeks
-    with nothing logged are real information here and weigh in as zeroes, which
-    is why weekly_volumes' zero-filling matters."""
+    Mean, not median: with sparse training the median collapses to zero once
+    half the weeks are empty, handing somebody barely riding the full template
+    volume. Empty weeks are real information and weigh in as zeroes."""
     if "volume" in spec:
         return spec["volume"] / 100, "set in the plan description"
     if not template_week_seconds:
@@ -951,17 +824,14 @@ def derive_volume_scale(
         planner.recent_activities(activities, reference),
         sorted(volume_sports(spec["goal"])),
     )
-    # Drop the current week before measuring: it is still filling up, and
-    # counting a week that is one day old as a near-zero would systematically
-    # understate current form (the same reason the dashboard dims that bar).
+    # The current week is still filling up; counting it would understate form.
     complete_weeks = [
         week
         for week in compute.weekly_volumes(relevant, through=reference)
         if not compute.is_current_week(week["week"], reference)
     ]
     recent_weeks = complete_weeks[-RECENT_VOLUME_WEEKS:]
-    # Nothing at all in these sports means "unknown", not "untrained" — the
-    # user may simply not have imported any yet, so leave the template alone.
+    # No history means "unknown", not "untrained" — leave the template alone.
     if not any(week["duration_seconds"] for week in recent_weeks):
         return 1.0, "template default (no recent training in these sports to measure)"
 
@@ -980,10 +850,9 @@ def derive_volume_scale(
 def _volume_scale_for_week(
     start_scale: float, index: int, weeks: int, taper_weeks: int
 ) -> float:
-    """Converge from start_scale in week 1 to the template's own level by the
-    last build week, and stay there. Scaling the whole plan uniformly would
-    start the user in the right place but leave them under-prepared for a
-    fixed-distance event; converging keeps the peak the goal actually needs."""
+    """Converge from start_scale to the template's own level by the last build
+    week. Uniform scaling would start them right but leave them under-prepared
+    for a fixed-distance event."""
     last_build = max(weeks - max(taper_weeks, 0) - 1, 1)
     if index >= last_build:
         return 1.0
@@ -991,7 +860,7 @@ def _volume_scale_for_week(
 
 
 def days_per_week_range(spec: dict) -> tuple[int, int]:
-    """(first week, final week) training days. A plain number means both."""
+    """(first, final) training days; a plain number means both."""
     value = spec["days_per_week"]
     if isinstance(value, list):
         return value[0], value[1]
@@ -1001,11 +870,8 @@ def days_per_week_range(spec: dict) -> tuple[int, int]:
 def _days_for_week(
     low: int, high: int, index: int, weeks: int, taper_weeks: int
 ) -> int:
-    """Training days in week `index` (0-based): builds from `low` to `high` by
-    the last build week, then holds through the taper. Frequency is kept in a
-    taper — it is volume that comes down, and dropping a session in race week
-    would lose the sharpening the taper exists for. Mirrors
-    _volume_scale_for_week, which converges on the same schedule."""
+    """Builds low -> high by the last build week, then holds through the taper:
+    a taper cuts volume, not frequency. Same schedule as _volume_scale_for_week."""
     if low == high:
         return low
     last_build = max(weeks - max(taper_weeks, 0) - 1, 1)
@@ -1017,12 +883,10 @@ def _days_for_week(
 def _apply_target(
     sport: str, session_type: str, params: dict, targets: dict, week: int = 1
 ) -> None:
-    """Fill in the intensity each session type needs, in place.
+    """Fill in the one intensity param each session type needs, in place.
 
-    `week` is read only by strength, and only as an index into the per-lift
-    table _attach_weekly_lifts already built — for every other sport intensity
-    is a pure function of the target and the week is irrelevant, which is the
-    property that makes retargeting easy to reason about."""
+    `week` is read only by strength, as an index into _attach_weekly_lifts'
+    table. Everywhere else intensity is a pure function of the target."""
     if sport == "run":
         if session_type == "intervals":
             params["target_pace"] = planner.recommended_interval_pace(
@@ -1044,8 +908,7 @@ def _apply_target(
     elif sport == "swim" and session_type in ("intervals", "continuous"):
         params["target_pace_100m"] = targets["swim_css_100m"]
     elif sport == "strength" and session_type == "straight_sets":
-        # Each exercise carries its own load, so this is the one session type
-        # whose intensity is a list rather than a single param.
+        # The one session type whose intensity is a list, not a single param.
         table = targets.get("strength", {})
         for exercise in params.get("exercises", []):
             lift = table.get(exercise["exercise"])
@@ -1062,13 +925,10 @@ def _apply_target(
 
 
 def _week_seconds(laid_out: list[dict], targets: dict, multiplier: float = 1.0) -> int:
-    """Estimated training seconds in one templated week, used to size the
-    plan's opening week against the user's actual recent volume.
+    """Estimated seconds in one templated week, for sizing the opening week.
 
-    Only sessions that actually scale are counted. A strength session's size is
-    fixed — its progression is load, not duration — so including it would put
-    time into the ratio that the volume multiplier can never move, and a
-    triathlete who does no gym work would be scaled down for the swimming."""
+    Only scaling sessions count: a strength session's size is fixed, so
+    including it would put time into the ratio the multiplier can never move."""
     total = 0
     for template_session in laid_out:
         scale = template_session["scale"]
@@ -1093,9 +953,8 @@ def _build_session(
     multiplier: float,
     targets: dict,
 ) -> dict:
-    # Deep, not shallow: a strength session's params hold a list of exercise
-    # dicts, and every week shares the template's. A shallow copy would have
-    # week 12 writing its load into week 1's session.
+    # Deep, not shallow: exercise dicts are shared with the template, so a
+    # shallow copy would have week 12 writing its load into week 1.
     params = copy.deepcopy(template_session["params"])
     scale = template_session["scale"]
     if scale:
@@ -1114,16 +973,11 @@ def _build_session(
         "is_key": template_session["key"],
         "is_brick": template_session.get("brick", False),
         "is_extra": False,
-        "garmin_workout_id": None,
-        "scheduled_workout_id": None,
-        "scheduled_date": None,
-        "status": "planned",
     }
 
 
 def benchmark_sports(goal: str) -> list[str]:
-    """Sports in this goal that have a benchmark workout. BENCHMARK_SESSIONS'
-    own order is the rotation order."""
+    """Testable sports in this goal; BENCHMARK_SESSIONS' order is the rotation."""
     trained = template_sports(goal)
     return [sport for sport in BENCHMARK_SESSIONS if sport in trained]
 
@@ -1135,14 +989,9 @@ def _build_benchmark(
     phase: str,
     replaced: dict | None = None,
 ) -> dict:
-    """A re-test session. Deliberately unscaled and untargeted: an open
-    best-effort over a fixed distance, time or rep count, so this week's result
-    can be compared with the last one.
-
-    `replaced` is the template session standing aside for it, and matters only
-    for strength: which lift to test is a property of the session, not of the
-    sport, so a plan that squats and benches tests whichever one that week's
-    session leads with."""
+    """A re-test: unscaled and untargeted, so this week's result compares with
+    the last. `replaced` matters only for strength — which lift to test is a
+    property of the session, not the sport."""
     spec = BENCHMARK_SESSIONS[sport]
     params = dict(spec["params"])
     if sport == "strength":
@@ -1161,20 +1010,13 @@ def _build_benchmark(
         "is_brick": False,
         "is_extra": False,
         "is_benchmark": True,
-        "garmin_workout_id": None,
-        "scheduled_workout_id": None,
-        "scheduled_date": None,
-        "status": "planned",
     }
 
 
 def _test_identity(sport: str, template_session: dict) -> tuple:
     """What makes two benchmarks the same test, for deduplicating a test week.
-
-    Per sport for run/cycle/swim — one FTP test in a week is plenty — but per
-    *lift* for strength, because _build_benchmark tests whichever lift the
-    session leads with: a plan that squats on Wednesday and benches on Friday
-    has two distinct tests to run, not one."""
+    Per sport for run/cycle/swim, but per *lift* for strength — squatting
+    Wednesday and benching Friday is two tests, not one."""
     if sport != "strength":
         return (sport,)
     exercises = template_session.get("params", {}).get("exercises") or []
@@ -1184,16 +1026,12 @@ def _test_identity(sport: str, template_session: dict) -> tuple:
 def _test_week_sessions(
     week_one: list[dict], monday: date, testable: list[str]
 ) -> list[dict]:
-    """Week 0: one benchmark per distinct test, and nothing else.
+    """Week 0: one benchmark per distinct test, and nothing else — you turn up
+    rested, test, and go home. That is what separates it from an in-plan
+    re-test, which replaces one session and leaves the week intact.
 
-    A test week exists to produce clean measurements, so it carries the tests
-    alone rather than tests plus training — you turn up rested, test, and go
-    home. That is also what separates it from an in-plan re-test, which stands
-    in for one session of one sport on a recovery week and leaves the rest of
-    that week's training alone.
-
-    The tests are drawn from what week 1 would have trained, in the template's
-    own priority order, so each lands on a day that sport already owns."""
+    Drawn from week 1's own selection in priority order, so each test lands on
+    a day that sport already owns."""
     built: list[dict] = []
     seen: set[tuple] = set()
     for template_session in week_one:
@@ -1217,8 +1055,7 @@ def _test_week_sessions(
 
 
 def _extra_days(week_sessions: list[dict], occupied: dict[int, int]) -> list[int]:
-    """Days an extra may be placed on, least-loaded first — so rest days fill
-    before easy days, and a key-session day is never used at all."""
+    """Placeable days, least-loaded first; key-session days never qualify."""
     key_days = {s["day"] for s in week_sessions if s["key"]}
     candidates = [day for day in range(7) if day not in key_days]
     return sorted(candidates, key=lambda day: (occupied.get(day, 0), day))
@@ -1253,35 +1090,37 @@ def _build_extras(
                     "is_key": False,
                     "is_brick": False,
                     "is_extra": True,
-                    "status": "planned",
                 }
             )
     return built
 
 
-def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
-    """The engine: a normalised spec (parse_plan_spec's output) plus the user's
-    history becomes the full training plan dict — metadata, the intensity
-    targets everything was built against, and a flat list of dated sessions,
-    oldest first. reference is the date history is derived as of (today).
+def expand_plan(
+    spec: dict, activities: list[dict], reference: date, volume: dict | None = None
+) -> dict:
+    """The engine: spec + history -> the full plan dict (metadata, targets, and
+    a flat list of dated sessions, oldest first). reference is today.
 
-    Sessions falling before start_date or on/after the event itself are
-    dropped: race day is not a training day."""
+    Nothing here is persisted — `fit train` re-runs this on every command, so
+    targets track your current fitness with no retarget step (see
+    storage.write_training_plan). `volume`, when given, is the
+    derive_volume_scale result pinned at import: the *starting* volume is a
+    decision made once about where you were then, and re-measuring it weekly
+    would rewrite session sizes as you train.
+
+    Sessions before start_date or on/after the event are dropped."""
     template = GOAL_TEMPLATES[spec["goal"]]
     test_week = spec["test_week"]
     start_monday, span = _plan_weeks(spec["start_date"], spec["event_date"], test_week)
-    # A test week is one of the plan's weeks, not an extra one in front of it:
-    # both dates are the user's, and shifting either to make room would answer
-    # a different question than the one they asked. So the periodised plan runs
-    # from the *second* Monday and is one week shorter.
+    # A test week comes out of the plan, not off the front: both dates are the
+    # user's. So the periodised block runs from the *second* Monday.
     weeks = span - 1 if test_week else span
     first_monday = start_monday + timedelta(weeks=1) if test_week else start_monday
     progression = dict(spec["progression"])
     phase_by_week = _assign_phases(
         weeks, template["phases"], progression["taper_weeks"]
     )
-    # Solve the ramp from this plan's actual length unless the description
-    # pinned one, so any length arrives at the template's intended peak.
+    # Solved from this plan's length unless the description pinned one.
     ramp_derived = "weekly_ramp_pct" not in progression
     if ramp_derived:
         progression["weekly_ramp_pct"] = derive_weekly_ramp(
@@ -1290,11 +1129,11 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
     multipliers = _week_multipliers(phase_by_week, progression)
     roles = _week_roles(phase_by_week, progression["build_recover"])
     targets = derive_targets(spec, activities, reference)
-    # Needs the week structure, so it can't happen inside derive_targets.
+    # Needs the week structure, so not inside derive_targets.
     lift_warnings = _attach_weekly_lifts(targets, roles)
 
-    # Rotate the whole template week first, then trim it per week: selection
-    # only counts distinct days, which rotation preserves.
+    # Rotate first, trim per week: selection counts distinct days, which
+    # rotation preserves.
     laid_out = [
         {
             **session,
@@ -1310,12 +1149,15 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
             laid_out, _days_for_week(low_days, high_days, index, weeks, taper_weeks)
         )
 
-    # Size the opening week against what the user is actually training now,
-    # then converge back to the template's level by the last build week. Measured
-    # against week 1's own session list, which is smaller when frequency builds.
-    start_scale, volume_why = derive_volume_scale(
-        spec, activities, reference, _week_seconds(week_sessions(0), targets)
-    )
+    # Measured against week 1's *own* session list, which is smaller when
+    # frequency builds — otherwise a plan opening at two rides would look like
+    # the user was training far below a week they were never asked to do.
+    if volume:
+        start_scale, volume_why = volume["start_scale"], volume["why"]
+    else:
+        start_scale, volume_why = derive_volume_scale(
+            spec, activities, reference, _week_seconds(week_sessions(0), targets)
+        )
     warnings = list(lift_warnings)
     growth = (max(multipliers) if multipliers else 1.0) / max(start_scale, 0.01)
     if growth > VOLUME_RAMP_WARN:
@@ -1325,9 +1167,8 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
             "start_date, or a shorter goal, would be a gentler way in."
         )
 
-    # Benchmarks land on recovery weeks — rested, so one test is comparable with
-    # the next — taking turns between the sports the goal trains, and replacing
-    # that sport's quality session for the week rather than adding to it.
+    # Benchmarks land on recovery weeks, taking turns between the goal's sports
+    # and replacing that sport's session rather than adding to it.
     testable = benchmark_sports(spec["goal"]) if spec["benchmarks"] else []
     bench_by_week: dict[int, tuple[str, dict]] = {}
     tested: dict[str, int] = {sport: 0 for sport in testable}
@@ -1335,11 +1176,9 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
         if not testable or role != "recover" or phase_by_week[index] == "taper":
             continue
         available = week_sessions(index)
-        # Which session the test stands in for, most preferred first: a quality
-        # session if the week has one, otherwise the long session — in a
-        # recovery week a short best-effort in place of the long one is a
-        # perfectly good session, and at low frequencies it is the only slot a
-        # sport has.
+        # What the test stands in for, most preferred first: a quality session
+        # if the week has one, else the long one — at low frequencies that is
+        # the only slot a sport has.
         options = {}
         for sport in testable:
             slot = next(
@@ -1354,8 +1193,8 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
             if slot is not None:
                 options[sport] = slot
         if not options:
-            continue  # nothing to stand in for; do not consume a turn either
-        # Whichever testable sport has gone longest without a test.
+            continue  # nothing to stand in for, and do not consume a turn
+        # Whichever sport has gone longest without a test.
         sport = min(options, key=lambda s: (tested[s], testable.index(s)))
         bench_by_week[index] = (sport, options[sport])
         tested[sport] += 1
@@ -1363,10 +1202,9 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
     sessions = []
     benchmark_weeks = []
     if test_week:
-        # Independent of spec["benchmarks"], which governs the in-plan re-tests
-        # only: "measure once before we start" and "re-measure as we go" are
-        # separate decisions, and wanting the first is no reason to be forced
-        # into the second.
+        # Independent of spec["benchmarks"], which governs in-plan re-tests
+        # only: measuring once up front and re-measuring as you go are separate
+        # decisions.
         sessions.extend(
             _test_week_sessions(
                 week_sessions(0), start_monday, benchmark_sports(spec["goal"])
@@ -1432,8 +1270,7 @@ def expand_plan(spec: dict, activities: list[dict], reference: date) -> dict:
 
 
 def session_to_build_args(session: dict) -> tuple[str, str, dict] | None:
-    """(sport, workout_type, params) for planner.build_plan, or None for an
-    extra — extras are local to fit and never become Garmin workouts."""
+    """(sport, workout_type, params) for build_plan; None for an extra."""
     if session.get("is_extra"):
         return None
     return session["sport"], session["session_type"], session["params"]
@@ -1443,11 +1280,9 @@ def session_to_build_args(session: dict) -> tuple[str, str, dict] | None:
 
 
 def match_completion(sessions: list[dict], activities: list[dict]) -> list[dict]:
-    """Copies of `sessions` with "completed" set: a non-extra session counts as
-    done when an activity of the same sport falls within a day of it. Each
-    activity matches at most one session, nearest date first, so a single ride
-    can't tick off a whole week. Extras are never matched — fit has no
-    strength/yoga activity type to match against."""
+    """Copies with "completed" set: same sport within ±1 day, each activity
+    claiming at most one session (nearest first) so one ride can't tick off a
+    whole week. Extras are never matched."""
     candidates = [a for a in activities if a.get("type") and a.get("date")]
     claimed: set[int] = set()
     matched = []
@@ -1468,10 +1303,8 @@ def match_completion(sessions: list[dict], activities: list[dict]) -> list[dict]
 
 
 def group_by_week(sessions: list[dict]) -> list[dict]:
-    """[{"week", "phase", "start", "sessions": [...]}, ...], oldest first — the
-    row structure display.render_training_plan renders. Each session gains a
-    "description" line here so display.py prints text rather than composing it
-    (the same split as planner.describe_plan -> render_plan_saved)."""
+    """[{week, phase, start, sessions}], oldest first. Each session gains a
+    "description" here so display.py prints text rather than composing it."""
     weeks: dict[int, dict] = {}
     for session in sessions:
         week = weeks.setdefault(
@@ -1489,8 +1322,7 @@ def group_by_week(sessions: list[dict]) -> list[dict]:
 
 
 def plan_summary(plan: dict, today: date) -> dict:
-    """Header figures for `fit train show`: what the plan is, how far off the
-    event is, and how much of it is done and scheduled."""
+    """Header figures for `fit train show`."""
     sessions = plan.get("sessions", [])
     real = [s for s in sessions if not s.get("is_extra")]
     event = date.fromisoformat(plan["event_date"])
@@ -1507,7 +1339,8 @@ def plan_summary(plan: dict, today: date) -> dict:
         "sessions": len(sessions),
         "extras": len(sessions) - len(real),
         "completed": sum(1 for s in sessions if s.get("completed")),
-        "scheduled": sum(1 for s in real if s.get("status") == "scheduled"),
+        "scheduled": sum(1 for s in real if s.get("pushed")),
+        "stale": sum(1 for s in real if s.get("stale")),
         "targets": plan.get("targets", {}),
         "volume": plan.get("volume", {}),
         "benchmark_weeks": plan.get("benchmark_weeks", []),
@@ -1516,159 +1349,84 @@ def plan_summary(plan: dict, today: date) -> dict:
 
 
 def describe_session(session: dict) -> str:
-    """One human line for a session, e.g. 'Cycle long 45km @ 165W (brick)'.
-    The formatting split mirrors planner.describe_plan -> render_plan_saved:
-    the text is composed here, display.py only prints it."""
+    """One line per session, e.g. "Cycle long 45km @ 165W (brick)"."""
     name = session.get("workout_name", session.get("session_type", ""))
     if session.get("is_brick"):
         return f"{name} (brick)"
     if session.get("is_benchmark"):
-        # The suffix marks a test sitting among ordinary training. In week 0 the
-        # week itself is labelled "test" and holds nothing else, so it would only
-        # restate the workout name ("Cycle baseline 20min test (test)").
+        # Week 0 is labelled "test" and holds nothing else, so the suffix would
+        # only restate the name ("Cycle baseline 20min test (test)").
         return name if session.get("week") == 0 else f"{name} (re-test)"
     return name
 
 
+# --- the Garmin ledger ----------------------------------------------------
+#
+# A session is derived; what was *pushed* is a fact about a remote account and
+# cannot be. plan.json therefore stores only the description plus this ledger,
+# and everything else is re-expanded on every command. A pushed session renders
+# from what was actually sent, not from a fresh derivation, because Garmin has
+# no update endpoint and the watch holds the old copy.
+
+
+def ledger_key(session: dict) -> tuple:
+    """What identifies a session across re-derivations. Dates are a pure
+    function of the spec, so (date, sport) is stable — the same key
+    match_completion and scripts/diff_workout.py already use."""
+    return session["date"], session["sport"]
+
+
+def apply_pushed(sessions: list[dict], pushed: list[dict]) -> list[dict]:
+    """Copies of `sessions` overlaid with the ledger: a pushed session takes
+    back the params and name that were actually sent, and is flagged "stale"
+    when the live derivation has since moved away from them."""
+    by_key = {(e["date"], e["sport"]): e for e in pushed}
+    out = []
+    for session in sessions:
+        entry = by_key.get(ledger_key(session))
+        if entry is None:
+            out.append({**session, "pushed": False, "stale": False})
+            continue
+        stale = entry.get("params") != session.get("params")
+        out.append(
+            {
+                **session,
+                "params": entry.get("params", session.get("params")),
+                "workout_name": entry.get("workout_name", session.get("workout_name")),
+                "garmin_workout_id": entry.get("workout_id"),
+                "scheduled_workout_id": entry.get("schedule_id"),
+                "pushed": True,
+                "stale": stale,
+            }
+        )
+    return out
+
+
+def ledger_entry(session: dict, workout_id, schedule_id) -> dict:
+    """One ledger row: the identity, the ids, and exactly what was sent."""
+    return {
+        "date": session["date"],
+        "sport": session["sport"],
+        "workout_id": workout_id,
+        "schedule_id": schedule_id,
+        "workout_name": session["workout_name"],
+        "params": session["params"],
+    }
+
+
 def sync_window(sessions: list[dict], today: date, window_days: int) -> list[dict]:
-    """The still-unscheduled, non-extra sessions inside the rolling sync
-    horizon [today, today + window_days]. Re-running `fit train sync` simply
-    finds fewer of them, which is what makes it idempotent."""
+    """Not-yet-pushed, non-extra sessions in [today, today + window_days].
+    Re-running sync finds fewer, which is what makes it idempotent."""
     end = (today + timedelta(days=window_days)).isoformat()
     return [
         s
         for s in sessions
         if not s.get("is_extra")
-        and s.get("status") == "planned"
+        and not s.get("pushed")
         and today.isoformat() <= s["date"] <= end
     ]
 
 
-# The intensity params _apply_target writes — exactly one per session, which is
-# what makes an intensity-only rewrite possible at all. Volume is not
-# recoverable from a stored session: the template's `scale` dict is never
-# persisted, so a session knows its own size but not the rule that produced it.
-_INTENSITY_PARAMS = ("target_pace", "target_watts", "target_pace_100m")
-
-
-def _intensity_snapshot(params: dict) -> tuple:
-    """Everything _apply_target is allowed to write, in comparable form — the
-    three scalar targets plus each exercise's load, which is strength's
-    intensity and lives one level down in a list. Volume params are absent by
-    construction, which is what keeps "intensity only, never volume" a
-    structural property rather than a promise."""
-    return (
-        tuple(params.get(key) for key in _INTENSITY_PARAMS),
-        tuple(
-            exercise.get("target_weight_kg") for exercise in params.get("exercises", [])
-        ),
-    )
-
-
-def plan_week_roles(plan: dict) -> list[str]:
-    """'build' | 'recover' | 'taper' per week, recovered from a stored plan.
-    expand_plan computes these while building; retargeting has to reconstruct
-    them, and both must agree or a rewritten session would sit at a different
-    point on the curve than the one it replaced."""
-    template = GOAL_TEMPLATES[plan["goal"]]
-    progression = plan.get("progression", {})
-    phase_by_week = _assign_phases(
-        plan["weeks"],
-        template["phases"],
-        progression.get("taper_weeks", PROGRESSION_DEFAULTS["taper_weeks"]),
-    )
-    return _week_roles(
-        phase_by_week,
-        progression.get("build_recover", PROGRESSION_DEFAULTS["build_recover"]),
-    )
-
-
-def retargetable(sessions: list[dict], today: date) -> list[dict]:
-    """Sessions a retarget may rewrite. Skipped, in order: extras (no "params"
-    key at all — touching one is a KeyError), benchmarks (deliberately
-    untargeted; a test at a prescribed pace is not a test), anything already
-    scheduled on Garmin (a pushed workout is a frozen copy on the account and
-    garmin.py has no endpoint to update or delete it), and anything dated
-    before today. `>= today` matches sync_window's horizon: a session dated
-    today that is still "planned" has not been pushed."""
-    return [
-        s
-        for s in sessions
-        if not s.get("is_extra")
-        and not s.get("is_benchmark")
-        and s.get("status") == "planned"
-        and s["date"] >= today.isoformat()
-    ]
-
-
-def retarget_sessions(plan: dict, targets: dict, today: date) -> dict:
-    """Re-derive the intensity of every retargetable session against `targets`,
-    in place, and report what moved:
-
-        {"old_targets", "new_targets", "retargeted", "unchanged",
-         "frozen", "past", "changed"}
-
-    Mutates plan["sessions"] and plan["targets"] — the same in-place convention
-    `fit train sync` uses (and unlike match_completion, which returns copies);
-    cli.py writes the plan afterwards. "Pure" in this codebase means no I/O,
-    not no mutation.
-
-    Intensity only, never volume — see _intensity_snapshot. For strength that
-    means the weight on the bar: load *is* its intensity axis, and sets and
-    reps are its volume, so a retarget redraws the whole current -> goal line
-    from an updated e1RM and leaves 3x10 as 3x10."""
-    old_targets = copy.deepcopy(plan.get("targets", {}))
-    # The lift table is a function of the plan's week structure as well as of
-    # the targets, so it has to be rebuilt here rather than carried over from
-    # derive_targets — which has no idea how long this plan is.
-    _attach_weekly_lifts(targets, plan_week_roles(plan))
-    eligible = retargetable(plan["sessions"], today)
-    eligible_ids = {id(s) for s in eligible}
-
-    real = [s for s in plan["sessions"] if not s.get("is_extra")]
-    frozen = sum(
-        1
-        for s in real
-        if s.get("status") == "scheduled" and s["date"] >= today.isoformat()
-    )
-    past = sum(1 for s in real if s["date"] < today.isoformat())
-
-    changed = []
-    for session in eligible:
-        sport, session_type = session["sport"], session["session_type"]
-        # A hand-edited plan file could name a sport this goal never trained.
-        if sport == "strength":
-            if not targets.get("strength"):
-                continue
-        elif sport not in _SPORT_TARGETS or _SPORT_TARGETS[sport][0] not in targets:
-            continue
-        params = session["params"]
-        before = _intensity_snapshot(params)
-        _apply_target(sport, session_type, params, targets, session.get("week", 1))
-        if _intensity_snapshot(params) == before:
-            continue
-        # The stored name is derived from params, so it has to be rebuilt or it
-        # will disagree with the payload that eventually gets pushed.
-        session["workout_name"] = planner.workout_name(sport, session_type, params)
-        changed.append(session)
-
-    plan["targets"] = targets
-    return {
-        "old_targets": old_targets,
-        "new_targets": targets,
-        "retargeted": len(changed),
-        "unchanged": len(eligible_ids) - len(changed),
-        "frozen": frozen,
-        "past": past,
-        "changed": changed,
-    }
-
-
-def future_scheduled(sessions: list[dict], today: date) -> list[dict]:
-    """Scheduled sessions still ahead of today — what `fit train clear`
-    unschedules, and what `fit train import` warns about replacing."""
-    return [
-        s
-        for s in sessions
-        if s.get("status") == "scheduled" and s["date"] >= today.isoformat()
-    ]
+def future_pushed(pushed: list[dict], today: date) -> list[dict]:
+    """Ledger rows still ahead of today — what `train clear` unschedules."""
+    return [e for e in pushed if e["date"] >= today.isoformat()]

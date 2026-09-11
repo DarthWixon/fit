@@ -64,7 +64,13 @@ def test_activity_and_pbs_write_read_round_trip(tmp_path, monkeypatch):
     assert storage.read_pbs()["computed_from"] == 1
 
 
-def test_read_activities_warns_on_corrupt_file(tmp_path, monkeypatch):
+def test_corrupt_files_warn_for_activities_and_drop_silently_for_plans(
+    tmp_path, monkeypatch
+):
+    """The asymmetry is deliberate: a lost activity is history the user should
+    hear about, a lost plan file just drops out of the rep-progression
+    defaults. (read_training_plan is the third case and raises — it is the
+    whole feature's state; see storage.read_training_plan.)"""
     monkeypatch.setenv("FIT_DATA_DIR", str(tmp_path))
     storage.ensure_data_dir()
     (storage.activities_dir() / "bad.json").write_text("{not json")
@@ -73,41 +79,18 @@ def test_read_activities_warns_on_corrupt_file(tmp_path, monkeypatch):
     assert activities == []
     assert len(warnings) == 1 and "bad.json" in warnings[0]
 
-
-def test_plan_write_read_round_trip(tmp_path, monkeypatch):
-    monkeypatch.setenv("FIT_DATA_DIR", str(tmp_path))
-    storage.ensure_data_dir()
-    assert storage.plans_dir().is_dir()
-
-    plan = {
-        "id": "2026-07-03T09:00:00",
-        "sport": "run",
-        "workout_type": "intervals",
-        "params": {"reps": 6},
-        "workout_name": "Run intervals",
-        "payload": {},
-    }
-    storage.write_plan(plan)
+    # Two plans, so a filename that stopped keying on the id would show up as
+    # one clobbering the other rather than both surviving.
+    first = {"id": "2026-07-03T09:00:00", "sport": "run", "params": {"reps": 6}}
+    second = {"id": "2026-07-10T09:00:00", "sport": "cycle", "params": {"reps": 4}}
+    storage.write_plan(first)
+    storage.write_plan(second)
     (storage.plans_dir() / "bad.json").write_text("{not json")
+    assert storage.read_plans() == [first, second]
 
-    assert storage.read_plans() == [plan]
-
-
-def test_training_plan_write_read_round_trip(tmp_path, monkeypatch):
-    monkeypatch.setenv("FIT_DATA_DIR", str(tmp_path))
-    storage.ensure_data_dir()
-    assert storage.train_dir().is_dir()
-    # One active plan at a time, so there is nothing to read before the first write.
+    # And the third case: no training plan yet reads as None, not an
+    # exception — cli._require_training_plan prints its own message on that.
     assert storage.read_training_plan() is None
-
-    plan = {
-        "goal": "sprint_triathlon",
-        "event_date": "2026-11-15",
-        "sessions": [{"date": "2026-09-01", "sport": "run", "status": "planned"}],
-    }
-    storage.write_training_plan(plan)
-    assert storage.read_training_plan() == plan
-
-    # Re-importing replaces rather than accumulating.
-    storage.write_training_plan({**plan, "goal": "run_half"})
-    assert storage.read_training_plan()["goal"] == "run_half"
+    training_plan = {"goal": "standard_triathlon", "event_date": "2026-11-15"}
+    storage.write_training_plan(training_plan)
+    assert storage.read_training_plan() == training_plan

@@ -1,7 +1,6 @@
-"""Pure functions over activity dicts. No file I/O, no side effects.
+"""Pure functions over activity dicts. No I/O, no side effects.
 
-Every activity field access uses .get() since older activities may lack
-fields added later (e.g. avg_heart_rate, elevation_gain_m).
+Always .get() activity fields: older activities lack later additions.
 """
 
 import calendar
@@ -18,24 +17,16 @@ MILESTONES_KM = {
     "canoe": [(5.0, "5k"), (10.0, "10k")],
 }
 
-# An activity within [D, D*MILESTONE_TOLERANCE] counts as a "D-distance effort".
-# This is the "dedicated effort" PB: a whole activity whose total distance was
-# approximately D. Kept separate from SPLIT_DISTANCES_KM below, which finds the
-# fastest D-distance segment hidden inside any activity, however long.
+# "Dedicated effort" PB: a whole activity of [D, D*TOLERANCE]. Distinct from
+# SPLIT_DISTANCES_KM, which finds a D-segment hidden inside any activity.
 MILESTONE_TOLERANCE = 1.06
 
-# Distances-of-interest for "best split" extraction: the fastest continuous
-# segment of this length found anywhere within an activity's track, regardless
-# of the activity's total distance (e.g. the fastest 5k inside a 10k run).
-# Only activities imported from TCX/FIT carry the per-point stream needed
-# to compute this (see importers.py) — CSV-only activities never contribute
-# here.
-# Durations of interest for the power-duration curve, the time-axis sibling of
-# SPLIT_DISTANCES_KM. 20min is the one with a consumer (planner.derive_ride_watts
-# reads it as the FTP proxy); 1 and 5 minutes come free from the same sweep and
-# are what a rider actually reads a ride by.
+# Time-axis sibling of SPLIT_DISTANCES_KM. Only 20min has a consumer
+# (planner.derive_ride_watts, as the FTP proxy); the rest come free.
 POWER_WINDOWS_S = [(60, "1min"), (300, "5min"), (1200, "20min")]
 
+# Fastest continuous segment of this length anywhere in a track (the 5k inside
+# a 10k). Needs a point stream, so TCX/FIT only — never bare Strava CSV.
 SPLIT_DISTANCES_KM = {
     "run": [(5.0, "5k"), (10.0, "10k")],
     "cycle": [
@@ -49,25 +40,11 @@ SPLIT_DISTANCES_KM = {
     "canoe": [(1.0, "1k"), (5.0, "5k")],
 }
 
-# Coarse, Compendium-of-Physical-Activities-style approximate MET values for
-# the fitness index (see "Fitness index" in CLAUDE.md) — not pinned to a
-# specific citation, just directionally consistent with commonly-published
-# MET-vs-speed tables. run/walk: banded by pace in seconds/km, ascending
-# threshold (smaller = faster, matched first). swim: banded by seconds/100m,
-# same shape. cycle and canoe: banded by speed in km/h, descending threshold
-# (larger = faster, matched first) to match calc_pace's km/h convention for the
-# SPEED_TYPES. hike and squash are single flat values, not banded by pace/speed —
-# hike because trail pace is a poor intensity signal given terrain/elevation
-# variance; squash because it has no meaningful distance/pace at all (an
-# indoor court sport with no GPS track — see NO_DISTANCE_TYPES below);
-# strength because a gym session has no distance to band on and its intensity
-# lives in the weight on the bar, not in how far anything moved. 6.0 is the
-# Compendium's figure for vigorous free-weight training. Any
-# activity_type whose MET_TABLE value is a plain int/float rather than a list
-# of bands is treated as flat by met_for_activity. squash's 12.0 approximates
-# the Compendium of Physical Activities' "squash, general" figure — one of
-# the highest commonly-cited MET values among recreational sports, matching
-# its reputation as an explosive, high-intensity, stop-start court sport.
+# Coarse Compendium-style MET values for the fitness index. run/walk band by
+# s/km and swim by s/100m (ascending: smaller = faster, matched first);
+# cycle/canoe band by km/h (descending), matching SPEED_TYPES. A flat float
+# instead of bands means the type has no usable pace signal: hike (terrain),
+# squash (no GPS), strength (intensity is on the bar).
 MET_TABLE = {
     "run": [(240, 13.0), (300, 11.0), (390, 9.4), (float("inf"), 7.5)],
     "walk": [(560, 5.4), (650, 4.3), (float("inf"), 3.3)],
@@ -79,11 +56,8 @@ MET_TABLE = {
     "strength": 6.0,
 }
 
-# Used when duration_seconds is present but distance_km is 0/missing (e.g. an
-# indoor trainer ride, a pool session logged by time only) — there's no
-# pace/speed to band on, so fall back to each type's "moderate" MET as a
-# neutral guess. The avg_heart_rate multiplier (activity_load, below) is what
-# actually differentiates a hard session from an easy one in this case.
+# Time but no distance (indoor trainer, pool session): nothing to band on, so
+# use each type's "moderate" MET and let the HR multiplier do the work.
 _MET_FALLBACK_ZERO_DISTANCE = {
     "run": 9.4,
     "walk": 4.3,
@@ -94,35 +68,22 @@ _MET_FALLBACK_ZERO_DISTANCE = {
 }
 _MET_DEFAULT_UNKNOWN_TYPE = 6.0
 
-# One anomalous avg_heart_rate reading can't move a single day's load by more
-# than +/-25% (0.8 and 1.25 are reciprocal, i.e. symmetric in log-space).
+# Reciprocal, so one odd HR reading moves a day's load by at most ±25%.
 _HR_MULTIPLIER_MIN = 0.8
 _HR_MULTIPLIER_MAX = 1.25
 
 _EWMA_WINDOW_DAYS = 42  # Coggan's CTL/"Fitness" smoothing window
 
-# Activity types whose distance_km, even when nonzero, doesn't represent real
-# movement worth ranking or pacing on -- e.g. squash's FIT export reports a
-# tiny nonzero total_distance (~0.07km) that's accelerometer noise from
-# movement on an indoor court with no GPS track, not a meaningful travel
-# distance. calc_pace and _candidate_pbs (_longest_distance_pb specifically)
-# both check this set so a pace string / "longest distance" PB is never
-# fabricated from that noise. Extend for any future indoor/court-sport type
-# with the same characteristic. Strength is here for a different reason: a gym
-# session has no distance field at all, so there is nothing to suppress -- but
-# the set keeps calc_pace and the display's distance column honest if one ever
-# arrives (a treadmill-tagged session, a hand-written file).
+# distance_km is present but never meaningful: squash reports ~0.07km of
+# accelerometer noise, strength reports 0.0. Checked by calc_pace and
+# _longest_distance_pb so neither fabricates a figure from it.
 NO_DISTANCE_TYPES = {"squash", "strength"}
 
-# Activity types shown as speed (km/h) rather than pace (min/km). Cycling effort
-# is conventionally read as speed; hiking is slow and gradient-driven, so a
-# min/km pace reads awkwardly where km/h is the natural sense of progress; canoe
-# (paddling) likewise reads more naturally as km/h than a min/km pace.
+# Read as km/h rather than min/km — the natural sense of progress for each.
 SPEED_TYPES = {"cycle", "hike", "canoe"}
 
-# Fraction-of-max-heart-rate lower bounds for the 5 standard HR training zones
-# (Z1 50-60%, Z2 60-70%, Z3 70-80%, Z4 80-90%, Z5 90-100%+ of max_heart_rate).
-# A ratio below the first boundary still counts as zone 1 (no "zone 0" bucket).
+# Lower bounds as a fraction of max HR, Z1..Z5. Below the first still counts
+# as Z1 — there is no zone 0.
 HR_ZONE_BOUNDARIES = [0.5, 0.6, 0.7, 0.8, 0.9]
 
 
@@ -172,8 +133,7 @@ def filter_by_types(activities: list[dict], types: list[str]) -> list[dict]:
 
 
 def stats_date_range(window: str | None, reference: date) -> tuple[str, str] | None:
-    """window: 'week' | 'month' | 'year' | None. Returns (start_iso, end_iso)
-    inclusive, ending at reference, or None if window is None (no filtering)."""
+    """(start, end) inclusive ending at reference; None means no filtering."""
     if window is None:
         return None
     if window == "week":
@@ -186,9 +146,7 @@ def stats_date_range(window: str | None, reference: date) -> tuple[str, str] | N
 
 
 def months_ago(reference: date, n: int) -> str:
-    """ISO date n calendar months before reference, day clamped to the target
-    month's last valid day (e.g. Mar 31 minus 1 month -> Feb 28/29, not a
-    ValueError)."""
+    """n calendar months back, day clamped to the month's last valid day."""
     total_months = reference.year * 12 + (reference.month - 1) - n
     year, month = divmod(total_months, 12)
     month += 1
@@ -200,13 +158,9 @@ _TIMERANGE_PATTERN = re.compile(r"^(\d+)([dwmy])$")
 
 
 def parse_timerange(text: str, reference: date) -> tuple[str, str]:
-    """Rolling window ending at reference (inclusive). text: e.g. '10d', '2w',
-    '3m', '1y' (days/weeks/months/years). Unlike stats_date_range (calendar-
-    aligned to the start of the current week/month/year), this always counts
-    back exactly N units from reference. 'm' and 'y' delegate to months_ago for
-    its day-of-month clamping (year = 12 months, for free). Raises ValueError
-    on malformed input (bad unit, non-numeric/zero/negative N, or a window so
-    large it overflows date's supported range)."""
+    """'10d'/'2w'/'3m'/'1y' -> (start, end) rolling window ending at reference.
+    Unlike stats_date_range's calendar-aligned windows this counts back exactly
+    N units. Raises ValueError on a bad unit/count or an overflowing window."""
     match = _TIMERANGE_PATTERN.match(text.strip().lower())
     if not match:
         raise ValueError(
@@ -236,14 +190,14 @@ def parse_timerange(text: str, reference: date) -> tuple[str, str]:
 
 
 def _iso_week_key(date_iso: str) -> str:
-    """'2026-W24'-style bucket key for an ISO date."""
+    """'2026-W24' bucket key."""
     year, week, _ = date.fromisoformat(date_iso).isocalendar()
     return f"{year}-W{week:02d}"
 
 
 def week_start(date_iso: str) -> date:
-    """Monday of the ISO week containing date_iso. Public because training.py
-    lays a plan's weekly cadence out from it (week N = week_start + N weeks)."""
+    """Monday of date_iso's ISO week. Public: training.py lays a plan's weekly
+    cadence out from it."""
     day = date.fromisoformat(date_iso)
     return day - timedelta(days=day.weekday())
 
@@ -253,22 +207,16 @@ def _empty_week(key: str) -> dict:
 
 
 def is_current_week(week_key: str, reference: date) -> bool:
-    """True if week_key ('2026-W28') is the ISO week containing reference — i.e.
-    that week is still filling up, so its volume is not yet comparable to the
-    complete weeks beside it."""
+    """Is week_key still filling up? Its volume is not yet comparable."""
     return week_key == _iso_week_key(reference.isoformat())
 
 
 def weekly_volumes(activities: list[dict], through: date | None = None) -> list[dict]:
-    """One bucket per ISO week, oldest first, spanning every calendar week from
-    the first activity's through the last — weeks with no activity zero-fill
-    rather than collapsing, so the series reads as a timeline (a rest week is a
-    trough, not a missing bar). `through`, when given, extends the series to the
-    week containing that date, so the current week always appears even before
-    anything is logged in it.
+    """One bucket per ISO week, oldest first. Empty weeks zero-fill rather than
+    collapse, so a rest week is a trough and [-n:] really is the last n weeks.
+    `through` extends to that date's week, so the current week always appears.
 
-    Volume is measured in time: duration_seconds is what the sparklines plot.
-    distance_km rides along as a secondary figure."""
+    Volume is time: duration_seconds is what the sparklines plot."""
     weeks: dict[str, dict] = {}
     dates = []
     for activity in activities:
@@ -299,9 +247,8 @@ def weekly_volumes(activities: list[dict], through: date | None = None) -> list[
 
 
 def summarize_by_type(activities: list[dict]) -> list[dict]:
-    """One row per distinct activity type present, sorted alphabetically.
-    Returns [{"type": ..., "count": ..., "duration_seconds": ..., "distance_km": ...}, ...].
-    """
+    """One row per type present, alphabetical: {type, count, duration_seconds,
+    distance_km}."""
     types = sorted({a.get("type", "unknown") for a in activities})
     summary = []
     for activity_type in types:
@@ -322,11 +269,8 @@ def summarize_by_type(activities: list[dict]) -> list[dict]:
 def activity_calendar(
     activities: list[dict], reference: date, months: int = 2
 ) -> list[dict]:
-    """Month grids for the `months` calendar months ending with reference's,
-    oldest first. Returns [{"label": "June 2026", "weeks": [[0, 1, ...], ...],
-    "active_days": [3, 5, 12]}, ...] — weeks are Monday-first rows from
-    calendar.monthdayscalendar (0 = padding cell outside the month), and
-    active_days lists the days-of-month with at least one activity. Grid
+    """[{label, weeks, active_days}, ...] for the `months` months ending with
+    reference's, oldest first. weeks are Monday-first rows, 0 = padding. Grid
     layout lives here so display.py stays computation-free."""
     active_by_month: dict[tuple[int, int], set[int]] = {}
     for activity in activities:
@@ -352,8 +296,7 @@ def activity_calendar(
 
 
 def _dedupe_by_time(points: list[dict]) -> list[dict]:
-    """Collapse consecutive samples sharing an elapsed_seconds value, keeping
-    the last one."""
+    """Collapse samples sharing an elapsed_seconds, keeping the last."""
     deduped = []
     for point in points:
         if deduped and deduped[-1]["elapsed_seconds"] == point["elapsed_seconds"]:
@@ -364,8 +307,7 @@ def _dedupe_by_time(points: list[dict]) -> list[dict]:
 
 
 def _crossing_time(points: list[dict], j: int, needed_distance: float) -> float:
-    """Elapsed time at which the track first reaches needed_distance, linearly
-    interpolated between samples j-1 and j (which bracket the crossing)."""
+    """Interpolated time at which the track reaches needed_distance."""
     d_before, d_after = points[j - 1]["distance_km"], points[j]["distance_km"]
     t_before, t_after = points[j - 1]["elapsed_seconds"], points[j]["elapsed_seconds"]
     if d_after <= d_before:
@@ -375,19 +317,11 @@ def _crossing_time(points: list[dict], j: int, needed_distance: float) -> float:
 
 
 def best_power_window(points: list[dict], window_seconds: int) -> int | None:
-    """Highest average power sustained over any `window_seconds` window within
-    one activity's point stream, or None if the ride never covers that long
-    with power data. points: [{"elapsed_seconds": float, "power": int|None}, ...].
+    """Highest average power over any window of that length, or None.
 
-    The time-axis counterpart to fastest_split's distance axis: same O(n)
-    two-pointer sweep, maximising a mean rather than minimising a duration.
-    Power is integrated over real elapsed time rather than averaged per sample,
-    because FIT records are not reliably one per second — a stretch of sparse
-    samples must not count as heavily as a dense one.
-
-    This is what makes an FTP test readable. The stored avg_power is a
-    whole-activity mean, so a 20-minute effort inside a longer ride is
-    invisible in it; the best 20-minute window recovers it wherever it sits."""
+    Integrates over elapsed time, not per sample: FIT records are not reliably
+    one per second, so sparse stretches must not weigh as much as dense ones.
+    Recovers a 20-min effort that the whole-activity avg_power hides."""
     stream = [
         p
         for p in _dedupe_by_time(points)
@@ -424,17 +358,11 @@ def best_power_window(points: list[dict], window_seconds: int) -> int | None:
 
 
 def fastest_split(points: list[dict], target_distance_km: float) -> dict | None:
-    """Fastest continuous segment of target_distance_km within a single activity's
-    track. points: [{"elapsed_seconds": float, "distance_km": float}, ...], with
-    distance_km cumulative and non-decreasing. Returns {"duration_seconds": float}
-    or None if the track never covers target_distance_km.
+    """Fastest continuous segment of that distance, or None if never reached.
+    points carry cumulative, non-decreasing distance_km.
 
-    O(n) two-pointer sliding window: cumulative distance is monotonic, so as the
-    start index advances the required end index only ever moves forward too. Only
-    raw sample points are considered valid window starts (no start-interpolation) —
-    a standard simplification at realistic sampling rates that can only make the
-    reported time equal-or-slower than reality, never faster.
-    """
+    O(n) two-pointer sweep. Window starts are raw samples only (no
+    start-interpolation), which can only report equal-or-slower, never faster."""
     deduped = _dedupe_by_time(points)
     n = len(deduped)
     if n < 2:
@@ -470,27 +398,17 @@ def fastest_split(points: list[dict], target_distance_km: float) -> dict | None:
 
 
 def _hr_zone_index(hr: float, max_heart_rate: int) -> int:
-    """0-based zone index (0..4) for one heart-rate reading, clamped at both ends.
-
-    HR_ZONE_BOUNDARIES holds each zone's *lower* bound (zone 1's included), so
-    the count of boundaries met is 1-based already for zone 1 -- subtract 1 to
-    get a 0-based index, floored at 0 for anything below zone 1's floor."""
+    """0-based zone index, clamped. Boundaries are lower bounds, so the count
+    met is already 1-based; subtract 1 and floor at 0."""
     ratio = hr / max_heart_rate
     met = sum(1 for boundary in HR_ZONE_BOUNDARIES if ratio >= boundary)
     return max(met - 1, 0)
 
 
 def hr_zone_seconds(points: list[dict], max_heart_rate: int) -> dict:
-    """Time spent in each of the 5 HR zones, from a point stream of
-    {"elapsed_seconds": float, "hr": float | None, ...} dicts sorted ascending
-    by elapsed_seconds. The gap between two consecutive samples is attributed
-    to the earlier sample's zone (no interpolation between HR readings, same
-    simplification style as fastest_split's distance interpolation).
-
-    Returns {} if max_heart_rate <= 0 or fewer than 2 points carry an hr value
-    (can't derive a duration from a single sample) — same "nothing to report"
-    convention as fastest_split returning None.
-    """
+    """Seconds per HR zone. Each gap is attributed to the earlier sample's zone
+    (no interpolation). {} if max_heart_rate <= 0 or fewer than 2 points have
+    hr — a single sample has no duration."""
     if max_heart_rate <= 0:
         return {}
     if len([p for p in points if p.get("hr") is not None]) < 2:
@@ -513,10 +431,7 @@ def hr_zone_seconds(points: list[dict], max_heart_rate: int) -> dict:
 
 
 def hr_zone_percentages(hr_zones: dict | None) -> dict | None:
-    """Converts a stored hr_zones seconds dict into % of time per zone (keys
-    "zone1".."zone5", summing to ~100.0), or None if hr_zones is missing/empty
-    or all-zero.
-    """
+    """hr_zones seconds -> {"zone1".."zone5"} percentages, or None."""
     if not hr_zones:
         return None
     total = sum(hr_zones.get(f"zone{i}_seconds", 0) for i in range(1, 6))
@@ -582,15 +497,10 @@ def _elevation_pb(activities: list[dict]) -> dict:
 
 
 def estimated_1rm(weight_kg: float, reps: int) -> float:
-    """Epley one-rep-max estimate for a single set, rounded to 0.1kg.
+    """Epley e1RM for one set, to 0.1kg. The single source of truth, so a PB
+    and a plan target can't disagree.
 
-    The single source of truth for e1RM: strength PBs here and the target
-    derivation `fit train` uses both read it, so a plan can never be built
-    against a different number than the one the PB table shows.
-
-    A single rep is returned as-is rather than through the formula, which
-    would otherwise claim a 1RM 3% above a lift actually performed. Anything
-    non-positive is 0.0 -- a bodyweight or unrecorded set is not an e1RM."""
+    A single rep returns itself, not Epley's 3%-above extrapolation."""
     if weight_kg <= 0 or reps <= 0:
         return 0.0
     if reps == 1:
@@ -599,14 +509,8 @@ def estimated_1rm(weight_kg: float, reps: int) -> float:
 
 
 def total_weight_lifted(activity: dict) -> float:
-    """Tonnage: every rep of every set multiplied by what was on the bar, in
-    kilograms. 0.0 for anything with no weighted sets.
-
-    The one figure that says what a whole gym session actually was, in the way
-    distance says it for a run: two sessions of the same length are not the
-    same work, and unlike the heaviest set it moves with sets and reps as well
-    as load — so it registers a week where the plan added volume, not only one
-    where it added weight."""
+    """Tonnage: reps x load, summed. What distance is for a run — and unlike
+    the heaviest set it moves with volume as well as load."""
     total = 0.0
     for exercise in activity.get("exercises", []) or []:
         for one_set in exercise.get("sets", []) or []:
@@ -618,18 +522,13 @@ def total_weight_lifted(activity: dict) -> float:
 
 
 def _strength_pbs(activities: list[dict]) -> dict:
-    """PBs for the strength type, keyed by exercise name rather than by
-    distance/time label -- which is why this sits outside _candidate_pbs
-    rather than alongside its four helpers.
+    """{exercise: {heaviest_set_kg, heaviest_set_date, best_e1rm_kg,
+    best_e1rm_date}}. Keyed by exercise, not distance label — which is why this
+    sits outside _candidate_pbs.
 
-        {"deadlift": {"heaviest_set_kg": 120.0, "heaviest_set_date": "...",
-                      "best_e1rm_kg": 133.3, "best_e1rm_date": "..."}, ...}
-
-    Heaviest set and best e1RM are tracked independently: a heavy triple and a
-    lighter set of ten are different achievements, and either can be the more
-    recent one. Sets with no positive weight (bodyweight work, an unrecorded
-    load) contribute to neither. Ties keep the first activity seen, so the
-    result is deterministic for a given input order."""
+    The two metrics are independent: a heavy triple and a set of ten are
+    different achievements. Unweighted sets count for neither; ties keep the
+    first seen."""
     result: dict[str, dict] = {}
     for activity in activities:
         activity_date = activity.get("date")
@@ -655,12 +554,9 @@ def _strength_pbs(activities: list[dict]) -> dict:
 
 
 def _strength_new_pbs(candidate_pbs: dict, existing: dict) -> list[dict]:
-    """detect_new_pbs' strength path: `candidate_pbs` is _strength_pbs' nested
-    per-exercise output for the activities being imported, `existing` the same
-    for what came before. Keys are flattened to "{exercise}_heaviest_set_kg" /
-    "{exercise}_best_e1rm_kg" so the returned entries keep the same
-    {"key", "value"} shape every other PB category uses -- pbs.json itself
-    stays nested per exercise (see _strength_pbs)."""
+    """detect_new_pbs' strength path. Flattens the nested per-exercise shape to
+    "{exercise}_heaviest_set_kg" keys so entries match every other category;
+    pbs.json itself stays nested."""
     broken = []
     for name, candidate in candidate_pbs.items():
         current = existing.get(name, {})
@@ -672,7 +568,7 @@ def _strength_new_pbs(candidate_pbs: dict, existing: dict) -> list[dict]:
 
 
 def _candidate_pbs(activities: list[dict], activity_type: str) -> dict:
-    """Compute the best-of values for one type across a set of activities."""
+    """Best-of values for one type."""
     result: dict = {}
     if activity_type not in NO_DISTANCE_TYPES:
         result.update(_longest_distance_pb(activities))
@@ -683,12 +579,9 @@ def _candidate_pbs(activities: list[dict], activity_type: str) -> dict:
 
 
 def best_pb_per_label(type_pbs: dict) -> dict:
-    """Collapses dedicated (fastest_{label}_seconds) and split
-    (fastest_{label}_split_seconds) PBs sharing the same distance label down
-    to whichever is faster, for display purposes only -- pbs.json keeps both
-    stored independently (see "Split PBs" in CLAUDE.md) so detect_new_pbs can
-    still track each category. Non-time keys (longest_distance_km,
-    most_elevation_gain_m) pass through unchanged."""
+    """Collapse a label's dedicated and split PBs to whichever is faster, for
+    display only — pbs.json keeps both so detect_new_pbs can track each.
+    Non-time keys pass through."""
     labels: dict[str, dict] = {}
     passthrough: dict = {}
 
@@ -711,9 +604,9 @@ def best_pb_per_label(type_pbs: dict) -> dict:
 
     result = dict(passthrough)
     for label, candidates in labels.items():
-        value, date = min(candidates.values(), key=lambda vd: vd[0])
+        value, best_date = min(candidates.values(), key=lambda vd: vd[0])
         result[f"fastest_{label}_seconds"] = value
-        result[f"fastest_{label}_date"] = date
+        result[f"fastest_{label}_date"] = best_date
     return result
 
 
@@ -743,19 +636,12 @@ _HIGHER_IS_BETTER_KEYS = {"longest_distance_km", "most_elevation_gain_m"}
 
 
 def detect_new_pbs(new_activities: list[dict], current_pbs: dict) -> list[dict]:
-    """Returns [{"key": ..., "value": ...}, ...] for each PB category
-    `new_activities` broke, compared against current_pbs — no message
-    formatting; see display.render_new_pb_messages for turning these into
-    readable text.
+    """[{"key", "value"}] per PB category broken. Formatting is
+    display.render_new_pb_messages'.
 
-    Takes the whole import as one batch, measured against current_pbs once.
-    Comparing each activity separately against the same pre-import snapshot
-    reports a category once per activity that beats what was on disk before
-    the import started -- so importing nine paddles of a type with no history
-    announced nine "longest distance" PBs, in file order rather than
-    best-first. all_personal_bests already reduces a list of activities to its
-    best-of values per type, so the batch's own best is what gets compared.
-    """
+    The whole import is one batch, measured against current_pbs once: per
+    activity, nine paddles of a new type announced nine "longest distance" PBs
+    in file order rather than one at the batch's best."""
     broken = []
     for activity_type, candidate in all_personal_bests(new_activities).items():
         existing = current_pbs.get(activity_type, {})
@@ -780,28 +666,18 @@ def pbs_cache_is_valid(pbs: dict, activity_count: int) -> bool:
 
 
 def baseline_activity_count(activities: list[dict], baseline_date: str) -> int:
-    """How many activities fall on or before baseline_date -- what
-    fitness.json stores as "baseline_from"."""
+    """Activities on or before baseline_date — fitness.json's "baseline_from"."""
     return sum(1 for a in activities if a.get("date") and a["date"] <= baseline_date)
 
 
 def baseline_drift(baseline: dict, activities: list[dict]) -> dict | None:
-    """{"stored": N, "actual": M} when the history *behind* the fitness
-    baseline's date is no longer the history it was computed from, else None.
+    """{"stored", "actual"} when the history *behind* the baseline's date has
+    changed since it was cut, else None.
 
-    The baseline is deliberately sticky (see "Fitness index" in CLAUDE.md) --
-    100 means "the rolling load on that day", and silently recomputing it would
-    make the index un-trustable. But that only holds while the days before it
-    stay put. An activity imported later yet *dated* earlier -- a backfill, a
-    bulk export, another machine's import arriving over a sync -- changes what
-    the EWMA on the baseline date would be today, so the index reads high or
-    low by the difference, with nothing on screen to say so. This is the
-    `computed_from` check pbs.json already does, applied to the one number that
-    is not allowed to auto-recompute: it reports rather than repairs.
-
-    None when there is no baseline, or when it predates this check (no
-    "baseline_from" key) -- an unknown is not evidence of no drift, and there
-    is nothing useful to say about a figure with no recorded provenance."""
+    The baseline is sticky, so an activity imported later but dated earlier
+    silently shifts what 100 means. Reports, never repairs — auto-recomputing
+    would move the anchor under the user. None without a "baseline_from": an
+    unknown is not evidence of no drift."""
     if not baseline or "baseline_from" not in baseline:
         return None
     stored = baseline["baseline_from"]
@@ -812,8 +688,7 @@ def baseline_drift(baseline: dict, activities: list[dict]) -> dict | None:
 def _met_from_pace_bands(
     value_seconds: float, bands: list[tuple[float, float]]
 ) -> float:
-    """bands sorted ascending by threshold; first band where value_seconds <=
-    threshold wins (smaller pace-seconds = faster = higher-MET band)."""
+    """Ascending bands; first with value_seconds <= threshold wins."""
     for threshold, met in bands:
         if value_seconds <= threshold:
             return met
@@ -821,8 +696,7 @@ def _met_from_pace_bands(
 
 
 def _met_from_speed_bands(speed_kmh: float, bands: list[tuple[float, float]]) -> float:
-    """bands sorted descending by threshold; first band where speed_kmh >=
-    threshold wins."""
+    """Descending bands; first with speed_kmh >= threshold wins."""
     for threshold, met in bands:
         if speed_kmh >= threshold:
             return met
@@ -830,9 +704,8 @@ def _met_from_speed_bands(speed_kmh: float, bands: list[tuple[float, float]]) ->
 
 
 def met_for_activity(activity: dict) -> float:
-    """Coarse MET value for one activity, banded by pace/speed via MET_TABLE
-    -- except types whose MET_TABLE entry is a flat int/float (hike, squash)
-    rather than a list of (threshold, met) bands, which are returned as-is."""
+    """MET for one activity via MET_TABLE. A flat float entry is returned
+    as-is; a list of bands is matched on pace/speed."""
     activity_type = activity.get("type", "")
     if activity_type not in MET_TABLE:
         return _MET_DEFAULT_UNKNOWN_TYPE
@@ -859,13 +732,9 @@ def met_for_activity(activity: dict) -> float:
 
 
 def median_hr_by_type(activities: list[dict]) -> dict[str, float]:
-    """Median avg_heart_rate across all HR-tagged activities, grouped by type.
-    Only activities with avg_heart_rate present contribute (TCX/FIT
-    imports only — bare Strava CSV rows never set this
-    field). Inclusive of whichever activity is later being scored against it:
-    for the very first HR-tagged activity of a type, its own median (of a
-    1-element list) is itself, so activity_load's multiplier trivially
-    resolves to 1.0 for it — the "no peers yet" case falls out for free."""
+    """Median avg_heart_rate per type. Inclusive of the activity later scored
+    against it, so a type's first HR-tagged activity gets a multiplier of 1.0
+    for free."""
     by_type: dict[str, list[float]] = {}
     for activity in activities:
         hr = activity.get("avg_heart_rate")
@@ -876,10 +745,8 @@ def median_hr_by_type(activities: list[dict]) -> dict[str, float]:
 
 
 def activity_load(activity: dict, median_hr: dict[str, float]) -> float:
-    """MET-hours base (met_for_activity(activity) * duration_hours), scaled by
-    a clamped avg_heart_rate/median_hr[type] ratio when avg_heart_rate is
-    present and median_hr has a peer group for this type. median_hr is a
-    frozen snapshot the caller computes once (see median_hr_by_type)."""
+    """MET-hours, scaled by a clamped HR-vs-peer-median ratio when available.
+    median_hr is a snapshot the caller computes once."""
     met = met_for_activity(activity)
     duration_hours = (activity.get("duration_seconds") or 0) / 3600
     base_load = met * duration_hours
@@ -895,9 +762,7 @@ def activity_load(activity: dict, median_hr: dict[str, float]) -> float:
 
 
 def daily_load_totals(activities: list[dict]) -> dict[str, float]:
-    """{date_iso: summed activity_load()} across all activities on that date —
-    same-day multiple activities simply add. Activities with no "date" field
-    are skipped (mirrors weekly_volumes's same skip)."""
+    """{date_iso: summed load}. Undated activities are skipped."""
     median_hr = median_hr_by_type(activities)
     totals: dict[str, float] = {}
     for activity in activities:
@@ -911,14 +776,11 @@ def daily_load_totals(activities: list[dict]) -> dict[str, float]:
 
 
 def fitness_ewma_daily(activities: list[dict], as_of: date) -> list[dict]:
-    """Dense [{"date": ..., "value": ...}, ...] series for every calendar day
-    from the first-ever activity's date through as_of inclusive, zero-filling
-    load on days without activity (this is what lets rest/off-seasons pull
-    the EWMA down via decay). Seeded as value[first_day] = load[first_day]
-    (rather than 0) to avoid a several-week ramp-up artifact for someone
-    whose app history starts mid-career. value[t] = value[t-1] +
-    (load[t] - value[t-1]) / 42 thereafter (Coggan's CTL formula). Returns
-    [] if there's no data on/before as_of."""
+    """Dense daily 42-day EWMA (Coggan CTL) from the first activity to as_of.
+    Every calendar day, so rest decays the number.
+
+    Seeded at the first day's own load, not 0, to avoid a fake multi-week
+    ramp-up for anyone backfilling history."""
     totals = daily_load_totals(activities)
     if not totals:
         return []
@@ -941,9 +803,7 @@ def fitness_ewma_daily(activities: list[dict], as_of: date) -> list[dict]:
 
 
 def compute_baseline_value(activities: list[dict], as_of: date) -> float | None:
-    """Raw (unscaled) EWMA value as of as_of — the single source of truth used
-    both to establish the initial fitness.json baseline (lazy-init) and to
-    re-anchor it (fit fitness-reset). None if there's no data yet."""
+    """Raw EWMA at as_of. Used for both lazy-init and `fit fitness-reset`."""
     series = fitness_ewma_daily(activities, as_of)
     return series[-1]["value"] if series else None
 
@@ -957,20 +817,14 @@ def rescale_to_index(raw_series: list[dict], baseline_value: float) -> list[dict
 
 
 def filter_series_by_date(series: list[dict], start: str, end: str) -> list[dict]:
-    """Like filter_by_date, but for a [{"date": ..., ...}, ...] series rather
-    than activity dicts — used to window an already-computed index series for
-    display, without re-running the EWMA over a truncated activity list
-    (which would wrongly discard the pre-window decay/carry-over)."""
+    """filter_by_date for a {"date": ...} series. Windows an already-computed
+    index rather than re-running the EWMA, which would lose pre-window decay."""
     return [row for row in series if start <= row["date"] <= end]
 
 
 def weekly_fitness_index(index_series: list[dict]) -> list[dict]:
-    """Resamples a daily [{"date": ..., "index": ...}, ...] series to one
-    point per ISO week — the week's last value (an EWMA is an already-smoothed
-    level, not an additive quantity, so weekly_volumes's sum-based bucketing
-    doesn't apply here; we want each week's closing value, like a stock
-    index chart). Returns [{"week": "2026-W24", "index": 103.4}, ...] sorted
-    by week — same key shape/sort convention as weekly_volumes."""
+    """Daily index -> one point per ISO week, the week's *last* value. An EWMA
+    is a level, not an additive quantity, so weekly_volumes' sum doesn't apply."""
     weeks: dict[str, dict] = {}
     for row in index_series:
         key = _iso_week_key(row["date"])

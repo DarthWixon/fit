@@ -1,6 +1,5 @@
-"""Renders compute.py outputs (and raw activity lists) as Rich terminal output.
-No file I/O. Any math needed to build a composite view (e.g. weekly volumes for
-the dashboard) is delegated to compute.py, never done inline here.
+"""Rich terminal rendering. No I/O, no arithmetic — any maths a view needs is
+delegated to compute.py.
 """
 
 from datetime import date
@@ -15,7 +14,7 @@ console = Console()
 
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
 
-# Z1..Z5, cool -> hot, matching the standard training-zone colour convention.
+# Z1..Z5, cool -> hot.
 _HR_ZONE_COLORS = ["blue", "green", "yellow", "dark_orange", "red"]
 _HR_ZONE_BAR_WIDTH = 10
 
@@ -32,13 +31,15 @@ def render_usage() -> None:
         "fit pbs [--months N]                        personal bests table\n"
         "fit stats [--week|--month|--year]           totals + breakdown by type\n"
         "fit fitness                                 current fitness index + trend\n"
-        "fit fitness-reset                           re-anchor fitness baseline to today\n"
+        "fit fitness-reset [--as-of DATE]            re-anchor the fitness baseline\n"
         "fit import <path>                           TCX/FIT file or Strava export\n"
         "fit garmin-sync [--days N]                  pull recent Garmin activities\n"
+        "fit gs                                      = garmin-sync --days 7\n"
         "fit plan --sport S --type T [--no-push]     build a workout, push to Garmin\n"
+        "fit plan ... --schedule YYYY-MM-DD          also put it on the Garmin calendar\n"
         "fit train import <plan.yaml>                expand a goal into a full plan\n"
         "fit train show [--weeks N]                  the plan, with what's done\n"
-        "fit train sync [--days N] [--dry-run]       schedule the next sessions\n"
+        "fit train sync [--days N] [--dry-run]       push + schedule the next sessions\n"
         "fit train clear                             unschedule future sessions\n"
         "fit history [N]                             last N activities (default 10)\n"
         "fit calendar                                active days, last 2 months\n"
@@ -50,8 +51,8 @@ def render_usage() -> None:
 
 
 def render_sparkline(data: list[float], label: str, partial_last: bool = False) -> None:
-    """partial_last dims the final bar — for a still-in-progress week, whose
-    volume is low simply because the week isn't over yet."""
+    """partial_last dims the final bar: a week that is only low because it is
+    not over yet."""
     if not data:
         console.print(f"{label}: [dim](no data)[/dim]")
         return
@@ -69,9 +70,8 @@ def render_sparkline(data: list[float], label: str, partial_last: bool = False) 
 
 
 def _format_effort(activity: dict) -> str:
-    """Total weight lifted for a gym session, average power for a ride that
-    has it, else pace. The column is whatever best says how hard the session
-    was in that sport's own terms."""
+    """Tonnage for a gym session, avg power for a ride that has it, else pace —
+    whatever says how hard the session was in that sport's own terms."""
     if activity.get("type") == "strength":
         tonnage = compute.total_weight_lifted(activity)
         return f"{tonnage:,.0f}kg" if tonnage else "—"
@@ -90,10 +90,8 @@ def _format_distance(activity: dict) -> str:
 
 
 def _format_hr_zones(activity: dict) -> Text | str:
-    """Segmented colour bar (Z1 blue -> Z5 red), each zone's block-character
-    width proportional to its % of time in that zone. "—" when the activity
-    has no hr_zones (predates this feature, Strava-CSV-only import, or
-    max_heart_rate wasn't configured at import time)."""
+    """Segmented colour bar, width proportional to each zone's share. "—" when
+    the activity has no hr_zones (pre-feature, CSV-only, or max HR unset)."""
     percentages = compute.hr_zone_percentages(activity.get("hr_zones"))
     if percentages is None:
         return "—"
@@ -119,8 +117,7 @@ def render_history_table(activities: list[dict], n: int) -> None:
     table.add_column("Type")
     table.add_column("Distance", justify="right")
     table.add_column("Duration", justify="right")
-    # "Effort", not "Pace": the column holds whichever measure means something
-    # for that sport — pace, average power, or tonnage (see _format_effort).
+    # "Effort", not "Pace": pace, power or tonnage, per sport.
     table.add_column("Effort", justify="right")
     table.add_column("HR Zones", justify="left")
 
@@ -164,33 +161,30 @@ def render_pbs_table(
         for key, value in collapsed.items():
             if key.endswith("_date"):
                 continue
-            date = collapsed.get(_date_key_for(key), "")
+            pb_date = collapsed.get(_date_key_for(key), "")
             label, formatted = _format_pb_metric(key, value)
-            table.add_row(activity_type, label, formatted, date)
+            table.add_row(activity_type, label, formatted, pb_date)
 
     console.print(table)
 
-    # Strength gets its own table rather than rows in the one above: its PBs
-    # are keyed by exercise, not by distance/time label, so one row per
-    # exercise carries both of its metrics side by side (see compute.
-    # _strength_pbs). Same title, same sports filter.
+    # Its own table: strength PBs are keyed by exercise, not distance label, so
+    # one row per exercise carries both metrics side by side.
     if pbs.get("strength") and not (sports and "strength" not in sports):
         _render_strength_pbs_table(pbs["strength"], f"Strength {title}")
 
 
 def _humanise_exercise(name: str) -> str:
-    """ "shoulder_press" -> "Shoulder press". Exercise names are stored in the
-    normalised lowercase/underscore form FIT reports them in."""
+    """ "shoulder_press" -> "Shoulder press"."""
     return name.replace("_", " ").capitalize()
 
 
-def _format_kg_with_date(value, date: str | None) -> str:
-    """ "120kg (2026-08-01)", the date dimmed. Both strength metrics carry
-    their own date, so a shared Date column would have to pick one."""
+def _format_kg_with_date(value, pb_date: str | None) -> str:
+    """ "120kg (2026-08-01)". Both metrics carry their own date, so a shared
+    Date column would have to pick one."""
     if value is None:
         return "—"
     weight = f"{value:g}kg"
-    return f"{weight} [dim]({date})[/dim]" if date else weight
+    return f"{weight} [dim]({pb_date})[/dim]" if pb_date else weight
 
 
 def _render_strength_pbs_table(strength_pbs: dict, title: str) -> None:
@@ -235,9 +229,7 @@ def _render_type_summary_table(activities: list[dict], title: str) -> None:
 
 
 def render_sports_summary(activities: list[dict]) -> None:
-    """Dashboard block: always covers every activity type present in the given
-    activities — callers must not pre-filter by sport (pre-filtering by date
-    is fine)."""
+    """Callers must not pre-filter by sport; by date is fine."""
     _render_type_summary_table(activities, title="Sports Summary")
 
 
@@ -258,9 +250,7 @@ def _render_month_block(month: dict) -> Text:
 
 
 def render_calendar(months: list[dict]) -> None:
-    """months: compute.activity_calendar's output — one grid dict per month,
-    oldest first, rendered side by side as columns. Active days render bold
-    green; padding cells (0) blank."""
+    """activity_calendar's grids, side by side. Active days bold green."""
     grid = Table.grid(padding=(0, 2, 0, 0))
     for _ in months:
         grid.add_column()
@@ -275,16 +265,9 @@ def render_fitness_index(
     window_label: str | None = None,
     drift: dict | None = None,
 ) -> None:
-    """Headline + trend sparkline for the fitness index (see "Fitness index" in
-    CLAUDE.md). current_index/baseline_date always reflect full history as of
-    today — callers must not pre-filter by sport or time range. weekly_series
-    ([{"week": ..., "index": ...}, ...] from compute.weekly_fitness_index) may
-    be windowed by the caller (e.g. for --timerange) since only the trend
-    line, not the headline, is meant to narrow. drift is
-    compute.baseline_drift's dict, warned about under the headline: the
-    baseline stays as it is (that is the point of it), so the only useful
-    response is to say the anchor no longer matches its own history and name
-    the command that re-cuts it."""
+    """Headline + trend sparkline. The headline is always full-history as of
+    today — callers must not pre-filter it; only weekly_series may be windowed.
+    drift is warned about but never repaired: the fix is the user's to run."""
     if current_index is None:
         console.print("[dim]Fitness index: not enough data yet.[/dim]")
         return
@@ -326,7 +309,7 @@ def render_fitness_reset(old_baseline: dict, new_baseline: dict) -> None:
 
 
 def _last_week_partial(weekly: list[dict], today: date) -> bool:
-    """Whether a weekly series ends on the still-in-progress current week."""
+    """Does the series end on the still-in-progress current week?"""
     return bool(weekly) and compute.is_current_week(weekly[-1]["week"], today)
 
 
@@ -365,22 +348,14 @@ def render_dashboard(
     window_months: int = 0,
     window_label: str | None = None,
 ) -> None:
-    """config is the storage.read_config() dict (history_count, dashboard_weeks,
-    show_* toggles). fitness is cli's snapshot dict {"current", "baseline_date",
-    "weekly"} — always full-history/as-of-today, never narrowed by sports or
-    window (see "Fitness index" in CLAUDE.md). The volume and fitness-trend
-    sparklines are capped to the last config["dashboard_weeks"] weeks (0 = all),
-    unless --timerange is already driving the window. today anchors the volume
-    series' final week (see compute.weekly_volumes) and marks it as partial.
+    """Blocks: fitness -> volume sparkline -> time-range banner -> history ->
+    calendar -> PBs -> sports summary.
 
-    Block order: fitness index -> weekly volume sparkline -> time range banner
-    -> history table -> calendar -> personal bests -> sports summary. Sports
-    summary always renders last and is never restricted by --sport/config
-    sports — even when the sport filter matches nothing elsewhere on the
-    page, it still shows every type present."""
-    # Cap the volume/fitness sparklines to a recent window, unless --timerange
-    # is already driving the window (a truthy window_label), in which case the
-    # explicit flag wins and nothing is further truncated.
+    fitness is cli._fitness_snapshot's dict, always full-history/as-of-today.
+    Sports summary renders last over the *unfiltered* list, so it shows every
+    type even when the sport filter matches nothing else on the page.
+    Sparklines cap to config["dashboard_weeks"] unless --timerange drives it."""
+    # --timerange, when given, wins over the config cap.
     weeks_cap = 0 if window_label else config["dashboard_weeks"]
 
     if config["show_fitness_index"]:
@@ -458,8 +433,7 @@ def _format_duration(total_seconds: int) -> str:
 
 
 def _format_seconds_colon(total_seconds) -> str:
-    """mm:ss / h:mm:ss style used only for "New PB" messages, distinct from
-    _format_duration's "1h02m"/"5m30s" style used in tables."""
+    """mm:ss for "New PB" messages, distinct from the tables' _format_duration."""
     minutes, seconds = divmod(round(total_seconds), 60)
     hours, minutes = divmod(minutes, 60)
     if hours:
@@ -468,18 +442,16 @@ def _format_seconds_colon(total_seconds) -> str:
 
 
 def _parse_pb_key(key: str) -> dict:
-    """Single source of truth for the pbs.json key-naming convention:
-    fastest_{label}_seconds / fastest_{label}_split_seconds / longest_distance_km
-    / most_elevation_gain_m. Returns {"category", "label", "date_key"}."""
+    """The pbs.json key-naming convention in one place ->
+    {"category", "label", "date_key"}."""
     date_key = None
     for suffix in ("_seconds", "_km", "_m", "_kg"):
         if key.endswith(suffix):
             date_key = key[: -len(suffix)] + "_date"
             break
 
-    # Strength keys are "{exercise}_heaviest_set_kg" / "{exercise}_best_e1rm_kg"
-    # (compute._strength_new_pbs), so the exercise is whatever precedes the
-    # metric suffix -- it may itself contain underscores ("shoulder_press").
+    # "{exercise}_heaviest_set_kg" — the exercise may itself contain
+    # underscores, so it is whatever precedes the metric suffix.
     for suffix, category in (
         ("_heaviest_set_kg", "strength_heaviest"),
         ("_best_e1rm_kg", "strength_e1rm"),
@@ -527,10 +499,7 @@ def _format_pb_metric(key: str, value) -> tuple[str, str]:
 
 
 def render_new_pb_messages(new_pbs: list[dict]) -> None:
-    """new_pbs: [{"key": ..., "value": ...}, ...] as returned by
-    compute.detect_new_pbs. Message text/format must stay byte-identical to the
-    prior inline f-strings — this is display.py's only formatting concern for
-    "New PB" announcements, kept distinct from the table's duration style."""
+    """detect_new_pbs' entries as "New fastest 5k: 21:40"-style lines."""
     for pb in new_pbs:
         parsed = _parse_pb_key(pb["key"])
         value = pb["value"]
@@ -557,21 +526,22 @@ def render_new_pb_messages(new_pbs: list[dict]) -> None:
 
 
 def render_plan_recommendations(recs: dict) -> None:
-    """recs: planner.recommend_defaults' output — {key: {"default", "why"}}.
-    Prints nothing when there was no history to derive from."""
+    """recommend_defaults' output; prints nothing when empty."""
     if not recs:
         return
     console.print("[dim]Recommended from your history:[/dim]")
     for rec in recs.values():
         if "default" in rec:
             console.print(f"[dim]  {rec['default']} — {rec['why']}[/dim]")
-        else:  # "derive" recs resolve in the prompt itself; just show why
+        else:
+            # Either a "derive" rec, whose value resolves in the prompt
+            # itself, or a why-only one reporting a rejected measurement.
+            # Both have only the why worth showing here.
             console.print(f"[dim]  {rec['why']}[/dim]")
 
 
 def render_plan_saved(plan: dict, step_lines: list[str]) -> None:
-    """step_lines: planner.describe_plan's output — one line per top-level
-    step (pace/power formatting happens there, not here)."""
+    """step_lines come from planner.describe_plan, already formatted."""
     console.print(f"[bold]{plan['workout_name']}[/bold]")
     for line in step_lines:
         console.print(f"  {line}")
@@ -602,7 +572,7 @@ _TARGET_LABELS = {
 
 
 def _format_target_value(key: str, value) -> str:
-    """One target in its own units: '22:30', '1:45/100m', '245W'."""
+    """'22:30', '1:45/100m', '245W'."""
     _, kind = _TARGET_LABELS[key]
     if kind == "time":
         return _format_seconds_colon(value)
@@ -612,8 +582,7 @@ def _format_target_value(key: str, value) -> str:
 
 
 def _format_lift_target(lift: str, entry: dict) -> str:
-    """'Squat 105 → 122.5kg' — a strength target is a journey, not a figure,
-    so both ends are shown."""
+    """'Squat 105 → 122.5kg': a strength target is a journey, not a figure."""
     name = lift.replace("_", " ").capitalize()
     return (
         f"{name} {entry['current_e1rm_kg']:g} → {entry['goal_e1rm_kg']:g}kg"
@@ -623,9 +592,7 @@ def _format_lift_target(lift: str, entry: dict) -> str:
 
 
 def _format_targets(targets: dict) -> str:
-    """'Run 5k 22:30 · Swim CSS 1:45/100m · Bike FTP 245W' from
-    training.derive_targets' dict. Strength lifts are appended in the same
-    run, each as a current → goal e1RM pair."""
+    """'Run 5k 22:30 · Bike FTP 245W', with strength lifts appended as pairs."""
     parts = [
         f"{label} {_format_target_value(key, targets[key])}"
         for key, (label, _) in _TARGET_LABELS.items()
@@ -639,9 +606,8 @@ def _format_targets(targets: dict) -> str:
 
 
 def render_training_plan(summary: dict, weeks: list[dict]) -> None:
-    """summary: training.plan_summary's dict. weeks: training.group_by_week's
-    output, its sessions already run through training.match_completion. All
-    the grouping and counting happens there — this only prints."""
+    """plan_summary's dict + group_by_week's rows. All grouping and counting
+    happens there; this only prints."""
     console.print(f"[bold]{summary['label']}[/bold] — {summary['description']}")
 
     days = summary["days_to_go"]
@@ -657,7 +623,7 @@ def render_training_plan(summary: dict, weeks: list[dict]) -> None:
     )
     console.print(
         f"{summary['completed']}/{summary['sessions'] - summary['extras']} sessions "
-        f"done · {summary['scheduled']} scheduled on Garmin · "
+        f"done · {summary['scheduled']} on the Garmin calendar · "
         f"{summary['extras']} extras (tracked locally)"
     )
     targets = _format_targets(summary.get("targets", {}))
@@ -667,21 +633,27 @@ def render_training_plan(summary: dict, weeks: list[dict]) -> None:
     if volume.get("why"):
         scale = round(volume.get("start_scale", 1) * 100)
         console.print(f"[dim]Starting volume: {scale}% — {volume['why']}[/dim]")
-    # Not `weeks` — that is the parameter holding the grouped session weeks the
-    # table below iterates, and shadowing it here made this function raise on
-    # every plan that schedules a re-test.
+    # Not `weeks`: that is the parameter the table below iterates, and
+    # shadowing it here made this raise on every plan with a re-test.
     if summary.get("test_week"):
         console.print(
             "[dim]Week 0 is a test week: every target below was derived from "
-            "your history, so do the tests, `fit garmin-sync`, then `fit train "
-            "retarget` to rebuild the plan at your measured fitness.[/dim]"
+            "your history, so do the tests and `fit garmin-sync` — the plan "
+            "re-derives from them automatically.[/dim]"
         )
     benchmark_weeks = summary.get("benchmark_weeks") or []
     if benchmark_weeks:
         console.print(
             f"[dim]Re-test weeks: {', '.join(str(w) for w in benchmark_weeks)} — "
-            "do the test, sync it back, then `fit train retarget` to rebuild "
-            "the rest at your new fitness.[/dim]"
+            "do the test and `fit garmin-sync`; the plan re-derives from it "
+            "automatically.[/dim]"
+        )
+    if summary.get("stale"):
+        console.print(
+            f"[dim]{summary['stale']} session(s) marked * were pushed at an "
+            "earlier target and can't be updated — Garmin has no edit endpoint. "
+            "`fit train clear` removes them so they re-push at your current "
+            "fitness.[/dim]"
         )
     for warning in summary.get("warnings", []):
         console.print(f"[yellow]note:[/yellow] {warning}")
@@ -715,10 +687,14 @@ def _format_session_name(session: dict) -> str:
 
 
 def _format_session_garmin(session: dict) -> str:
+    """A pushed session is a frozen copy on the account; "stale" means the live
+    derivation has moved on from what the watch holds."""
     if session.get("is_extra"):
         return "[dim]—[/dim]"
-    if session.get("status") == "scheduled":
-        return "[green]scheduled[/green]"
+    if session.get("stale"):
+        return "[yellow]on watch*[/yellow]"
+    if session.get("pushed"):
+        return "[green]on watch[/green]"
     return "[dim]planned[/dim]"
 
 
@@ -729,9 +705,7 @@ def _format_session_done(session: dict) -> str:
 
 
 def render_training_sync_preview(sessions: list[dict]) -> None:
-    """What `fit train sync` is about to push, printed before it asks to go
-    ahead. Each line is one workout that will be created on Garmin Connect and
-    placed on the calendar."""
+    """What sync is about to push, printed before it asks to go ahead."""
     console.print(
         f"[bold]About to push {len(sessions)} workout(s) to Garmin Connect[/bold] "
         f"({sessions[0]['date']} to {sessions[-1]['date']}):"
@@ -741,7 +715,7 @@ def render_training_sync_preview(sessions: list[dict]) -> None:
 
 
 def render_training_synced(summary: dict) -> None:
-    """summary: {"scheduled": n, "already": n, "window_days": n, "failed": [...]}."""
+    """{scheduled, already, window_days, failed}."""
     console.print(
         f"Scheduled {summary['scheduled']} session(s) on the Garmin calendar "
         f"for the next {summary['window_days']} days "
@@ -754,77 +728,6 @@ def render_training_synced(summary: dict) -> None:
             "[dim]They will appear in the Garmin Connect calendar on the "
             "watch's next sync.[/dim]"
         )
-
-
-def render_training_retargeted(summary: dict, dry_run: bool = False) -> None:
-    """summary: training.retarget_sessions' dict. Follows render_fitness_reset's
-    old -> new shape. One line per target that actually moved, never one per
-    session: intensity is a pure function of the target, so eighty session
-    lines would carry nothing the two target lines do not."""
-    old, new = summary["old_targets"], summary["new_targets"]
-    moved = [
-        key
-        for key, _ in _TARGET_LABELS.items()
-        if new.get(key) is not None and old.get(key) != new.get(key)
-    ]
-    # A lift moves when its measured starting point does — the goal is where
-    # the plan was always aiming, so quoting that as the change would hide the
-    # only thing a re-test actually told you.
-    old_lifts, new_lifts = old.get("strength") or {}, new.get("strength") or {}
-    moved_lifts = [
-        lift
-        for lift, entry in new_lifts.items()
-        if (old_lifts.get(lift) or {}).get("current_e1rm_kg")
-        != entry.get("current_e1rm_kg")
-    ]
-
-    if not moved and not moved_lifts:
-        console.print(
-            "Targets unchanged — nothing to rewrite. "
-            "[dim]Your latest history derives the same numbers the plan already has.[/dim]"
-        )
-        return
-
-    verb = "Would retarget" if dry_run else "Retargeted"
-    console.print(
-        f"{verb} {summary['retargeted']} future session(s) · "
-        f"{summary['unchanged']} already on target · "
-        f"{summary['frozen']} left scheduled on Garmin · {summary['past']} in the past"
-    )
-    for key in moved:
-        label = _TARGET_LABELS[key][0]
-        was = (
-            _format_target_value(key, old[key])
-            if old.get(key) is not None
-            else "not set"
-        )
-        console.print(
-            f"  [bold]{label}[/bold] {was} → {_format_target_value(key, new[key])}"
-        )
-        why = (new.get("why") or {}).get(key)
-        if why:
-            console.print(f"    [dim]{why}[/dim]")
-
-    for lift in moved_lifts:
-        was = (old_lifts.get(lift) or {}).get("current_e1rm_kg")
-        console.print(
-            f"  [bold]{lift.replace('_', ' ').capitalize()}[/bold] "
-            f"{f'{was:g}kg' if was is not None else 'not set'} → "
-            f"{new_lifts[lift]['current_e1rm_kg']:g}kg e1RM, "
-            f"aiming at {new_lifts[lift]['goal_e1rm_kg']:g}kg"
-        )
-        why = (new.get("why") or {}).get(f"{lift}_e1rm_kg")
-        if why:
-            console.print(f"    [dim]{why}[/dim]")
-
-    if summary["frozen"]:
-        console.print(
-            f"[dim]note: {summary['frozen']} session(s) already on your Garmin "
-            "calendar keep their old targets — a pushed workout can't be edited. "
-            "Run `fit train clear` first if you want those rewritten too.[/dim]"
-        )
-    if dry_run:
-        console.print("[dim](dry run — nothing written)[/dim]")
 
 
 def render_training_cleared(summary: dict) -> None:

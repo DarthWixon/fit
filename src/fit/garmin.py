@@ -1,14 +1,8 @@
-"""Garmin Connect API boundary. The only module that talks to the Garmin
-Connect network API (via the optional `garminconnect` package). Returns raw
-FIT bytes and raw Garmin activity summaries - never builds fit's activity
-dict shape and never touches the data dir; cli.py feeds the bytes through
-importers.import_fit -> storage.write_activity like every other import path.
+"""Garmin Connect API boundary. Returns raw bytes/dicts only — never fit's
+activity shape, never the data dir.
 
-The session token lives at the library-default ~/.garminconnect, deliberately
-outside the data dir so ~/.fit stays credential-free (a zipped backup never
-carries a login). `import garminconnect` happens lazily inside functions
-(same pattern as importers.import_fit's lazy fitparse import) so every other
-command works without the optional dependency installed.
+Token lives at ~/.garminconnect, outside the data dir, so a zipped backup of
+~/.fit carries no login. garminconnect is imported lazily (optional extra).
 """
 
 import io
@@ -36,11 +30,8 @@ def _garminconnect():
 
 
 def login():
-    """Resumes a saved session from TOKEN_STORE if present; otherwise prompts
-    for email/password (and an MFA code, if the account needs it) via typer,
-    then saves a session token to TOKEN_STORE for next time (the library
-    persists it itself after a credential login). Raises GarminAuthError on
-    failure. Returns a logged-in garminconnect.Garmin client."""
+    """Resume the saved session, else prompt for credentials (and MFA) and save
+    one. Raises GarminAuthError on failure."""
     import typer
 
     gc = _garminconnect()
@@ -67,66 +58,43 @@ def login():
 
 
 def get_exercise_sets(client, garmin_activity_id) -> list[dict]:
-    """Garmin's own record of one strength activity's sets, as raw entries --
-    the corrections made in the Connect app, which the original FIT export
-    never carries (see importers.apply_garmin_exercise_sets, which merges
-    them). Returns [] for an activity Garmin holds no sets for."""
+    """Raw server-side set records for one strength activity: the Connect-app
+    corrections the original FIT export never carries. [] if Garmin has none."""
     response = client.get_activity_exercise_sets(garmin_activity_id)
     return response.get("exerciseSets", []) if response else []
 
 
 def push_workout(client, workout_payload: dict) -> dict:
-    """Upload one workout-service payload to Garmin Connect. Returns the raw
-    response dict (contains "workoutId"). The payload is built by planner.py
-    — this module never shapes workout dicts itself."""
+    """Upload one planner-built payload. Raw response contains "workoutId"."""
     return client.upload_workout(workout_payload)
 
 
 def get_workout(client, workout_id) -> dict:
-    """Fetch one workout back from Garmin Connect as its stored workout-service
-    dict. Counterpart to push_workout: diffing this against the payload that
-    was pushed is how planner.py's not-yet-verified schema note gets confirmed
-    (see planner.py's module docstring and scripts/diff_workout.py)."""
+    """Fetch one workout back. Diffing this against what was pushed is how
+    planner.py's schema notes get verified (scripts/diff_workout.py)."""
     return client.get_workout_by_id(workout_id)
 
 
 def schedule_workout(client, workout_id, date_str: str) -> dict:
-    """Place an already-pushed workout onto a single date (YYYY-MM-DD) in the
-    Garmin calendar; returns the raw response dict. Deliberately atomic — one
-    workout, one date — so a future multi-week planner schedules a whole
-    progression by calling this once per session rather than needing a
-    different, batch-shaped entry point. date_str must be pre-validated by the
-    caller (planner.parse_schedule_date); this module stays a thin API
-    boundary and does no date logic of its own."""
+    """Place one pushed workout on one date. Atomic by design: a multi-week
+    plan calls this per session. date_str must be pre-validated by the caller
+    (planner.parse_schedule_date) — no date logic here."""
     return client.schedule_workout(workout_id, date_str)
 
 
-def get_scheduled_workouts(client, year: int, month: int) -> dict:
-    """Raw scheduled-workout entries for one calendar month (month is
-    1-based). Counterpart to schedule_workout — lets a caller see what is
-    already on the Garmin calendar rather than trusting local state alone."""
-    return client.get_scheduled_workouts(year, month)
-
-
 def unschedule_workout(client, scheduled_workout_id):
-    """Remove one scheduled workout from the Garmin calendar. Takes the
-    *schedule* id returned by schedule_workout, not the workout id — the same
-    workout can sit on several dates. Atomic for the same reason
-    schedule_workout is: `fit train clear` calls it once per session."""
+    """Takes the *schedule* id from schedule_workout, not the workout id — one
+    workout can sit on several dates."""
     return client.unschedule_workout(scheduled_workout_id)
 
 
 def list_recent_activities(client, start_date: date, end_date: date) -> list[dict]:
-    """Raw Garmin Connect activity summaries (activityId, activityType,
-    startTimeLocal, ...) in [start_date, end_date] - NOT yet in fit's
-    activity dict shape."""
+    """Raw activity summaries in range — not yet fit's activity shape."""
     return client.get_activities_by_date(start_date.isoformat(), end_date.isoformat())
 
 
 def download_activity_fit(client, garmin_activity_id) -> bytes:
-    """Raw FIT bytes for one activity. Garmin's "original" export wraps the
-    .fit in a zip, so unwrap it here (same unwrap-then-hand-over shape as
-    importers._import_strava_linked_file uses for gzipped files)."""
+    """Raw FIT bytes. Garmin's "original" export zips the .fit, so unwrap."""
     gc = _garminconnect()
     raw = client.download_activity(
         garmin_activity_id, dl_fmt=gc.Garmin.ActivityDownloadFormat.ORIGINAL

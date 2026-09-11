@@ -62,21 +62,25 @@ save without a Garmin login (works without the `garmin` extra installed).
 
 Supported `--sport` / `--type` combinations:
 
-- **run** — `intervals`, `tempo`, `hills`, `baseline` (a best-effort benchmark
-  test to re-measure your pace), `easy`, `long`
+- **run** — `intervals`, `tempo`, `baseline` (a best-effort benchmark test to
+  re-measure your pace), `easy`, `long`
+- **cycle** — `intervals`, `baseline` (an FTP-test shape), `endurance`, `long`
 - **swim** — `intervals`, `continuous`, `baseline` (a 1km time trial)
+- **strength** — `straight_sets`, `baseline` (a heavy triple on one lift, read as
+  an estimated 1RM)
 
-The three `baseline` types are the benchmark tests, and you can plan one on its
+The four `baseline` types are the benchmark tests, and you can plan one on its
 own — `fit plan --sport swim --type baseline` — as well as letting a training
-block schedule them. Either way you get the same test, and the cycle and swim
-ones default to no warmup in the workout itself: warm up first, then start
-recording, because those measurements span the whole activity.
-- **cycle** — `intervals`, `hills`, `baseline` (an FTP-test shape), `endurance`,
-  `long`
+block schedule them, and either way you get the same test. Run and cycle tests
+keep a warmup and cooldown inside the workout, because fit can isolate the
+effort from what surrounds it. The swim one defaults to neither, and its name
+says "warm up first": the measurement spans the whole activity.
 
-The last four are steady sessions: a single block at a wide target band, with no
-warmup or cooldown split (a warmup inside an easy run is just more easy running).
-They exist mainly so `fit train` can build a whole week out of real workouts.
+Five of these are *steady* sessions — run `easy`/`long`, cycle
+`endurance`/`long`, swim `continuous` — a single block at a wide target band,
+with no warmup or cooldown split (a warmup inside an easy run is just more easy
+running). They exist mainly so `fit train` can build a whole week out of real
+workouts.
 
 Prompt defaults are calculated from your last six months of activities where
 possible — each one is just a suggestion; press Enter to accept or type your own:
@@ -106,7 +110,7 @@ with an AI assistant and it writes this file; `fit` owns all the periodisation, 
 the description stays thin:
 
 ```yaml
-goal: sprint_triathlon         # see the goal table below
+goal: standard_triathlon       # see the goal table below
 event_date: 2026-11-15
 days_per_week: 6
 rest_day: Mon
@@ -122,7 +126,6 @@ uv pip install -e '.[train]'   # only `train import` needs this (PyYAML)
 
 fit train import plan.yaml     # expand it into a dated schedule
 fit train show --weeks 2       # what's coming, and what you've already done
-fit train retarget             # apply a re-test: rebuild the remaining weeks
 fit train sync --dry-run       # exactly what would be pushed, without pushing
 fit train sync                 # push + schedule the next 14 days on Garmin
 fit train clear                # take future sessions back off the calendar
@@ -136,18 +139,15 @@ activity of the same sport lands within a day of it. Yoga and strength "extras"
 are placed on your easier days and tracked locally only: the Garmin calendar has
 no endpoint for anything that isn't a workout, so they are never pushed.
 
-Eight goals are available:
+Four goals are available — one per discipline, since `start_date` already
+re-lengthens any of them:
 
-| Goal | Weeks | Days/wk |
-|---|---|---|
-| `run_5k` | 8 | 4 |
-| `run_10k` | 10 | 5 |
-| `run_half` | 12 | 5 |
-| `cycle_25k_tt` | 8 | 4 |
-| `cycle_40k_tt` | 10 | 5 |
-| `cycle_100k_sportive` | 12 | 5 |
-| `sprint_triathlon` | 12 | 6 |
-| `standard_triathlon` | 16 | 6 |
+| Goal | Weeks | Days/wk | Trains |
+|---|---|---|---|
+| `run_10k` | 10 | 5 | run |
+| `cycle_strength` | 12 | 5 | cycle, strength |
+| `standard_triathlon` | 16 | 6 | swim, cycle, run, strength |
+| `strength_program` | 12 | 3 | strength |
 
 Each sets its own length, weekly session mix and progression; `days_per_week`,
 `rest_day` and `progression` in the description override the defaults. Trimming
@@ -159,57 +159,73 @@ Each goal has a default length, but `start_date` sets the real one — anything
 from four weeks up:
 
 ```yaml
-goal: cycle_100k_sportive
+goal: cycle_strength
 event_date: 2026-11-15
 start_date: 2026-09-21     # 8 weeks instead of the template's 12
 ```
 
 The phases reapportion to fit, and the weekly ramp is solved from the length you
 chose: a longer block climbs more gently to the same peak rather than trying to
-climb higher. For the sportive that is 8%/week over 12 weeks, 5.5% over 16, and
-1.9% over 40 — all of them peaking at the same 103km long ride. A block shorter
-than the template simply peaks lower, which is what a short run-up buys you.
+climb higher. For `cycle_strength` that is 8%/week over its own 12 weeks, 5.5%
+over 16, and 1.9% over 40 — all of them peaking at the same 68km long ride. A
+block shorter than the template simply peaks lower (54km over 8 weeks), which is
+what a short run-up buys you.
 
 Set `progression.weekly_ramp_pct` if you would rather pin the rate yourself, and
 `progression.taper_weeks` to change how long the taper runs.
 
 ### Getting faster, not just fitter
 
-Paces and power targets are measured from your history when the plan is built,
-and they stay put — the sessions get longer, not faster. A plan that assumed you
-would improve on schedule would start prescribing work you cannot finish.
+Paces and power targets are always *measured* from your history, never
+projected forward — the sessions get longer, not faster. A plan that assumed you
+would improve on schedule would start prescribing work you cannot finish. A plan
+earns a faster pace by re-measuring.
 
-Instead every plan schedules **re-tests** on its recovery weeks, when you are
+So every plan schedules **re-tests** on its recovery weeks, when you are
 rested: a 5km best effort for running, a 20-minute FTP test for cycling, a 1km
-time trial for swimming, taking turns between whichever the goal trains. Each
-one replaces that week's quality session rather than adding to it.
+time trial for swimming, a heavy triple for strength, taking turns between
+whichever the goal trains. Each one replaces that week's quality session rather
+than adding to it.
 
 Run and cycle tests are normal workouts — warm up, test, cool down, all in one
 recording — because fit finds the effort inside it: the fastest 5km anywhere in
 the track, and the best 20 minutes of power anywhere in the ride. The swim test
 is bare, and its name says "warm up first", because there is no equivalent way
-to isolate a swim effort from the rest of a session.
+to isolate a swim effort from the rest of a session. The strength test is a
+triple rather than a true 1RM: a plan shouldn't send you to a maximal single
+alone in a gym every few weeks, and an estimated 1RM reads a 3RM fine.
 
 ```
-Re-test weeks: 4, 8, 12 — do the test, sync it back, then re-import to
-rebuild the rest at your new fitness.
+Re-test weeks: 4, 8, 12 — do the test and `fit garmin-sync`; the plan
+re-derives from it automatically.
 ```
 
-So the cycle is: do the test, `fit garmin-sync`, then **`fit train retarget`**.
-The sessions still ahead of you are rewritten at whatever you just demonstrated —
-no Garmin login, nothing on your calendar moves:
+There is no step in between, and no `fit train retarget` — the plan is derived,
+not stored. `~/.fit/train/plan.json` keeps only your description, the starting
+volume pinned at import, and a ledger of what has been pushed; the schedule
+itself is rebuilt from scratch on every `fit train` command. So the targets you
+see are always the ones your *current* history supports, and importing a faster
+5k is what applies it.
+
+Two things deliberately don't move. **Starting volume** is pinned when the plan
+is imported — it is a decision about where you were when you began, and
+re-measuring it weekly would rewrite your session sizes as you train.
+**Sessions already pushed to your watch** render from the ledger rather than
+from a fresh derivation, because Garmin has no edit endpoint and the watch is
+holding the copy that was sent. `fit train show` marks those `on watch`, or
+`on watch*` once the live derivation has moved away from them:
 
 ```
-Retargeted 114 future session(s) · 0 already on target · 2 left scheduled on Garmin
-  Run 5k 31:56 → 22:54
-    best recent 5k 22:54 (2026-08-20)
+3 session(s) marked * were pushed at an earlier target and can't be updated —
+Garmin has no edit endpoint. `fit train clear` removes them so they re-push at
+your current fitness.
 ```
 
-`--dry-run` shows the change without writing it. Sessions already pushed to your
-watch keep their old targets — a pushed workout can't be edited, so `fit train
-clear` first if you want those rewritten too. Volume is never touched: the
-sessions get their new paces, not new distances. Add `benchmarks: false` to skip
-the tests entirely.
+Volume is never touched by a re-test: the sessions get your new paces, not new
+distances. Add `benchmarks: false` to skip the tests entirely, or `test_week:
+true` to open the plan with a benchmarks-only week 0 — worth it when your
+history is thin, since otherwise every target is derived from whatever happens
+to be on disk.
 
 ### Easing in
 

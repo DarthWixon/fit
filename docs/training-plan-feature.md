@@ -2,13 +2,24 @@
 
 > **Status:** IMPLEMENTED 2026-08-24 — all eight goal templates. This document
 > is kept as the *design* record and reconnaissance appendix; for what the code
-> actually does now, read CLAUDE.md's "Training plans" section. Three places the
-> build knowingly departed from this plan, each documented there: session sizing
-> uses the weekly multiplier alone rather than multiplier + a separate per-week
-> growth increment (which compounds into nonsense over 12+ weeks); template
-> session priorities interleave the sports so trimming a week never drops a whole
-> discipline; and `fit train sync` confirms before pushing (added after an
-> accidental 14-workout push during development).
+> actually does now, read CLAUDE.md's "Training plans" section.
+>
+> **Superseded since (2026-09-11), do not follow this document on these
+> points:** the goal set was cut to four — `run_10k`, `cycle_strength`,
+> `standard_triathlon`, `strength_program`, one per discipline, since the others
+> were the same shapes at different numbers and `start_date` already re-lengthens
+> a template. The `hills` workout type went with `cycle_100k_sportive` and no
+> longer exists in `planner.WORKOUT_TYPES`. And `fit train retarget` is gone:
+> the plan is derived on every command rather than stored, so a re-test is
+> applied by `fit garmin-sync` alone. Every `file:line` anchor below predates
+> all three.
+>
+> Three places the build knowingly departed from this plan, each documented in
+> CLAUDE.md: session sizing uses the weekly multiplier alone rather than
+> multiplier + a separate per-week growth increment (which compounds into
+> nonsense over 12+ weeks); template session priorities interleave the sports so
+> trimming a week never drops a whole discipline; and `fit train sync` confirms
+> before pushing (added after an accidental 14-workout push during development).
 >
 > Original status line: APPROVED DESIGN, NOT YET IMPLEMENTED. This document is the durable,
 > in-repo record of the `fit train` feature design (moved here from a planning-session

@@ -1,5 +1,17 @@
 # STRENGTH_PLAN.md — full strength integration (with Garmin Connect)
 
+> **Status:** IMPLEMENTED — kept as the *design* record. For what the code does
+> now, read `CLAUDE.md`. Two things below are superseded and must not be
+> followed: the retargeting machinery it plans against (`retarget_sessions`,
+> `render_training_retargeted`, `_intensity_snapshot`) **no longer exists** —
+> `fit train` derives the plan on every command instead of storing and rewriting
+> it, so there is nothing to retarget; and `sprint_triathlon`, which step 1 of
+> its "further work" says to extend, was removed on 2026-09-11 — the goal set is
+> now `run_10k`, `cycle_strength`, `standard_triathlon`, `strength_program`.
+> The strength work itself — import, PBs, `fit plan --sport strength`, the
+> `strength_program` goal, per-lift targets and the strength benchmark — all
+> shipped as designed.
+
 Context file for Claude Code. Read this alongside `CLAUDE.md` before touching any
 code — it assumes and extends every convention in that file (functions only,
 dicts not classes, `storage.py` as the sole I/O boundary, pure `compute.py`, etc.)
