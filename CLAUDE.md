@@ -579,10 +579,20 @@ from it. `fit train import` is how you change a plan's *shape*, and refuses to
 replace a plan with future ledger rows (clearing needs Garmin; importing may be
 offline).
 
+**Every `train` command checks the stored file's shape first**
+(`training.unreadable_plan`, via `cli._stored_plan`) and refuses anything but
+`{spec, created, volume, pushed}`, listing the schedule ids an older file
+claims. A missing `pushed` is not an empty ledger: a pre-stateless file can
+carry a valid goal, and `sync` would push every session before failing to
+record one — duplicates on the calendar with nothing tracking them.
+
 `train refresh` is `clear` then `sync`, for applying a re-test to sessions the
 watch already holds. It confirms **before** the clear rather than letting `sync`
 ask for itself: answering no between the two steps would leave the calendar
-emptied and nothing re-pushed, which is worse than either end state.
+emptied and nothing re-pushed, which is worse than either end state. It calls
+both as plain functions, so it **passes every option explicitly** — an omitted
+one is typer's `OptionInfo` default, which is truthy. A missing `dry_run` made
+the first version clear the calendar, push nothing and exit 0.
 
 `train sync` appends a ledger row per pushed session — the row stores the
 `params` and name that were **actually sent**, which is what lets a pushed
@@ -639,11 +649,14 @@ not business logic, so it stays inline.
 ## Tests
 
 `.venv/bin/pytest` after any change to `compute`, `storage`, `importers`,
-`planner` or `training`.
+`planner`, `training`, or how `cli`'s `train` commands compose.
 
 **The suite is small on purpose** and has been trimmed twice (192 → 154 → 195
-cases, having regrown in between; 199 now — the stateless-plan commit added
-four). Three things do not earn a test:
+cases, having regrown in between). 183 now: the stateless-plan commit added
+four, cutting the goals from ten to four shrank the `ALL_GOALS` loops to 181,
+and the two live-account fixes since added one each. `test_cli.py` is the only
+CLI test and stays that narrow — command composition that writes to Garmin,
+with every `garmin` call stubbed. Three things do not earn a test:
 
 1. **Restating a constant or one-line definition.** Assert direction through the
    pipeline that consumes it, not against the constant.

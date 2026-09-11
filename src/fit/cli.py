@@ -565,14 +565,43 @@ def _stored_plan() -> dict:
     if not stored:
         display.render_training_missing()
         raise typer.Exit(code=1)
-    if stored.get("spec", {}).get("goal") not in templates.GOAL_TEMPLATES:
+    # Shape before goal: an older file can carry a valid goal and still have no
+    # ledger, and `sync` would push every session before failing to record one.
+    _exit_if_unreadable(stored)
+    if stored["spec"].get("goal") not in templates.GOAL_TEMPLATES:
         typer.echo(
-            "This plan can't be read — it predates the stored plan spec, or its "
-            "goal no longer exists. Run `fit train import` to replace it.",
+            "This plan's goal no longer exists. Run `fit train import` to "
+            "replace it.",
             err=True,
         )
         raise typer.Exit(code=1)
     return stored
+
+
+def _exit_if_unreadable(stored: dict) -> None:
+    """Refuse a plan file in an older format, naming what it claims is on the
+    Garmin calendar (see training.unreadable_plan)."""
+    stranded = training.unreadable_plan(stored)
+    if stranded is None:
+        return
+    typer.echo(
+        "The stored plan is in an older format, so this version cannot tell "
+        "what it has on the Garmin calendar. Replacing it would leave anything "
+        "there with nothing tracking it.",
+        err=True,
+    )
+    for session in stranded:
+        typer.echo(
+            f"  {session['date']}  {session.get('workout_name', '')} "
+            f"(schedule id {session['scheduled_workout_id']})",
+            err=True,
+        )
+    typer.echo(
+        f"Unschedule the above in Garmin Connect, then delete "
+        f"{storage.training_plan_path()} and import again.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
 
 
 def _expand(stored: dict, activities: list[dict]) -> dict:
@@ -621,26 +650,7 @@ def train_import(
         # Check the shape before the ledger: an older plan file has no
         # "pushed" key at all, and reading that absence as an empty ledger is
         # what strands its calendar entries.
-        stranded = training.unreadable_plan(existing)
-        if stranded is not None:
-            typer.echo(
-                f"The stored plan is in an older format, so this version "
-                f"cannot tell what it has on the Garmin calendar. Replacing "
-                f"it would leave anything there with nothing tracking it.",
-                err=True,
-            )
-            for session in stranded:
-                typer.echo(
-                    f"  {session['date']}  {session.get('workout_name', '')} "
-                    f"(schedule id {session['scheduled_workout_id']})",
-                    err=True,
-                )
-            typer.echo(
-                f"Unschedule the above in Garmin Connect, then delete "
-                f"{storage.training_plan_path()} and import again.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
+        _exit_if_unreadable(existing)
         pending = training.future_pushed(existing.get("pushed", []), date_cls.today())
         if pending:
             typer.echo(
@@ -814,4 +824,7 @@ def train_refresh(
         typer.echo("Nothing changed.")
         return
     train_clear()
-    train_sync(days=days, yes=True)
+    # Every argument explicitly: called as a plain function, an omitted option
+    # is typer's OptionInfo default, which is truthy — dry_run left out made
+    # this unschedule everything and then push nothing.
+    train_sync(days=days, yes=True, dry_run=False)
