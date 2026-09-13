@@ -609,8 +609,13 @@ safe, and rewrites the plan file after **every** session so a crash can't leave
 it claiming less than what is on the calendar.
 
 `match_completion` marks a session done when an activity of the same sport falls
-within ±1 day, each activity claiming at most one session (nearest first) so one
-ride can't tick off a whole week.
+in the **same ISO week**, each activity claiming at most one session (nearest
+first) so one ride can't tick off a whole week. The week is the unit because the
+plan is periodised in whole weeks: Friday's lift done on the Sunday is still that
+week's work. It was ±1 day until 2026-09-13, which read three sessions as missed
+that had all been trained 2-3 days off their date. The mirror case is accepted:
+a Sunday session done on the Monday after falls in the next week and does not
+count.
 
 ---
 

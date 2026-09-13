@@ -250,7 +250,7 @@ def test_targets_reach_the_session_params():
 # --- completion ----------------------------------------------------------------
 
 
-def test_match_completion_marks_sessions_within_a_day():
+def test_match_completion_marks_sessions_in_the_same_week():
     sessions = [
         {"date": "2026-09-01", "sport": "run", "is_extra": False},
         {"date": "2026-09-05", "sport": "run", "is_extra": False},
@@ -258,6 +258,22 @@ def test_match_completion_marks_sessions_within_a_day():
     activities = [{"type": "run", "date": "2026-09-02"}]
     matched = training.match_completion(sessions, activities)
     assert [s["completed"] for s in matched] == [True, False]
+
+    # The week is the unit, not a day window: Wednesday's session trained on
+    # the Sunday is still that week's work (both ISO 2026-W37, 4 days apart).
+    same_week = [{"date": "2026-09-09", "sport": "strength", "is_extra": False}]
+    matched = training.match_completion(
+        same_week, [{"type": "strength", "date": "2026-09-13"}]
+    )
+    assert [s["completed"] for s in matched] == [True]
+
+    # ...and the accepted mirror case: Sunday's session done on the Monday
+    # after lands in W38, so it does not count.
+    matched = training.match_completion(
+        [{"date": "2026-09-13", "sport": "cycle", "is_extra": False}],
+        [{"type": "cycle", "date": "2026-09-14"}],
+    )
+    assert [s["completed"] for s in matched] == [False]
 
     # An extra is never matched (fit has no strength/yoga activity type), and
     # neither is a session of a different sport on the very same day.
