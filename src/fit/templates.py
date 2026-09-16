@@ -158,7 +158,6 @@ GOAL_TEMPLATES = {
                 "straight_sets",
                 day=2,
                 priority=4,
-                warmup_minutes=10,
                 rest=180,
                 exercises=[
                     {"exercise": "squat", "sets": 4, "reps": 6},
@@ -170,7 +169,6 @@ GOAL_TEMPLATES = {
                 "straight_sets",
                 day=4,
                 priority=5,
-                warmup_minutes=10,
                 rest=180,
                 exercises=[
                     {"exercise": "deadlift", "sets": 3, "reps": 5},
@@ -266,7 +264,6 @@ GOAL_TEMPLATES = {
                 "straight_sets",
                 day=1,
                 priority=8,
-                warmup_minutes=10,
                 rest=150,
                 exercises=[
                     {"exercise": "squat", "sets": 3, "reps": 8},
@@ -278,7 +275,6 @@ GOAL_TEMPLATES = {
                 "straight_sets",
                 day=3,
                 priority=9,
-                warmup_minutes=10,
                 rest=150,
                 exercises=[
                     {"exercise": "deadlift", "sets": 3, "reps": 8},
@@ -311,7 +307,6 @@ GOAL_TEMPLATES = {
                 day=0,
                 priority=1,
                 key=True,
-                warmup_minutes=10,
                 rest=180,
                 exercises=[
                     {"exercise": "squat", "sets": 3, "reps": 5},
@@ -324,7 +319,6 @@ GOAL_TEMPLATES = {
                 day=2,
                 priority=2,
                 key=True,
-                warmup_minutes=10,
                 rest=180,
                 exercises=[
                     {"exercise": "deadlift", "sets": 3, "reps": 5},
@@ -337,7 +331,6 @@ GOAL_TEMPLATES = {
                 day=4,
                 priority=3,
                 key=True,
-                warmup_minutes=10,
                 rest=180,
                 exercises=[
                     {"exercise": "squat", "sets": 3, "reps": 5},

@@ -10,15 +10,19 @@ Verified by live round-trip (scripts/diff_workout.py):
                                      that order; step numbering intact
   strength/straight_sets 2026-09-05  weightValue is kilograms (62.5 came back
                                      as 62.5), reps end condition, timed rest,
-                                     CARDIO warmup, bare category
+                                     bare category
   strength|cycle/baseline 2026-09-05 untargeted top set / open-target block
   cycle/long             2026-09-11  power.zone id 2 correct; targetValueOne/
                                      Two = low/high watts on a top-level step;
                                      one-step workout with a target accepted
-Still unverified: run easy/long, cycle endurance, swim continuous — but only
-by inference now. cycle/long settled power.zone and the top-level target
-position; cycle endurance differs from it only in a time endCondition, and
-run/swim pair a nested-proven pace.zone with a power-proven position.
+Still unverified: run easy/long, cycle endurance, swim continuous, and the
+strength warmup ramp. The four steady combos are inference only — cycle/long
+settled power.zone and the top-level target position; cycle endurance differs
+from it only in a time endCondition, and run/swim pair a nested-proven
+pace.zone with a power-proven position. The ramp sends a lift category and a
+weightValue on a *warmup* step: the 2026-09-05 dump proved each half alone
+(category + weight on an interval step, CARDIO on a warmup step) but never
+together, so Connect may blank one of them.
 Re-run the diff after first pushing any unverified combo, and update this.
 """
 
@@ -133,6 +137,15 @@ _WEIGHT_UNIT_KG = {"unitId": 8, "unitKey": "kilogram", "factor": 1000.0}
 # Inert (the step ends on the lap press), but Connect writes 10.0 rather than
 # 0. Sent as observed.
 _LAP_BUTTON_END_VALUE = 10.0
+
+# A lifting warmup is a ramp to the working weight, not cardio: the empty bar,
+# then percentages of the work set at descending reps. Rounded to 2.5kg rather
+# than training.LIFT_INCREMENT_KG's per-lift step — a warmup set does not need
+# 1.25kg precision, and planner may not import training.
+_BAR_WEIGHT_KG = 20.0
+_WARMUP_ROUNDING_KG = 2.5
+_WARMUP_RAMP = ((0.55, 5), (0.70, 3), (0.85, 2))
+_BAR_SET_REPS = 5
 
 
 def parse_pace(text: str) -> int:
@@ -535,14 +548,9 @@ _PARAM_SPECS = {
         },
     ],
     # The only combo whose params aren't one flat answer per prompt: the
-    # per-exercise half is in EXERCISE_PARAM_SPECS, prompted in a loop.
+    # per-exercise half is in EXERCISE_PARAM_SPECS, prompted in a loop. Nothing
+    # asks about the warmup — _warmup_sets derives the ramp from the load.
     ("strength", "straight_sets"): [
-        {
-            "key": "warmup_minutes",
-            "label": "Warmup (minutes, blank for none)",
-            "default": 10,
-            "parse": _optional_int,
-        },
         {
             "key": "rest",
             "label": "Rest between sets (min:sec, blank for press-lap)",
@@ -550,8 +558,8 @@ _PARAM_SPECS = {
             "parse": _optional_rest,
         },
     ],
-    # The e1RM re-test. No warmup and no load: the ramp of lighter sets is the
-    # warmup, and _strength_pbs reads only the best set, so it costs nothing.
+    # The e1RM re-test. No load, so no ramp can be derived: the lighter sets
+    # are the athlete's own, and _strength_pbs reads only the best set.
     ("strength", "baseline"): [
         {
             "key": "exercise",
@@ -942,14 +950,43 @@ def _weight_fields(weight_kg: float | None) -> dict:
     return {"weightValue": float(weight_kg), "weightUnit": dict(_WEIGHT_UNIT_KG)}
 
 
-def _lift_step(order: int, exercise: str, reps: int, weight_kg: float | None) -> dict:
-    """One working set: reps as the end condition, load on the step itself.
+def _lift_step(
+    order: int,
+    exercise: str,
+    reps: int,
+    weight_kg: float | None,
+    kind: str = "interval",
+) -> dict:
+    """One set: reps as the end condition, load on the step itself.
     `exerciseName` (the variant) is left unset — every lift fit plans is a
-    category in its own right, and Connect accepts a bare one."""
-    step = _step(order, "interval", "reps", reps, _no_target())
+    category in its own right, and Connect accepts a bare one. `kind` is
+    "warmup" for a ramp set, which differs from a working set in nothing but
+    the step type."""
+    step = _step(order, kind, "reps", reps, _no_target())
     step["category"] = exercise.upper()
     step.update(_weight_fields(weight_kg))
     return step
+
+
+def _warmup_sets(working_kg: float | None) -> list[tuple[float, int]]:
+    """The ramp up to a working weight: the empty bar, then percentages of the
+    work set at descending reps. A lifting warmup is lighter lifting — there is
+    nothing to ramp to without a prescribed load, and warming up heavier than
+    you lift is not a warmup.
+
+    Kept sets are strictly heavier than the last and strictly lighter than the
+    work set, which is the whole of the degenerate-case handling: a 35kg bench
+    rounds 55% back onto the bar and simply loses that rung."""
+    if not working_kg or working_kg <= _BAR_WEIGHT_KG:
+        return []
+
+    sets = [(_BAR_WEIGHT_KG, _BAR_SET_REPS)]
+    for fraction, reps in _WARMUP_RAMP:
+        rungs = round(working_kg * fraction / _WARMUP_ROUNDING_KG)
+        weight = round(rungs * _WARMUP_ROUNDING_KG, 2)
+        if sets[-1][0] < weight < working_kg:
+            sets.append((weight, reps))
+    return sets
 
 
 def _rest_step(order: int, rest_seconds: int) -> dict:
@@ -964,41 +1001,47 @@ def _describe_exercise(name: str) -> str:
 
 
 def _strength_straight_sets(params: dict) -> tuple[str, list[dict]]:
-    """One RepeatGroupDTO per exercise, siblings in the segment, numbered
-    globally — the shape a real Connect strength workout has."""
+    """Each exercise ramps to its working weight, then one RepeatGroupDTO for
+    the work sets — siblings in the segment, numbered globally, which is the
+    shape a real Connect strength workout has.
+
+    The ramp is per exercise because a different movement needs its own: you
+    do not bench cold because you squatted first. Its rests are press-lap —
+    warming up is self-paced."""
     exercises = params.get("exercises") or []
     if not exercises:
         raise ValueError("a straight-sets workout needs at least one exercise")
 
     steps: list[dict] = []
     order = 1
-    warmup = params.get("warmup_minutes", 0)
-    if warmup:
-        # Connect tags a strength warmup CARDIO — it is a warmup, not a lift.
-        warmup_step = _step(order, "warmup", "time", warmup * 60, _no_target())
-        warmup_step["category"] = "CARDIO"
-        steps.append(warmup_step)
-        order += 1
-
     rest = params.get("rest", 0)
     for exercise in exercises:
-        group_order = order
+        weight = exercise.get("target_weight_kg")
+        for ramp_weight, ramp_reps in _warmup_sets(weight):
+            steps.append(
+                _lift_step(
+                    order, exercise["exercise"], ramp_reps, ramp_weight, "warmup"
+                )
+            )
+            steps.append(_rest_step(order + 1, 0))
+            order += 2
+
         steps.append(
             _repeat(
-                group_order,
+                order,
                 exercise["sets"],
                 [
                     _lift_step(
-                        group_order + 1,
+                        order + 1,
                         exercise["exercise"],
                         exercise["reps"],
-                        exercise.get("target_weight_kg"),
+                        weight,
                     ),
-                    _rest_step(group_order + 2, rest),
+                    _rest_step(order + 2, rest),
                 ],
             )
         )
-        order = group_order + 3
+        order += 3
 
     name = "Strength " + ", ".join(
         f"{_describe_exercise(e['exercise'])} {e['sets']}x{e['reps']}"
@@ -1009,8 +1052,8 @@ def _strength_straight_sets(params: dict) -> tuple[str, list[dict]]:
 
 
 def _strength_baseline(params: dict) -> tuple[str, list[dict]]:
-    # One top set, no load, no warmup step: the ramp of lighter sets is the
-    # warmup, and only the name can carry that instruction.
+    # One top set and no load — so there is no working weight for _warmup_sets
+    # to ramp to, and only the name can carry the warm-up instruction.
     steps = [_lift_step(1, params["exercise"], params["reps"], None)]
     name = (
         f"Strength baseline {_describe_exercise(params['exercise'])} "
@@ -1138,12 +1181,15 @@ def _describe_load(step: dict) -> str:
     return f" @ {weight:g}kg" if weight else ""
 
 
+def _step_kind(step: dict) -> str:
+    return step["stepType"]["stepTypeKey"]
+
+
 def _describe_step(step: dict, sport: str) -> str:
-    kind = step["stepType"]["stepTypeKey"]
+    kind = _step_kind(step)
     body = _describe_extent(step) + _describe_target(step, sport) + _describe_load(step)
-    # CARDIO marks the absence of a lift, and reads as noise next to "Warmup".
     category = step.get("category")
-    if category and category != "CARDIO":
+    if category:
         body = f"{_describe_exercise(category.lower()).capitalize()} {body}"
     if kind in ("warmup", "cooldown"):
         return f"{kind.capitalize()} {body}"
@@ -1153,15 +1199,26 @@ def _describe_step(step: dict, sport: str) -> str:
 
 
 def describe_plan(plan: dict) -> list[str]:
-    """One line per top-level step, e.g. "6 x 800m @ 4:20-4:40/km, 2:00 recovery"."""
+    """One line per top-level step, e.g. "6 x 800m @ 4:20-4:40/km, 2:00 recovery".
+
+    A top-level rest belongs to the warmup set before it — a lifting ramp is
+    read as set-and-rest, the same way a repeat group folds its children onto
+    one line."""
     sport = plan["sport"]
+    steps = plan["payload"]["workoutSegments"][0]["workoutSteps"]
     lines = []
-    for step in plan["payload"]["workoutSegments"][0]["workoutSteps"]:
+    for index, step in enumerate(steps):
         if step["type"] == "RepeatGroupDTO":
             children = ", ".join(
                 _describe_step(child, sport) for child in step["workoutSteps"]
             )
             lines.append(f"{step['numberOfIterations']} x {children}")
+        elif (
+            index > 0
+            and _step_kind(step) == "rest"
+            and _step_kind(steps[index - 1]) == "warmup"
+        ):
+            lines[-1] += f", {_describe_step(step, sport)}"
         else:
             lines.append(_describe_step(step, sport))
     return lines

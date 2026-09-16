@@ -536,7 +536,6 @@ def test_planning_a_baseline_by_hand_gives_the_same_test_the_plan_schedules(spor
 
 def _straight_sets_params(**overrides):
     params = {
-        "warmup_minutes": 10,
         "rest": 90,
         "exercises": [
             {"exercise": "deadlift", "sets": 3, "reps": 10, "target_weight_kg": 60.0},
@@ -558,14 +557,14 @@ def test_straight_sets_payload_matches_the_live_schema():
     the end condition, load on the step with targetType left no.target."""
     steps = _steps("strength", "straight_sets", _straight_sets_params())
 
-    assert [s["stepOrder"] for s in steps] == [1, 2, 5]
-    warmup, first, second = steps
-    assert warmup["category"] == "CARDIO"
-    assert first["type"] == "RepeatGroupDTO"
+    # Four ramp sets and their rests (1-8) ahead of each working group.
+    assert [s["stepOrder"] for s in steps] == [*range(1, 10), *range(12, 21)]
+    first, second = [s for s in steps if s["type"] == "RepeatGroupDTO"]
+    assert first["stepOrder"] == 9
     assert first["numberOfIterations"] == 3
 
     lift, rest = first["workoutSteps"]
-    assert lift["stepOrder"] == 3 and rest["stepOrder"] == 4
+    assert lift["stepOrder"] == 10 and rest["stepOrder"] == 11
     assert lift["category"] == "DEADLIFT"
     assert lift["endCondition"]["conditionTypeKey"] == "reps"
     assert lift["endConditionValue"] == 10.0
@@ -580,22 +579,66 @@ def test_straight_sets_payload_matches_the_live_schema():
     assert rest["stepType"]["stepTypeKey"] == "rest"
 
     # Numbering continues across groups rather than restarting per exercise.
-    assert [s["stepOrder"] for s in second["workoutSteps"]] == [6, 7]
+    assert second["stepOrder"] == 20
+    assert [s["stepOrder"] for s in second["workoutSteps"]] == [21, 22]
+
+
+def test_warmup_ramps_to_the_working_weight():
+    """The ladder is percentages of the work set rounded to 2.5kg, so it has to
+    be read off the payload rather than eyeballed. Every rung is strictly
+    heavier than the last and strictly lighter than the work set."""
+    params = _straight_sets_params(
+        exercises=[
+            {"exercise": "squat", "sets": 4, "reps": 6, "target_weight_kg": 70.0}
+        ]
+    )
+    steps = _steps("strength", "straight_sets", params)
+    ramp = [s for s in steps if s["stepType"]["stepTypeKey"] == "warmup"]
+
+    assert [(s["weightValue"], s["endConditionValue"]) for s in ramp] == [
+        (20.0, 5.0),  # the empty bar
+        (37.5, 5.0),  # 55%
+        (50.0, 3.0),  # 70%
+        (60.0, 2.0),  # 85%
+    ]
+    # A ramp set is a lift, not cardio: same category as the work set.
+    assert {s["category"] for s in ramp} == {"SQUAT"}
+
+    # A light lift rounds 55% back onto the bar, and loses that rung rather
+    # than prescribing 20kg twice.
+    light = _straight_sets_params(
+        exercises=[
+            {"exercise": "bench_press", "sets": 3, "reps": 5, "target_weight_kg": 35.0}
+        ]
+    )
+    light_ramp = [
+        s
+        for s in _steps("strength", "straight_sets", light)
+        if s["stepType"]["stepTypeKey"] == "warmup"
+    ]
+    assert [s["weightValue"] for s in light_ramp] == [20.0, 25.0, 30.0]
 
 
 def test_straight_sets_omit_weight_when_none_given():
     params = _straight_sets_params(
         exercises=[{"exercise": "squat", "sets": 5, "reps": 5}]
     )
-    lift = _steps("strength", "straight_sets", params)[1]["workoutSteps"][0]
+    steps = _steps("strength", "straight_sets", params)
+    # No load is nothing to ramp to, so the work sets are the whole workout.
+    assert [s["type"] for s in steps] == ["RepeatGroupDTO"]
+    lift = steps[0]["workoutSteps"][0]
     assert "weightValue" not in lift
     assert "weightUnit" not in lift
 
 
 def test_blank_rest_becomes_a_press_lap_step():
     params = _straight_sets_params(rest=0)
-    rest = _steps("strength", "straight_sets", params)[1]["workoutSteps"][1]
-    assert rest["endCondition"]["conditionTypeKey"] == "lap.button"
+    group = next(
+        s
+        for s in _steps("strength", "straight_sets", params)
+        if s["type"] == "RepeatGroupDTO"
+    )
+    assert group["workoutSteps"][1]["endCondition"]["conditionTypeKey"] == "lap.button"
 
 
 def test_strength_baseline_is_a_bare_untargeted_top_set():
@@ -610,7 +653,6 @@ def test_strength_baseline_is_a_bare_untargeted_top_set():
 
 def test_strength_estimate_counts_reps_and_rests():
     params = _straight_sets_params(
-        warmup_minutes=0,
         rest=60,
         exercises=[{"exercise": "squat", "sets": 3, "reps": 10}],
     )
@@ -635,7 +677,15 @@ def test_describe_plan_names_each_lift():
         "strength", "straight_sets", _straight_sets_params(), "2026-09-05T10:00:00"
     )
     assert planner.describe_plan(plan) == [
-        "Warmup 10:00",
+        # Each ramp set folds its own press-lap rest onto one line.
+        "Warmup Deadlift 5 reps @ 20kg, until lap rest",
+        "Warmup Deadlift 5 reps @ 32.5kg, until lap rest",
+        "Warmup Deadlift 3 reps @ 42.5kg, until lap rest",
+        "Warmup Deadlift 2 reps @ 50kg, until lap rest",
         "3 x Deadlift 10 reps @ 60kg, 1:30 rest",
+        "Warmup Squat 5 reps @ 20kg, until lap rest",
+        "Warmup Squat 5 reps @ 27.5kg, until lap rest",
+        "Warmup Squat 3 reps @ 35kg, until lap rest",
+        "Warmup Squat 2 reps @ 42.5kg, until lap rest",
         "3 x Squat 10 reps @ 50kg, 1:30 rest",
     ]

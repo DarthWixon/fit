@@ -178,6 +178,26 @@ ramps, because that is what linear progression is and a weight that turns out
 too heavy is a failed rep, not a failed session. So strength sessions carry no
 `scale`, `volume_sports` excludes them, and the clamp tests exempt them.
 
+**A strength warmup is the lift itself, and nobody is asked about it.** The
+warmup for a squat is lighter squats, so `planner._warmup_sets` derives a ramp
+from the working weight — the empty bar, then 55/70/85% at 5/3/2 reps, rounded
+to 2.5kg — and each exercise gets its own, because you do not bench cold having
+squatted. It replaced a timed `CARDIO` block on 2026-09-16: that was the wrong
+kind of work, and it left 4x6 @ 70kg opening with 70kg on the bar. Two
+consequences that read as gaps:
+
+- **No load means no ramp.** There is nothing to ramp *to*, so an exercise with
+  no `target_weight_kg` is all working sets, and `strength`/`baseline` — an
+  e1RM test, which prescribes no load on purpose — keeps carrying "(warm up
+  first)" in its name instead.
+- **Rungs that round onto each other are dropped, not repeated.** Each is kept
+  only if strictly heavier than the last and strictly lighter than the work
+  set, so a 35kg bench ramps 20/25/30 rather than 20/20/25/30. That one rule is
+  the whole of the small-weight handling.
+
+There is no config key and no prompt for any of this: a ramp is a training
+decision fit owns, the same way it owns periodisation.
+
 **The plan is derived, not stored.** `expand_plan` is deterministic and re-runs
 on every `fit train` command, so targets always track your *measured* fitness —
 importing a faster 5k is what applies it, with no retarget step in between.
@@ -248,14 +268,21 @@ planner.py's docstring — keep both current):
 | combo | date | confirmed |
 |---|---|---|
 | `run`/`intervals` | 2026-08-24 | `targetValueOne`/`Two` = low/high m/s in that order; step numbering |
-| `strength`/`straight_sets` | 2026-09-05 | `weightValue` is **kilograms** (62.5 → 62.5); reps end condition; timed rest; CARDIO warmup; bare `category` |
+| `strength`/`straight_sets` | 2026-09-05 | `weightValue` is **kilograms** (62.5 → 62.5); reps end condition; timed rest; bare `category` |
 | `strength`/`baseline`, `cycle`/`baseline` | 2026-09-05 | untargeted top set / open-target timed block survive as sent |
 | `cycle`/`long` | 2026-09-11 | `power.zone` id 2 correct; `targetValueOne`/`Two` = low/high **watts** on a top-level step (120/170 as sent); one-step workout with a target accepted |
 
-**Still unverified: four steady combos** (`run` easy/long, `cycle` endurance,
-`swim` continuous) — but the risk in them is now small, and worth scoping before
-spending a round trip. `cycle`/`long` on 2026-09-11 settled the two things that
-were actually open: `power.zone`'s transcribed id 2 is right, and
+**Still unverified: four steady combos and the strength warmup ramp** — but the
+risk in them is now small, and worth scoping before spending a round trip.
+
+The ramp sends a lift `category` *and* a `weightValue` on a **warmup** step.
+2026-09-05 proved each half on its own — category plus weight on an `interval`
+step, `CARDIO` on a `warmup` step — but never together, so Connect could blank
+one of the two. Diff the next real strength push.
+
+The four steady combos are `run` easy/long, `cycle` endurance and `swim`
+continuous. `cycle`/`long` on 2026-09-11 settled the two things that were
+actually open: `power.zone`'s transcribed id 2 is right, and
 `targetValueOne`/`Two` behave on a top-level `ExecutableStepDTO` exactly as they
 do nested in a `RepeatGroupDTO`. Being single-step was never the novelty — a
 bare `strength`/`baseline` is one step too and passed on 2026-09-05.
@@ -274,6 +301,9 @@ numbered globally, and `params` carries a **list** of exercises. `exerciseName`
 (the variant) stays unset — each lift fit plans is a category in its own right.
 The exercise vocabulary is shared with the import side by construction:
 `importers.py` stores FIT's lowercase name, the payload upper-cases it.
+
+A warmup set is the same step with `stepTypeKey` `warmup` — `_lift_step` takes
+the kind, because a ramp set differs from a working set in nothing else.
 
 ### FIT / TCX quirks
 
@@ -657,10 +687,10 @@ not business logic, so it stays inline.
 `planner`, `training`, or how `cli`'s `train` commands compose.
 
 **The suite is small on purpose** and has been trimmed twice (192 → 154 → 195
-cases, having regrown in between). 183 now: the stateless-plan commit added
+cases, having regrown in between). 184 now: the stateless-plan commit added
 four, cutting the goals from ten to four shrank the `ALL_GOALS` loops to 181,
-and the two live-account fixes since added one each. `test_cli.py` is the only
-CLI test and stays that narrow — command composition that writes to Garmin,
+the two live-account fixes since added one each, and the warmup ramp one more.
+`test_cli.py` is the only CLI test and stays that narrow — command composition that writes to Garmin,
 with every `garmin` call stubbed. Three things do not earn a test:
 
 1. **Restating a constant or one-line definition.** Assert direction through the

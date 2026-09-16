@@ -10,7 +10,11 @@
 > now `run_10k`, `cycle_strength`, `standard_triathlon`, `strength_program`.
 > The strength work itself — import, PBs, `fit plan --sport strength`, the
 > `strength_program` goal, per-lift targets and the strength benchmark — all
-> shipped as designed.
+> shipped as designed. One part has since been replaced: the timed `CARDIO`
+> warmup this file specifies (and verified live on 2026-09-05) gave way on
+> 2026-09-16 to a per-exercise ramp of warmup *sets* derived from the working
+> weight. The dump below is still the schema record; `warmup_minutes` is no
+> longer a strength param.
 
 Context file for Claude Code. Read this alongside `CLAUDE.md` before touching any
 code — it assumes and extends every convention in that file (functions only,
