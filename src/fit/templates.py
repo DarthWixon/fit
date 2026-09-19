@@ -116,13 +116,13 @@ GOAL_TEMPLATES = {
         "description": "40km bike time, supported by squat/deadlift/bench/press",
         "weeks": 12,
         "days_per_week": 5,
-        "rest_day": 0,  # Mon
+        "rest_day": 3,  # Thu; Sun is empty too, so the long ride can slide
         "phases": [("base", 5), ("build", 5), ("peak", 2)],
         "weekly_sessions": [
             _session(
                 "cycle",
                 "long",
-                day=6,
+                day=5,
                 priority=1,
                 key=True,
                 scale=_scale("distance_m", 40000, 25000, 90000, 500),
@@ -131,7 +131,7 @@ GOAL_TEMPLATES = {
                 "cycle",
                 "intervals",
                 day=1,
-                priority=2,
+                priority=3,
                 key=True,
                 scale=_scale("reps", 4, 2, 6, 1),
                 warmup_minutes=15,
@@ -142,8 +142,8 @@ GOAL_TEMPLATES = {
             _session(
                 "cycle",
                 "intervals",
-                day=3,
-                priority=3,
+                day=4,
+                priority=2,
                 key=True,
                 scale=_scale("work", 600, 300, 1500, 30),
                 warmup_minutes=15,
@@ -153,6 +153,13 @@ GOAL_TEMPLATES = {
             ),
             # Each day pairs one heavy lower-body lift with a press, rather
             # than stacking squat and deadlift into one session.
+            #
+            # Mon deadlift, Tue ride, Wed squat, Thu rest, Fri ride, Sat long,
+            # Sun rest. With a lift on Monday one ride must follow a lifting
+            # day, so it is the hinge, not the squat, and the shorter session.
+            # Squat gets Thursday's rest before Friday's longer reps, which
+            # outrank Tuesday's so the benchmark replaces Friday: a test the
+            # day after deadlifts reads low.
             _session(
                 "strength",
                 "straight_sets",
@@ -167,7 +174,7 @@ GOAL_TEMPLATES = {
             _session(
                 "strength",
                 "straight_sets",
-                day=4,
+                day=0,
                 priority=5,
                 rest=180,
                 exercises=[
