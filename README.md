@@ -77,8 +77,9 @@ effort from what surrounds it. The swim one defaults to neither, and its name
 says "warm up first": the measurement spans the whole activity.
 
 Five of these are *steady* sessions — run `easy`/`long`, cycle
-`endurance`/`long`, swim `continuous` — a single block at a wide target band,
-with no warmup or cooldown split (a warmup inside an easy run is just more easy
+`endurance`/`long`, swim `continuous` — a single block at a wide target band
+(none at all for the rides, which are just marked easy), with no warmup or
+cooldown split (a warmup inside an easy run is just more easy
 running). They exist mainly so `fit train` can build a whole week out of real
 workouts.
 
@@ -94,7 +95,6 @@ possible — each one is just a suggestion; press Enter to accept or type your o
 - cycle interval power: the highest average power among your recent rides of 20+
   minutes
 - easy/long run pace: ~30% slower than that 5k pace
-- endurance/long ride power: ~70% of that threshold estimate
 - reps: one more than your last plan of the same type, capped at 10
 
 With no matching history, sensible static defaults are shown instead.

@@ -272,7 +272,7 @@ planner.py's docstring — keep both current):
 | `strength`/`baseline`, `cycle`/`baseline` | 2026-09-05 | untargeted top set / open-target timed block survive as sent |
 | `cycle`/`long` | 2026-09-11 | `power.zone` id 2 correct; `targetValueOne`/`Two` = low/high **watts** on a top-level step (120/170 as sent); one-step workout with a target accepted |
 
-**Still unverified: four steady combos and the strength warmup ramp** — but the
+**Still unverified: the steady combos and the strength warmup ramp** — but the
 risk in them is now small, and worth scoping before spending a round trip.
 
 The ramp sends a lift `category` *and* a `weightValue` on a **warmup** step.
@@ -280,19 +280,14 @@ The ramp sends a lift `category` *and* a `weightValue` on a **warmup** step.
 step, `CARDIO` on a `warmup` step — but never together, so Connect could blank
 one of the two. Diff the next real strength push.
 
-The four steady combos are `run` easy/long, `cycle` endurance and `swim`
-continuous. `cycle`/`long` on 2026-09-11 settled the two things that were
-actually open: `power.zone`'s transcribed id 2 is right, and
-`targetValueOne`/`Two` behave on a top-level `ExecutableStepDTO` exactly as they
-do nested in a `RepeatGroupDTO`. Being single-step was never the novelty — a
-bare `strength`/`baseline` is one step too and passed on 2026-09-05.
-
-What is left is inference, not observation. `cycle` endurance differs from the
-proven `cycle`/`long` only in a time rather than distance `endCondition`, both
-proven elsewhere. `run` easy/long and `swim` continuous pair a `pace.zone`
-proven *nested* with a top-level position proven *with power*; that exact
-combination has not been sent. Low risk, not zero. Diff one when one is next
-pushed, then update both tables.
+`run` easy/long and `swim` continuous pair a `pace.zone` proven *nested* with a
+top-level position proven *with power* (`cycle`/`long`, 2026-09-11); that exact
+combination has not been sent. The easy rides (`cycle` endurance/long) have
+carried **no target** since 2026-09-21 — a power band on an easy ride only made
+the watch beep — which is the untargeted one-step shape `strength`/`baseline`
+proved, so the 2026-09-11 `cycle`/`long` row now describes a payload fit no
+longer sends. Low risk, not zero. Diff one when one is next pushed, then update
+both tables.
 
 Strength is shaped unlike every cardio combo, all forced by Garmin's own schema:
 load is **not** a target (`no.target` + `weightValue`/`weightUnit` on the step),
@@ -667,7 +662,8 @@ easy/long, cycle intervals/baseline/endurance/long, swim intervals/continuous/
 baseline, strength straight_sets/baseline. Quality types are warmup → main →
 cooldown; the five *steady* combos (run easy/long, cycle endurance/long, swim
 continuous) are a **single block** with a wider target band, because a warmup
-inside an easy run is just more easy running.
+inside an easy run is just more easy running. The easy rides carry no target at
+all and are named `... easy`, so the watch never beeps on them.
 
 `fit plan` **saves before pushing**, so a failed push never loses the workout;
 the id and scheduled date are written back after each step succeeds, making the

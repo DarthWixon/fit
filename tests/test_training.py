@@ -236,9 +236,8 @@ def test_targets_reach_the_session_params():
         if s["sport"] == "cycle" and s["session_type"] == "long"
     )
     assert intervals["params"]["target_watts"] == 250
-    # Steady work sits below threshold, never at it — slower than 5k pace for
-    # running, under FTP for riding.
-    assert long_ride["params"]["target_watts"] < 250
+    # Easy rides go untargeted; an easy run sits slower than 5k pace.
+    assert "target_watts" not in long_ride["params"]
     long_run = next(
         s
         for s in plan["sessions"]
@@ -642,12 +641,12 @@ def test_intensity_targets_do_not_drift_across_the_plan():
     same target in week 1 and at the peak. Guessing a future pace risks
     prescribing work the athlete cannot complete."""
     plan = _plan(SPORTIVE)
-    longs = [
+    watts = [
         s["params"]["target_watts"]
-        for s in sorted(plan["sessions"], key=lambda x: x["week"])
-        if s.get("session_type") == "long" and "target_watts" in s.get("params", {})
+        for s in plan["sessions"]
+        if s.get("session_type") == "intervals" and "target_watts" in s["params"]
     ]
-    assert len(set(longs)) == 1
+    assert len(set(watts)) == 1
     # ...while the volume on that same session very much does move.
     distances = {
         s["params"]["distance_m"]

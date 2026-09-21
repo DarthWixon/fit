@@ -15,14 +15,13 @@ Verified by live round-trip (scripts/diff_workout.py):
   cycle/long             2026-09-11  power.zone id 2 correct; targetValueOne/
                                      Two = low/high watts on a top-level step;
                                      one-step workout with a target accepted
-Still unverified: run easy/long, cycle endurance, swim continuous, and the
-strength warmup ramp. The four steady combos are inference only — cycle/long
-settled power.zone and the top-level target position; cycle endurance differs
-from it only in a time endCondition, and run/swim pair a nested-proven
-pace.zone with a power-proven position. The ramp sends a lift category and a
-weightValue on a *warmup* step: the 2026-09-05 dump proved each half alone
-(category + weight on an interval step, CARDIO on a warmup step) but never
-together, so Connect may blank one of them.
+Still unverified: run easy/long, swim continuous, the untargeted easy rides
+(cycle endurance/long), and the strength warmup ramp. The run/swim steady
+combos pair a nested-proven pace.zone with a power-proven top-level position.
+The easy rides are one untargeted step, the shape strength/baseline proved.
+The ramp sends a lift category and a weightValue on a *warmup* step: the
+2026-09-05 dump proved each half alone (category + weight on an interval step,
+CARDIO on a warmup step) but never together, so Connect may blank one of them.
 Re-run the diff after first pushing any unverified combo, and update this.
 """
 
@@ -68,8 +67,8 @@ SWIM_PACE_TOLERANCE_S_PER_100M = 5
 POWER_TOLERANCE_W = 10
 
 # Wider for steady work: an easy run holds a range, not a pace to the second.
+# Easy rides carry no target at all — a power band only makes the watch beep.
 EASY_PACE_TOLERANCE_S_PER_KM = 20
-ENDURANCE_POWER_TOLERANCE_W = 25
 
 # recommend_defaults knobs. TEMPO_FACTOR: Daniels' T is ~7-8% slower than
 # I/5k pace. REPS_CAP bounds the build-by-one rep progression.
@@ -77,9 +76,8 @@ RECENT_MONTHS = 6
 TEMPO_FACTOR = 1.07
 REPS_CAP = 10
 
-# Daniels' E pace is ~30% slower than 5k; endurance riding sits mid zone 2.
+# Daniels' E pace is ~30% slower than 5k.
 EASY_FACTOR = 1.3
-ENDURANCE_FTP_FACTOR = 0.70
 
 # Short reps get a ~3% discount: the reference 5k is a *training* best, so it
 # understates race ability and would otherwise sit below Daniels' I bracket.
@@ -490,12 +488,6 @@ _PARAM_SPECS = {
             "default": 90,
             "parse": _positive_int,
         },
-        {
-            "key": "target_watts",
-            "label": "Target power (watts)",
-            "default": 150,
-            "parse": _positive_int,
-        },
     ],
     ("cycle", "long"): [
         {
@@ -503,12 +495,6 @@ _PARAM_SPECS = {
             "label": "Distance (km)",
             "default": 60,
             "parse": parse_distance_km,
-        },
-        {
-            "key": "target_watts",
-            "label": "Target power (watts)",
-            "default": 150,
-            "parse": _positive_int,
         },
     ],
     # Bare, unlike cycle: no power-window equivalent, so the whole-swim
@@ -660,15 +646,15 @@ def _pace_target(low_mps: float, high_mps: float) -> dict:
     }
 
 
-def _power_target(watts: int, tolerance_w: int = POWER_TOLERANCE_W) -> dict:
+def _power_target(watts: int) -> dict:
     return {
         "targetType": {
             "workoutTargetTypeId": 2,
             "workoutTargetTypeKey": "power.zone",
             "displayOrder": 2,
         },
-        "targetValueOne": watts - tolerance_w,
-        "targetValueTwo": watts + tolerance_w,
+        "targetValueOne": watts - POWER_TOLERANCE_W,
+        "targetValueTwo": watts + POWER_TOLERANCE_W,
     }
 
 
@@ -900,36 +886,15 @@ def _run_long(params: dict) -> tuple[str, list[dict]]:
 
 
 def _cycle_endurance(params: dict) -> tuple[str, list[dict]]:
-    steps = [
-        _step(
-            1,
-            "interval",
-            "time",
-            params["duration_minutes"] * 60,
-            _power_target(params["target_watts"], ENDURANCE_POWER_TOLERANCE_W),
-        )
-    ]
-    name = (
-        f"Cycle endurance {params['duration_minutes']}min @ {params['target_watts']}W"
-    )
-    return name, steps
+    minutes = params["duration_minutes"]
+    steps = [_step(1, "interval", "time", minutes * 60, _no_target())]
+    return f"Cycle endurance {minutes}min easy", steps
 
 
 def _cycle_long(params: dict) -> tuple[str, list[dict]]:
-    steps = [
-        _step(
-            1,
-            "interval",
-            "distance",
-            params["distance_m"],
-            _power_target(params["target_watts"], ENDURANCE_POWER_TOLERANCE_W),
-        )
-    ]
-    name = (
-        f"Cycle long {_format_meters(params['distance_m'])}"
-        f" @ {params['target_watts']}W"
-    )
-    return name, steps
+    distance = params["distance_m"]
+    steps = [_step(1, "interval", "distance", distance, _no_target())]
+    return f"Cycle long {_format_meters(distance)} easy", steps
 
 
 def _swim_continuous(params: dict) -> tuple[str, list[dict]]:
@@ -1249,11 +1214,6 @@ def tempo_pace_from_5k(five_k_seconds: int) -> int:
     return _round_to(five_k_seconds / 5 * TEMPO_FACTOR, 5)
 
 
-def endurance_watts_from_ftp(ftp_watts: int) -> int:
-    """Target watts for endurance riding (ENDURANCE_FTP_FACTOR)."""
-    return _round_to(ftp_watts * ENDURANCE_FTP_FACTOR, 5)
-
-
 def recommended_interval_pace(five_k_seconds: int, rep_distance_m: int) -> int:
     """5k pace, discounted by SHORT_REP_FACTOR for short reps."""
     pace = five_k_seconds / 5
@@ -1511,17 +1471,12 @@ def recommend_defaults(
                 "default": _format_mmss(derived["value"]),
                 "why": derived["why"],
             }
-    elif sport == "cycle" and workout_type in ("intervals", "endurance", "long"):
+    elif sport == "cycle" and workout_type == "intervals":
         derived = derive_target("cycle", recent)
         if derived["value"] is None:
             note = _rejection_note(derived)
             if note:
                 recs["target_watts"] = note
-        elif workout_type in ("endurance", "long"):
-            recs["target_watts"] = {
-                "default": endurance_watts_from_ftp(derived["value"]),
-                "why": f"~70% of threshold — {derived['why']}",
-            }
         else:
             recs["target_watts"] = {
                 "default": derived["value"],

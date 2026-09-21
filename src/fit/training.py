@@ -901,10 +901,6 @@ def _apply_target(
     elif sport == "cycle":
         if session_type == "intervals":
             params["target_watts"] = targets["bike_ftp"]
-        elif session_type in ("endurance", "long"):
-            params["target_watts"] = planner.endurance_watts_from_ftp(
-                targets["bike_ftp"]
-            )
     elif sport == "swim" and session_type in ("intervals", "continuous"):
         params["target_pace_100m"] = targets["swim_css_100m"]
     elif sport == "strength" and session_type == "straight_sets":

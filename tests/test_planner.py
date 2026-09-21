@@ -326,19 +326,20 @@ def test_rep_progression_from_previous_plans():
     [
         ("run", "easy", {"duration_minutes": 40, "target_pace": 360}),
         ("run", "long", {"distance_m": 16000, "target_pace": 345}),
-        ("cycle", "endurance", {"duration_minutes": 90, "target_watts": 165}),
-        ("cycle", "long", {"distance_m": 60000, "target_watts": 165}),
+        ("cycle", "endurance", {"duration_minutes": 90}),
+        ("cycle", "long", {"distance_m": 60000}),
         ("swim", "continuous", {"distance_m": 1500, "target_pace_100m": 110}),
     ],
 )
-def test_steady_workouts_are_a_single_targeted_block(sport, workout_type, params):
+def test_steady_workouts_are_a_single_block(sport, workout_type, params):
     """Unlike the quality types, steady sessions have no warmup/cooldown — one
-    step, carrying the target band the whole way."""
+    step, carrying the target band the whole way, or none for an easy ride."""
     plan = planner.build_plan(sport, workout_type, params, "2026-08-24T10:00:00")
     steps = plan["payload"]["workoutSegments"][0]["workoutSteps"]
     assert len(steps) == 1
     assert steps[0]["type"] == "ExecutableStepDTO"
-    assert steps[0]["targetType"]["workoutTargetTypeKey"] in ("pace.zone", "power.zone")
+    expected = "no.target" if sport == "cycle" else "pace.zone"
+    assert steps[0]["targetType"]["workoutTargetTypeKey"] == expected
     assert plan["payload"]["estimatedDurationInSecs"] > 0
 
 
