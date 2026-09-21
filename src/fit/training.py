@@ -136,14 +136,15 @@ FALLBACK_TARGETS = {
 # That is what linear progression is, and a weight that turns out too heavy is
 # a failed rep, not a failed session.
 #
-# The increment is both the plate step a working weight rounds to and the most
-# a week may add — "add one increment a week" is the method. Upper body gets
-# the smaller step because it genuinely progresses slower.
+# The increment is the most a week may add — "add one increment a week" is the
+# method. Upper body gets the smaller step because it genuinely progresses
+# slower. Every weight rounds to what a bar can hold (_round_to_plates),
+# whatever the increment.
 LIFT_INCREMENT_KG = {
     "deadlift": 2.5,
     "squat": 2.5,
-    "bench_press": 1.25,
-    "shoulder_press": 1.25,
+    "bench_press": 1.0,
+    "shoulder_press": 1.0,
 }
 DEFAULT_LIFT_INCREMENT_KG = 2.5
 
@@ -602,18 +603,21 @@ def lift_increment(exercise: str) -> float:
     return LIFT_INCREMENT_KG.get(exercise, DEFAULT_LIFT_INCREMENT_KG)
 
 
-def _round_to_increment(value: float, increment: float) -> float:
-    """A bar only holds what the plates allow."""
-    return round(round(value / increment) * increment, 2)
+def _round_to_plates(value: float) -> float:
+    """A bar only holds what the plates allow: a whole kg or a multiple of
+    2.5kg, whichever is nearer. 23.75kg cannot be loaded; 24kg can."""
+    whole = float(round(value))
+    half_plate = round(value / 2.5) * 2.5
+    return min(whole, half_plate, key=lambda kg: abs(kg - value))
 
 
-def working_weight_from_1rm(e1rm_kg: float, reps: int, increment: float) -> float:
+def working_weight_from_1rm(e1rm_kg: float, reps: int) -> float:
     """Bar weight for `reps` reps: compute.estimated_1rm read backwards, so a
     PB and a target derived from it can't disagree. Inverting rather than
     applying a flat 75% keeps it honest across rep schemes."""
     if e1rm_kg <= 0 or reps <= 0:
         return 0.0
-    return _round_to_increment(e1rm_kg / (1 + reps / 30), increment)
+    return _round_to_plates(e1rm_kg / (1 + reps / 30))
 
 
 def strength_weekly_e1rm(
@@ -789,9 +793,9 @@ def _attach_weekly_lifts(targets: dict, roles: list[str]) -> list[str]:
             )
         elif entry["goal_e1rm_kg"] > reachable + 0.01:
             warnings.append(
-                f"{lift.replace('_', ' ')}: reaching {entry['goal_e1rm_kg']:g}kg "
+                f"{lift.replace('_', ' ')}: reaching {entry['goal_e1rm_kg']:.0f}kg "
                 f"needs more than {increment:g}kg a week over this plan — it will "
-                f"get to about {reachable:g}kg. Start earlier, or aim lower."
+                f"get to about {reachable:.0f}kg. Start earlier, or aim lower."
             )
         entry["by_week"] = [
             round(value, 2)
@@ -913,7 +917,7 @@ def _apply_target(
             by_week = lift["by_week"]
             e1rm = by_week[min(max(week, 1), len(by_week)) - 1]
             exercise["target_weight_kg"] = working_weight_from_1rm(
-                e1rm, exercise["reps"], lift_increment(exercise["exercise"])
+                e1rm, exercise["reps"]
             )
 
 

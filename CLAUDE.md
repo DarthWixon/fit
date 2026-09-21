@@ -178,6 +178,13 @@ ramps, because that is what linear progression is and a weight that turns out
 too heavy is a failed rep, not a failed session. So strength sessions carry no
 `scale`, `volume_sports` excludes them, and the clamp tests exempt them.
 
+**Every prescribed load is a whole kg or a multiple of 2.5kg**
+(`training._round_to_plates`, nearest wins), whatever the lift's increment.
+Rounding to a 1.25kg step prescribed 23.75kg, which the watch showed as 23.8
+and no bar could hold. Bench and press step 1kg, squat and deadlift 2.5kg.
+The e1RMs in `train show` are estimates, not bar weights, so they print as
+whole kg.
+
 **A strength warmup is the lift itself, and nobody is asked about it.** The
 warmup for a squat is lighter squats, so `planner._warmup_sets` derives a ramp
 from the working weight — the empty bar, then 55/70/85% at 5/3/2 reps, rounded

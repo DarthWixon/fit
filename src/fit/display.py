@@ -583,12 +583,13 @@ def _format_target_value(key: str, value) -> str:
 
 
 def _format_lift_target(lift: str, entry: dict) -> str:
-    """'Squat 105 → 122.5kg': a strength target is a journey, not a figure."""
+    """'Squat 105 → 123kg': a strength target is a journey, not a figure. Both
+    are e1RM estimates, so whole kg — a decimal reads as a bar weight."""
     name = lift.replace("_", " ").capitalize()
     return (
-        f"{name} {entry['current_e1rm_kg']:g} → {entry['goal_e1rm_kg']:g}kg"
+        f"{name} {entry['current_e1rm_kg']:.0f} → {entry['goal_e1rm_kg']:.0f}kg"
         if entry.get("goal_e1rm_kg") is not None
-        else f"{name} {entry['current_e1rm_kg']:g}kg"
+        else f"{name} {entry['current_e1rm_kg']:.0f}kg"
     )
 
 

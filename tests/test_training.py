@@ -976,7 +976,12 @@ def test_working_weight_round_trips_through_the_e1rm_formula():
 
     for reps in (3, 5, 8, 10):
         e1rm = compute.estimated_1rm(100.0, reps)
-        assert training.working_weight_from_1rm(e1rm, reps, 2.5) == 100.0
+        assert training.working_weight_from_1rm(e1rm, reps) == 100.0
+    # ...and lands on a loadable weight: a whole kg or a multiple of 2.5kg.
+    assert (
+        training.working_weight_from_1rm(compute.estimated_1rm(23.75, 10), 10) == 24.0
+    )
+    assert training.working_weight_from_1rm(compute.estimated_1rm(22.4, 10), 10) == 22.5
 
 
 def test_each_week_gets_its_own_exercise_dicts():

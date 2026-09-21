@@ -138,8 +138,8 @@ _LAP_BUTTON_END_VALUE = 10.0
 
 # A lifting warmup is a ramp to the working weight, not cardio: the empty bar,
 # then percentages of the work set at descending reps. Rounded to 2.5kg rather
-# than training.LIFT_INCREMENT_KG's per-lift step — a warmup set does not need
-# 1.25kg precision, and planner may not import training.
+# than training's whole-kg-or-2.5kg rule — a warmup set does not need 1kg
+# precision, and planner may not import training.
 _BAR_WEIGHT_KG = 20.0
 _WARMUP_ROUNDING_KG = 2.5
 _WARMUP_RAMP = ((0.55, 5), (0.70, 3), (0.85, 2))
