@@ -146,6 +146,12 @@ def test_every_goal_expands_into_buildable_sessions(goal):
             # display; the payload is rebuilt from params at sync time. If the
             # two disagree, the calendar describes a different workout.
             assert built["workout_name"] == session["workout_name"]
+    # next_working_weight judges a lift against one scheme per goal.
+    schemes = {}
+    for session in templates.GOAL_TEMPLATES[goal]["weekly_sessions"]:
+        for e in session["params"].get("exercises", []):
+            schemes.setdefault(e["exercise"], set()).add((e["sets"], e["reps"]))
+    assert all(len(s) == 1 for s in schemes.values())
 
 
 def test_a_target_for_an_untrained_sport_is_rejected():
@@ -921,16 +927,21 @@ def _lifted(date_iso, exercise, reps, weight_kg):
     }
 
 
-def test_strength_weekly_e1rm_advances_only_on_build_weeks():
-    roles = ["build", "build", "recover", "build", "taper"]
-    weekly = training.strength_weekly_e1rm(100.0, 120.0, roles, 2.5)
-    # First build week sits at the current figure; later ones add a step.
-    assert weekly[0] == 100.0
-    assert weekly[1] == 102.5
-    # A deload dips without advancing: the week after resumes from 102.5.
-    assert weekly[2] == pytest.approx(102.5 * training.STRENGTH_DELOAD_FACTOR)
-    assert weekly[3] == 105.0
-    assert weekly[4] == pytest.approx(105.0 * training.STRENGTH_TAPER_FACTOR)
+def test_a_miss_holds_the_weight_and_the_third_running_resets_it():
+    def lifted(*sets, test=False):
+        return {"sets": [{"reps": r, "weight_kg": w} for w, r in sets], "test": test}
+
+    def next_press(history):
+        return training.next_working_weight(history, 3, 10, 1.0, 20.0)
+
+    done = lifted((20, 5), (24, 10), (24, 10), (24, 10))
+    missed = lifted((20, 5), (24, 10), (24, 10), (24, 8))
+    assert next_press([done]) == 25.0
+    assert next_press([missed, missed]) == 24.0
+    assert next_press([missed, missed, missed]) == 22.0  # 21.6, loadable
+    # A test lifts the level to what it measured, but never lowers it.
+    assert next_press([done, lifted((40, 3), test=True)]) == 33.0
+    assert next_press([done, lifted((20, 3), test=True)]) == 25.0
 
 
 def _roles_of(plan):
@@ -943,30 +954,26 @@ def test_a_goal_further_off_than_the_plan_is_long_is_capped_and_warned():
     """Better to say the timeline doesn't reach than to prescribe a curve
     nobody could ride."""
     plan = _plan(STRENGTH + "targets: {deadlift_goal_kg: 300}\n")
-    entry = plan["targets"]["strength"]["deadlift"]
-    increment = training.lift_increment("deadlift")
-    # Only build weeks advance, so they are the ones the cap applies to — a
-    # deload week dips and the week after resumes, which is not a step.
     roles = _roles_of(plan)
-    build = [v for v, role in zip(entry["by_week"], roles) if role == "build"]
+    build = [
+        s["params"]["exercises"][0]["target_weight_kg"]
+        for s in plan["sessions"]
+        if s["session_type"] == "straight_sets"
+        and s["params"]["exercises"][0]["exercise"] == "deadlift"
+        and roles[s["week"] - 1] == "build"
+    ]
     steps = [b - a for a, b in zip(build, build[1:])]
-    assert max(steps) <= increment + 0.01
-    assert entry["by_week"][-1] < 300
+    assert max(steps) <= training.lift_increment("deadlift")
+    assert build[-1] < training.working_weight_from_1rm(300, 5, 2.5)
     assert any("deadlift" in w for w in plan["warnings"])
 
 
 def test_an_underived_goal_is_what_the_plans_length_can_deliver():
     plan = _plan(STRENGTH)
-    for lift, entry in plan["targets"]["strength"].items():
-        roles = _roles_of(plan)
-        assert entry["goal_e1rm_kg"] == pytest.approx(
-            training.reachable_e1rm(
-                entry["current_e1rm_kg"], roles, training.lift_increment(lift)
-            ),
-            abs=0.01,
-        )
-        # Derived, so it can never trip its own warning.
-        assert not plan["warnings"]
+    for entry in plan["targets"]["strength"].values():
+        assert entry["goal_e1rm_kg"] > entry["current_e1rm_kg"]
+    # Derived, so it can never trip its own warning.
+    assert not plan["warnings"]
 
 
 def test_working_weight_round_trips_through_the_e1rm_formula():
@@ -976,12 +983,10 @@ def test_working_weight_round_trips_through_the_e1rm_formula():
 
     for reps in (3, 5, 8, 10):
         e1rm = compute.estimated_1rm(100.0, reps)
-        assert training.working_weight_from_1rm(e1rm, reps) == 100.0
-    # ...and lands on a loadable weight: a whole kg or a multiple of 2.5kg.
-    assert (
-        training.working_weight_from_1rm(compute.estimated_1rm(23.75, 10), 10) == 24.0
-    )
-    assert training.working_weight_from_1rm(compute.estimated_1rm(22.4, 10), 10) == 22.5
+        assert training.working_weight_from_1rm(e1rm, reps, 2.5) == 100.0
+    # ...and lands on a loadable weight: 23.75kg is not one.
+    press = compute.estimated_1rm(23.75, 10)
+    assert training.working_weight_from_1rm(press, 10, 1.0) == 24.0
 
 
 def test_each_week_gets_its_own_exercise_dicts():

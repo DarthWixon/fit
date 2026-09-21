@@ -178,10 +178,32 @@ ramps, because that is what linear progression is and a weight that turns out
 too heavy is a failed rep, not a failed session. So strength sessions carry no
 `scale`, `volume_sports` excludes them, and the clamp tests exempt them.
 
-**Every prescribed load is a whole kg or a multiple of 2.5kg**
-(`training._round_to_plates`, nearest wins), whatever the lift's increment.
-Rounding to a 1.25kg step prescribed 23.75kg, which the watch showed as 23.8
-and no bar could hold. Bench and press step 1kg, squat and deadlift 2.5kg.
+**Strength progresses on what you lifted, not on a schedule.** Each lift's next
+load comes from `training.next_working_weight` over that lift's own sessions in
+the plan — the StrongLifts rule: every set's reps done at the heaviest weight
+earns one increment, a miss holds the weight, and the third miss running at one
+weight resets it 10% lower. It judges what was *lifted*, not what was
+prescribed, so loading 24kg against a planned 23.75kg is judged at 24kg. Future
+sessions assume each one before them goes to plan, capped at the goal; a past
+session shows what its history prescribed then. Three rules keep it honest:
+
+- **Lifting in a deload or taper week is not judged** — a light week passing is
+  not evidence for adding load, and would drag the level down.
+- **A test only raises the level.** Lifting in a week that tests that lift (or
+  in week 0) is read as a test; misses already have their own way down.
+- **A skipped session does not advance.** No record, no step.
+
+It replaced a weekly e1RM table on 2026-09-21. That table was built on the best
+e1RM measured *today* plus one step per week since week 1, so every good session
+raised the base *and* the week count kept adding: success counted twice. Each
+lift has one rep scheme per goal, which the rule depends on.
+
+**Every prescribed load is a whole kg or a multiple of 2.5kg.** Each lift
+rounds to its own increment — bench and press 1kg, squat and deadlift 2.5kg —
+so `LIFT_INCREMENT_KG` must hold only those two values. A 1.25kg step prescribed
+23.75kg, which the watch showed as 23.8 and no bar could hold. Rounding to the
+nearest loadable weight instead was tried and dropped: 67 + 2.5 lands on 69
+and 70 by turns.
 The e1RMs in `train show` are estimates, not bar weights, so they print as
 whole kg.
 
@@ -562,9 +584,10 @@ Strength targets are **per lift**, under `targets["strength"]`, deliberately
 outside `_SPORT_TARGETS`/`PLAUSIBLE_TARGETS` — forcing them in would mean giving
 `derive_target` a float path and per-exercise bounds, changing code all three
 cardio sports depend on. `current` is measured; `goal` cannot be (it's a decision
-about the future) so the description wins, else `reachable_e1rm`. A goal further
-off than the plan is long is **capped and warned about**. `by_week` bakes the
-week structure into a table once, so `_apply_target` stays a stateless lookup.
+about the future) so the description wins, else where the progression gets to
+by the last build session. A goal further off than the plan is long is **capped
+and warned about**. Loads themselves come from `_progress_lifts` (see "Strength
+progresses on what you lifted").
 
 **Benchmark shape follows one rule:**
 

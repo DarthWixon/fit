@@ -201,6 +201,11 @@ Re-test weeks: 4, 8, 12 — do the test and `fit garmin-sync`; the plan
 re-derives from it automatically.
 ```
 
+Strength loads follow what you actually lifted. Hit every rep of every set and
+the next session adds 2.5kg (squat, deadlift) or 1kg (bench, press); miss reps
+and the weight stays; miss three sessions running at one weight and it drops
+10%. Every load is a whole kg or a multiple of 2.5kg.
+
 There is no step in between, and no `fit train retarget` — the plan is derived,
 not stored. `~/.fit/train/plan.json` keeps only your description, the starting
 volume pinned at import, and a ledger of what has been pushed; the schedule

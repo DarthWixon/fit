@@ -13,6 +13,7 @@ templates.GOAL_TEMPLATES, so recalibrating a goal never touches this file.
 """
 
 import copy
+import math
 import statistics
 from datetime import date, timedelta
 
@@ -136,10 +137,11 @@ FALLBACK_TARGETS = {
 # That is what linear progression is, and a weight that turns out too heavy is
 # a failed rep, not a failed session.
 #
-# The increment is the most a week may add — "add one increment a week" is the
-# method. Upper body gets the smaller step because it genuinely progresses
-# slower. Every weight rounds to what a bar can hold (_round_to_plates),
-# whatever the increment.
+# The ramp is StrongLifts': every set done at the weight earns one increment
+# next session, a miss holds it, and the third miss running at one weight
+# resets it 10% lower. Upper body gets the smaller step because it genuinely
+# progresses slower. Each lift's loads round to its own increment, so every
+# weight is a whole kg or a multiple of 2.5kg — keep new increments to those.
 LIFT_INCREMENT_KG = {
     "deadlift": 2.5,
     "squat": 2.5,
@@ -152,6 +154,12 @@ DEFAULT_LIFT_INCREMENT_KG = 2.5
 # *volume* cut — 60% of a working weight stops being training.
 STRENGTH_DELOAD_FACTOR = 0.85
 STRENGTH_TAPER_FACTOR = 0.8
+STRENGTH_MISSES_BEFORE_RESET = 3
+STRENGTH_RESET_FACTOR = 0.9
+_STRENGTH_ROLE_FACTORS = {
+    "recover": STRENGTH_DELOAD_FACTOR,
+    "taper": STRENGTH_TAPER_FACTOR,
+}
 
 # PLAUSIBLE_TARGETS' job, kept separate because a strength target is per lift,
 # not one number per sport.
@@ -603,55 +611,54 @@ def lift_increment(exercise: str) -> float:
     return LIFT_INCREMENT_KG.get(exercise, DEFAULT_LIFT_INCREMENT_KG)
 
 
-def _round_to_plates(value: float) -> float:
-    """A bar only holds what the plates allow: a whole kg or a multiple of
-    2.5kg, whichever is nearer. 23.75kg cannot be loaded; 24kg can."""
-    whole = float(round(value))
-    half_plate = round(value / 2.5) * 2.5
-    return min(whole, half_plate, key=lambda kg: abs(kg - value))
+def _round_to_plates(value: float, increment: float) -> float:
+    """A bar only holds what the plates allow. Rounding to the lift's own step
+    rather than to any loadable weight keeps a ramp even: 67 + 2.5 would
+    otherwise land on 69 and 70 by turns. Halves round up, not to even."""
+    return round(math.floor(value / increment + 0.5) * increment, 2)
 
 
-def working_weight_from_1rm(e1rm_kg: float, reps: int) -> float:
+def working_weight_from_1rm(e1rm_kg: float, reps: int, increment: float) -> float:
     """Bar weight for `reps` reps: compute.estimated_1rm read backwards, so a
     PB and a target derived from it can't disagree. Inverting rather than
     applying a flat 75% keeps it honest across rep schemes."""
     if e1rm_kg <= 0 or reps <= 0:
         return 0.0
-    return _round_to_plates(e1rm_kg / (1 + reps / 30))
+    return _round_to_plates(e1rm_kg / (1 + reps / 30), increment)
 
 
-def strength_weekly_e1rm(
-    current_kg: float, goal_kg: float, roles: list[str], increment: float
-) -> list[float]:
-    """One target e1RM per week, current -> goal. Mirrors _week_multipliers'
-    shape so the two progressions agree about the week structure.
+def next_working_weight(
+    history: list[dict], sets: int, reps: int, increment: float, start_kg: float
+) -> float:
+    """The load the next session of one lift prescribes, from that lift's
+    sessions oldest first ({"sets": [...], "test": bool}).
 
-    Capped at one increment per week, so a goal further off than the plan is
-    long simply isn't reached — expand_plan warns rather than prescribing it."""
-    builds = roles.count("build")
-    span = max(goal_kg - current_kg, 0.0)
-    step = min(increment, span / max(builds - 1, 1)) if builds > 1 else 0.0
-
-    weekly: list[float] = []
-    level = current_kg
-    started = False
-    for role in roles:
-        if role == "build":
-            if started:
-                level = min(level + step, goal_kg)
-            started = True
-            weekly.append(level)
-        elif role == "recover":
-            weekly.append(level * STRENGTH_DELOAD_FACTOR)
-        else:  # taper
-            weekly.append(level * STRENGTH_TAPER_FACTOR)
-    return weekly
-
-
-def reachable_e1rm(current_kg: float, roles: list[str], increment: float) -> float:
-    """The most this length can honestly add: one increment per build week.
-    Both the derived goal and the too-ambitious warning measure against it."""
-    return current_kg + increment * max(roles.count("build") - 1, 0)
+    A session is judged at its heaviest weight, on what was actually lifted
+    rather than what was prescribed. A test lifts the level to what it
+    measured but never lowers it — misses already have their own way down."""
+    level, misses, missed_at = start_kg, 0, None
+    for session in history:
+        loaded = [s for s in session["sets"] if s.get("weight_kg")]
+        if not loaded:
+            continue
+        if session["test"]:
+            best = max(
+                compute.estimated_1rm(s["weight_kg"], s.get("reps", 0)) for s in loaded
+            )
+            level = max(level, working_weight_from_1rm(best, reps, increment))
+            continue
+        top = max(s["weight_kg"] for s in loaded)
+        hit = sum(
+            1 for s in loaded if s["weight_kg"] >= top and s.get("reps", 0) >= reps
+        )
+        if hit >= sets:
+            level, misses = _round_to_plates(top + increment, increment), 0
+            continue
+        misses = misses + 1 if top == missed_at else 1
+        level, missed_at = top, top
+        if misses >= STRENGTH_MISSES_BEFORE_RESET:
+            level, misses = _round_to_plates(top * STRENGTH_RESET_FACTOR, increment), 0
+    return level
 
 
 def derive_lift_1rm(recent: list[dict], exercise: str) -> tuple[float, str] | None:
@@ -753,9 +760,9 @@ def _derive_lift_targets(
 
     `current` is measured, like every other target. `goal` cannot be — it is a
     decision about the future — so the description wins, else it defaults to
-    reachable_e1rm (filled in by _attach_weekly_lifts). Deriving it keeps
-    strength inside the derive-or-fall-back rule, so a plan expands with no
-    `targets:` at all."""
+    where the progression gets to (filled in by _progress_lifts). Deriving it
+    keeps strength inside the derive-or-fall-back rule, so a plan expands with
+    no `targets:` at all."""
     resolved = {}
     for lift in lifts:
         derived = derive_lift_target(recent, lift)
@@ -774,36 +781,6 @@ def _derive_lift_targets(
             entry["goal_from"] = "set in the plan description"
         resolved[lift] = entry
     return resolved
-
-
-def _attach_weekly_lifts(targets: dict, roles: list[str]) -> list[str]:
-    """Fill in each lift's per-week e1RM path in place; returns warnings. The
-    table is what keeps _apply_target a stateless lookup — the session already
-    knows its week, so only an index is threaded through."""
-    warnings = []
-    for lift, entry in targets.get("strength", {}).items():
-        increment = lift_increment(lift)
-        current = entry["current_e1rm_kg"]
-        reachable = reachable_e1rm(current, roles, increment)
-        if "goal_e1rm_kg" not in entry:
-            entry["goal_e1rm_kg"] = round(reachable, 2)
-            entry["goal_from"] = (
-                f"one {increment:g}kg step per build week — what this plan's "
-                "length can deliver"
-            )
-        elif entry["goal_e1rm_kg"] > reachable + 0.01:
-            warnings.append(
-                f"{lift.replace('_', ' ')}: reaching {entry['goal_e1rm_kg']:.0f}kg "
-                f"needs more than {increment:g}kg a week over this plan — it will "
-                f"get to about {reachable:.0f}kg. Start earlier, or aim lower."
-            )
-        entry["by_week"] = [
-            round(value, 2)
-            for value in strength_weekly_e1rm(
-                current, entry["goal_e1rm_kg"], roles, increment
-            )
-        ]
-    return warnings
 
 
 def derive_volume_scale(
@@ -884,13 +861,10 @@ def _days_for_week(
     return round(low + (high - low) * index / last_build)
 
 
-def _apply_target(
-    sport: str, session_type: str, params: dict, targets: dict, week: int = 1
-) -> None:
+def _apply_target(sport: str, session_type: str, params: dict, targets: dict) -> None:
     """Fill in the one intensity param each session type needs, in place.
-
-    `week` is read only by strength, as an index into _attach_weekly_lifts'
-    table. Everywhere else intensity is a pure function of the target."""
+    Strength loads depend on the lifting history, so _progress_lifts sets
+    those once every session is dated."""
     if sport == "run":
         if session_type == "intervals":
             params["target_pace"] = planner.recommended_interval_pace(
@@ -907,18 +881,6 @@ def _apply_target(
             params["target_watts"] = targets["bike_ftp"]
     elif sport == "swim" and session_type in ("intervals", "continuous"):
         params["target_pace_100m"] = targets["swim_css_100m"]
-    elif sport == "strength" and session_type == "straight_sets":
-        # The one session type whose intensity is a list, not a single param.
-        table = targets.get("strength", {})
-        for exercise in params.get("exercises", []):
-            lift = table.get(exercise["exercise"])
-            if not lift or not lift.get("by_week"):
-                continue
-            by_week = lift["by_week"]
-            e1rm = by_week[min(max(week, 1), len(by_week)) - 1]
-            exercise["target_weight_kg"] = working_weight_from_1rm(
-                e1rm, exercise["reps"]
-            )
 
 
 # --- expansion ------------------------------------------------------------
@@ -960,7 +922,7 @@ def _build_session(
     if scale:
         params[scale["param"]] = _scaled(scale, multiplier)
     sport, session_type = template_session["sport"], template_session["session_type"]
-    _apply_target(sport, session_type, params, targets, week)
+    _apply_target(sport, session_type, params, targets)
 
     return {
         "date": session_date.isoformat(),
@@ -974,6 +936,116 @@ def _build_session(
         "is_brick": template_session.get("brick", False),
         "is_extra": False,
     }
+
+
+def _iso_week(iso_date: str) -> tuple:
+    return date.fromisoformat(iso_date).isocalendar()[:2]
+
+
+def _progress_lifts(
+    sessions: list[dict],
+    targets: dict,
+    roles: list[str],
+    activities: list[dict],
+    reference: date,
+) -> list[str]:
+    """Set every straight-sets load in place from next_working_weight;
+    returns warnings. A past session shows what its history prescribed then;
+    a future one assumes each session before it goes to plan, capped at the
+    goal. Lifting in a deload or taper week is not judged, and lifting in a
+    week that tests the lift is the test."""
+    today = reference.isoformat()
+    week_roles = {
+        _iso_week(s["date"]): roles[s["week"] - 1] if s["week"] else "test"
+        for s in sessions
+    }
+    lifting = sorted(
+        (a for a in activities if a.get("type") == "strength" and a.get("date")),
+        key=lambda a: a["date"],
+    )
+    warnings = []
+    for lift, entry in targets.get("strength", {}).items():
+        planned = [
+            (s, exercise)
+            for s in sessions
+            if s["sport"] == "strength" and s["session_type"] == "straight_sets"
+            for exercise in s["params"].get("exercises", [])
+            if exercise["exercise"] == lift
+        ]
+        if not planned:
+            continue
+        sets, reps = planned[0][1]["sets"], planned[0][1]["reps"]
+        increment = lift_increment(lift)
+        tested = {
+            _iso_week(s["date"])
+            for s in sessions
+            if s.get("is_benchmark") and s["params"].get("exercise") == lift
+        }
+        history = []
+        for activity in lifting:
+            week = _iso_week(activity["date"])
+            test = week in tested or week_roles.get(week) == "test"
+            if activity["date"] > today or not (
+                test or week_roles.get(week) == "build"
+            ):
+                continue
+            history.extend(
+                {"date": activity["date"], "sets": e.get("sets") or [], "test": test}
+                for e in activity.get("exercises") or []
+                if e.get("name") == lift
+            )
+
+        start = working_weight_from_1rm(entry["current_e1rm_kg"], reps, increment)
+
+        def level_at(before: str) -> float:
+            done = [h for h in history if h["date"] < before]
+            return next_working_weight(done, sets, reps, increment, start)
+
+        now = next_working_weight(history, sets, reps, increment, start)
+        future = [(s, e) for s, e in planned if s["date"] > today]
+        builds = sum(1 for s, _ in future if roles[s["week"] - 1] == "build")
+        reached = now + increment * max(builds - 1, 0)
+        if "goal_e1rm_kg" in entry:
+            cap = max(
+                working_weight_from_1rm(entry["goal_e1rm_kg"], reps, increment), now
+            )
+            if reached < cap:
+                warnings.append(
+                    f"{lift.replace('_', ' ')}: reaching "
+                    f"{entry['goal_e1rm_kg']:.0f}kg needs more than "
+                    f"{increment:g}kg a session over this plan — it will get to "
+                    f"about {compute.estimated_1rm(reached, reps):.0f}kg. Start "
+                    "earlier, or aim lower."
+                )
+        else:
+            cap = reached
+            entry["goal_e1rm_kg"] = compute.estimated_1rm(reached, reps)
+            entry["goal_from"] = (
+                f"one {increment:g}kg step per session — what this plan's length "
+                "can deliver"
+            )
+
+        ahead = 0
+        for session, exercise in planned:
+            role = roles[session["week"] - 1]
+            if session["date"] <= today:
+                level = level_at(session["date"])
+            else:
+                level = min(now + increment * ahead, cap)
+                if role == "build":
+                    ahead += 1
+            factor = _STRENGTH_ROLE_FACTORS.get(role, 1.0)
+            exercise["target_weight_kg"] = _round_to_plates(level * factor, increment)
+
+    for session in sessions:
+        if (
+            session["sport"] == "strength"
+            and session["session_type"] == "straight_sets"
+        ):
+            session["workout_name"] = planner.workout_name(
+                "strength", "straight_sets", session["params"]
+            )
+    return warnings
 
 
 def benchmark_sports(goal: str) -> list[str]:
@@ -1129,8 +1201,6 @@ def expand_plan(
     multipliers = _week_multipliers(phase_by_week, progression)
     roles = _week_roles(phase_by_week, progression["build_recover"])
     targets = derive_targets(spec, activities, reference)
-    # Needs the week structure, so not inside derive_targets.
-    lift_warnings = _attach_weekly_lifts(targets, roles)
 
     # Rotate first, trim per week: selection counts distinct days, which
     # rotation preserves.
@@ -1158,7 +1228,7 @@ def expand_plan(
         start_scale, volume_why = derive_volume_scale(
             spec, activities, reference, _week_seconds(week_sessions(0), targets)
         )
-    warnings = list(lift_warnings)
+    warnings = []
     growth = (max(multipliers) if multipliers else 1.0) / max(start_scale, 0.01)
     if growth > VOLUME_RAMP_WARN:
         warnings.append(
@@ -1245,6 +1315,7 @@ def expand_plan(
         s for s in sessions if spec["start_date"] <= s["date"] < spec["event_date"]
     ]
     sessions.sort(key=lambda s: (s["date"], not s["is_key"], s["sport"]))
+    warnings[:0] = _progress_lifts(sessions, targets, roles, activities, reference)
 
     return {
         "goal": spec["goal"],
