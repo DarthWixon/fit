@@ -1,6 +1,6 @@
 """Filesystem boundary. The only module that touches disk.
 
-Dict shapes (activity, pbs.json, fitness.json) are in CLAUDE.md.
+Dict shapes (activity, pbs.json) are in CLAUDE.md.
 """
 
 import json
@@ -12,13 +12,12 @@ DEFAULTS = {
     "sports": [],  # empty = all types shown
     "pbs_window_months": 0,  # 0 = all-time PBs
     "history_count": 5,  # rows in the dashboard's embedded history table
-    "dashboard_weeks": 12,  # weeks shown in dashboard volume/fitness sparklines (0 = all)
+    "dashboard_weeks": 12,  # weeks shown in dashboard volume sparkline (0 = all)
     "max_heart_rate": 0,  # bpm, 0 = unset (HR zone breakdown column shows "—" until set)
     "train_sync_window_days": 14,  # how far ahead `fit train sync` schedules sessions
     "show_sparkline": True,  # weekly volume (hours) sparkline block
     "show_pbs": True,  # personal bests block
     "show_sports_summary": True,  # sports summary block (all types, count + time + distance)
-    "show_fitness_index": True,  # fitness index (EWMA training load rescaled to a baseline of 100) block
     "show_calendar": True,  # calendar block (active days over the last 2 months)
 }
 
@@ -26,13 +25,12 @@ _CONFIG_COMMENTS = {
     "sports": "comma-separated types to show, e.g. run, cycle (blank = all)",
     "pbs_window_months": "how far back to look for PBs shown on dashboard/pbs (0 = all-time)",
     "history_count": "rows in the dashboard's recent-activity table",
-    "dashboard_weeks": "weeks shown in dashboard volume/fitness sparklines (0 = all)",
+    "dashboard_weeks": "weeks shown in dashboard volume sparkline (0 = all)",
     "max_heart_rate": "your max heart rate in bpm, used to compute HR zone % breakdowns (0 = unset)",
     "train_sync_window_days": "how many days ahead `fit train sync` pushes training-plan sessions",
     "show_sparkline": "weekly volume (hours) sparkline block",
     "show_pbs": "personal bests block",
     "show_sports_summary": "sports summary block (all types, count + time + distance)",
-    "show_fitness_index": "fitness index (EWMA training load rescaled to a baseline of 100) block",
     "show_calendar": "calendar block (active days over the last 2 months)",
 }
 
@@ -54,10 +52,6 @@ def config_path() -> Path:
 
 def pbs_path() -> Path:
     return resolve_data_dir() / "pbs.json"
-
-
-def fitness_path() -> Path:
-    return resolve_data_dir() / "fitness.json"
 
 
 def plans_dir() -> Path:
@@ -215,11 +209,3 @@ def read_pbs() -> dict:
 
 def write_pbs(pbs: dict) -> None:
     _write_json_atomic(pbs_path(), pbs)
-
-
-def read_fitness_baseline() -> dict:
-    return _read_json(fitness_path(), default={})
-
-
-def write_fitness_baseline(baseline: dict) -> None:
-    _write_json_atomic(fitness_path(), baseline)

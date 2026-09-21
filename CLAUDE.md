@@ -52,7 +52,6 @@ for itself; the code holds its own API — don't look for function signatures he
 ├── activities/2024-01-15T08:30:00.json   ← one file per activity, named by id
 ├── config                                 ← plain text key = value
 ├── pbs.json                               ← cached PBs
-├── fitness.json                           ← the fitness-index baseline
 ├── plans/<created>.json                   ← `fit plan` workouts
 └── train/plan.json                        ← the single active training plan
 ```
@@ -127,18 +126,6 @@ discarded, and no original file is kept. Adding a split distance, setting
 `max_heart_rate`, or changing anything else affects **future imports only**.
 There is no backfill and no recompute-on-config-change; recovering old values
 means re-importing from wherever the originals still live.
-
-**The fitness baseline is sticky, and drift only warns.** `fitness.json` is
-written once (lazily) and never auto-recomputed — 100 means the rolling load on
-that day, and moving the anchor would silently change what every past index
-value meant. But that only holds while the days *before* it stay put, so
-`baseline_from` records how much history sat behind the anchor and
-`compute.baseline_drift` compares it on every render. It **reports, never
-repairs**: the fix is the user's to run (`fit fitness-reset --as-of <date>`
-re-cuts it where it stands; bare `fitness-reset` moves it to today). This is the
-exact opposite of `pbs.json`, which silently recomputes when stale —
-deliberately so. Not hypothetical: a sync of two activities dated a month before
-the anchor read as +9% when the real change was +1.4%.
 
 **New PBs are announced once per import batch**, not once per activity.
 `detect_new_pbs` takes the whole batch and reduces it via `all_personal_bests`.
@@ -378,45 +365,13 @@ misaligned pairing renames sets to whatever sat at that index.
 
 ---
 
-## Fitness index
-
-One number, rescaled to a baseline of 100. Deliberately coarse — a "doesn't need
-to be perfect" goal.
-
-Per-activity load is **MET-hours** (`MET_TABLE`, banded by pace/speed). This is
-the only base that works for every activity regardless of source:
-`avg_heart_rate` and `avg_power` come only from TCX/FIT, never bare Strava CSV,
-while type/distance/duration are always present. No FTP or threshold calibration
-is asked of the user.
-
-When `avg_heart_rate` *is* present the base is scaled by
-`avg_heart_rate / median(same type)`, clamped to `[0.8, 1.25]` so one anomalous
-reading can't swing a day. The median is **inclusive** of the activity being
-scored, so a type's first HR-tagged activity gets a neutral 1.0 for free.
-
-Daily totals feed a **42-day EWMA** (Coggan CTL) over *every calendar day*, so
-rest decays the number. Seeded at the first day's own load rather than 0, to
-avoid a fake multi-week ramp for anyone backfilling history.
-
-**One combined index**, never filtered by `--sport`. `--timerange` narrows the
-trend *sparkline* only (via `filter_series_by_date` on the computed series — not
-by re-running the EWMA over a truncated list, which would discard pre-window
-decay). The headline is always full-history as of today, which is why the
-dashboard's fitness block renders *before* the empty-activities early return.
-
-*Known limitation*: `median_hr_by_type` is recomputed from all current
-activities, not frozen per activity, so an old activity's load shifts slightly as
-more HR data arrives. Acceptable under "coarse, not perfect".
-
----
-
 ## HR zones
 
 Standard 5-band %-of-max model (`HR_ZONE_BOUNDARIES`), from a `max_heart_rate`
-config key the user sets themselves — not derived, unlike the fitness index's
-self-calibrating multiplier. Computed at import from the same point stream as
-splits, attributed to the earlier sample's zone, stored as raw seconds. Shown as
-a segmented colour bar in the history table; `"—"` when absent.
+config key the user sets themselves, not derived. Computed at import from the
+same point stream as splits, attributed to the earlier sample's zone, stored as
+raw seconds. Shown as a segmented colour bar in the history table; `"—"` when
+absent.
 
 ---
 
@@ -435,7 +390,7 @@ DEFAULTS = {
     "max_heart_rate": 0,          # bpm, 0 = unset
     "train_sync_window_days": 14,
     "show_sparkline": True, "show_pbs": True, "show_sports_summary": True,
-    "show_fitness_index": True, "show_calendar": True,
+    "show_calendar": True,
 }
 ```
 
@@ -447,12 +402,11 @@ Precedence and scope, all of which have caught people out:
   computes fresh), so a windowed view can never corrupt the all-time cache and
   `computed_from` stays meaningful.
 - `--sport` narrows the history table, sparkline, calendar and PB rows. It does
-  **not** narrow the sports summary or the fitness index, which are always
-  whole-dataset overviews. `--minimal`/`fit dash` forces off `show_pbs` and
+  **not** narrow the sports summary, which is always a whole-dataset
+  overview. `--minimal`/`fit dash` forces off `show_pbs` and
   `show_sports_summary` only — the calendar stays.
 - `max_heart_rate` is read at **import time only** (see going-forward-only).
-- `dashboard_weeks` has deliberately no CLI flag; `fit fitness` stays
-  full-history.
+- `dashboard_weeks` has deliberately no CLI flag.
 
 ---
 
@@ -685,7 +639,6 @@ trained as missed.
 ```
 fit dashboard [--sport S] [--timerange 3m] [--minimal]   fit dash = --minimal
 fit pbs [--months N]          fit stats [--week|--month|--year]
-fit fitness                   fit fitness-reset [--as-of DATE]
 fit import <path>             TCX/FIT file, folder, or Strava export
 fit garmin-sync [--days N]    fit gs = --days 7
 fit plan --sport S --type T [--no-push] [--schedule DATE]
@@ -719,9 +672,10 @@ not business logic, so it stays inline.
 `planner`, `training`, or how `cli`'s `train` commands compose.
 
 **The suite is small on purpose** and has been trimmed twice (192 → 154 → 195
-cases, having regrown in between). 184 now: the stateless-plan commit added
+cases, having regrown in between). 179 now: the stateless-plan commit added
 four, cutting the goals from ten to four shrank the `ALL_GOALS` loops to 181,
-the two live-account fixes since added one each, and the warmup ramp one more.
+the two live-account fixes since added one each, the warmup ramp one more, and
+removing the fitness index took five.
 `test_cli.py` is the only CLI test and stays that narrow — command composition that writes to Garmin,
 with every `garmin` call stubbed. Three things do not earn a test:
 
@@ -753,3 +707,10 @@ Do not design current modules around these: further goal templates (pure data),
 adaptive reflow when sessions are missed, Garmin multisport/brick files,
 multiple concurrent training plans, USB workout delivery (needs a FIT *encoder*;
 fitparse only reads).
+
+**A fitness index was removed on 2026-09-21** (`fit fitness`, `fitness-reset`,
+the dashboard headline, `fitness.json`). It was a 42-day EWMA of MET-hours
+rescaled to a baseline of 100 — training *load*, not fitness — and at this
+volume one busy week moved it 15%, reading as "12% fitter" in a fortnight. A
+flat 6.0 MET for strength supplied the whole rise that time. Don't bring back a
+single fitness number; the volume sparkline already shows load honestly.

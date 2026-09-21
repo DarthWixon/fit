@@ -286,7 +286,7 @@ FIT_DATA_DIR=./examples/data fit import examples/strava-export
 ```
 
 Running commands against `examples/data` generates a config file and caches
-there (`config`, `pbs.json`, `fitness.json`); those are gitignored. The import
+there (`config`, `pbs.json`); those are gitignored. The import
 demo also adds the five imported activities to `examples/data/activities/` —
 put the example dir back with:
 

@@ -26,12 +26,10 @@ def render_warnings(messages: list[str]) -> None:
 
 def render_usage() -> None:
     console.print(
-        "fit dashboard [--sport S] [--timerange 3m]  summary, sparkline, PBs, fitness\n"
+        "fit dashboard [--sport S] [--timerange 3m]  summary, sparkline, PBs\n"
         "fit dash [--sport S] [--timerange 3m]       = dashboard --minimal (no PBs)\n"
         "fit pbs [--months N]                        personal bests table\n"
         "fit stats [--week|--month|--year]           totals + breakdown by type\n"
-        "fit fitness                                 current fitness index + trend\n"
-        "fit fitness-reset [--as-of DATE]            re-anchor the fitness baseline\n"
         "fit import <path>                           TCX/FIT file or Strava export\n"
         "fit garmin-sync [--days N]                  pull recent Garmin activities\n"
         "fit gs                                      = garmin-sync --days 7\n"
@@ -259,56 +257,6 @@ def render_calendar(months: list[dict]) -> None:
     console.print(grid)
 
 
-def render_fitness_index(
-    current_index: float | None,
-    baseline_date: str | None,
-    weekly_series: list[dict],
-    window_label: str | None = None,
-    drift: dict | None = None,
-) -> None:
-    """Headline + trend sparkline. The headline is always full-history as of
-    today — callers must not pre-filter it; only weekly_series may be windowed.
-    drift is warned about but never repaired: the fix is the user's to run."""
-    if current_index is None:
-        console.print("[dim]Fitness index: not enough data yet.[/dim]")
-        return
-
-    console.print(
-        f"[cyan]Fitness Index[/cyan]: {current_index:.0f}  "
-        f"[dim](Baseline 100 set {baseline_date})[/dim]"
-    )
-    if drift:
-        moved = drift["actual"] - drift["stored"]
-        change = f"{moved:+d}" if moved else "changed"
-        console.print(
-            f"[yellow]warning[/yellow]: history on or before {baseline_date} has "
-            f"changed since the baseline was set "
-            f"({drift['stored']} -> {drift['actual']} activities, {change}), so "
-            f"the index is measured against a day that no longer looks the same."
-        )
-        console.print(
-            f"[dim]  re-anchor it where it stands with: "
-            f"fit fitness-reset --as-of {baseline_date}[/dim]"
-        )
-
-    label = f"Fitness trend ({window_label})" if window_label else "Fitness trend"
-    render_sparkline([w["index"] for w in weekly_series], label)
-
-
-def render_fitness_reset(old_baseline: dict, new_baseline: dict) -> None:
-    if old_baseline:
-        console.print(
-            f"Baseline re-anchored: {old_baseline['baseline_value']:.2f} "
-            f"(set {old_baseline['baseline_date']}) -> "
-            f"{new_baseline['baseline_value']:.2f} (set {new_baseline['baseline_date']})"
-        )
-    else:
-        console.print(
-            f"Baseline set: {new_baseline['baseline_value']:.2f} "
-            f"(set {new_baseline['baseline_date']})"
-        )
-
-
 def _last_week_partial(weekly: list[dict], today: date) -> bool:
     """Does the series end on the still-in-progress current week?"""
     return bool(weekly) and compute.is_current_week(weekly[-1]["week"], today)
@@ -343,36 +291,19 @@ def render_dashboard(
     activities: list[dict],
     pbs: dict,
     config: dict,
-    fitness: dict,
     today: date,
     sports: list[str] | None = None,
     window_months: int = 0,
     window_label: str | None = None,
 ) -> None:
-    """Blocks: fitness -> volume sparkline -> time-range banner -> history ->
-    calendar -> PBs -> sports summary.
+    """Blocks: volume sparkline -> time-range banner -> history -> calendar ->
+    PBs -> sports summary.
 
-    fitness is cli._fitness_snapshot's dict, always full-history/as-of-today.
     Sports summary renders last over the *unfiltered* list, so it shows every
     type even when the sport filter matches nothing else on the page.
-    Sparklines cap to config["dashboard_weeks"] unless --timerange drives it."""
+    The sparkline caps to config["dashboard_weeks"] unless --timerange drives it."""
     # --timerange, when given, wins over the config cap.
     weeks_cap = 0 if window_label else config["dashboard_weeks"]
-
-    if config["show_fitness_index"]:
-        trend_series = fitness["weekly"]
-        trend_label = window_label
-        if weeks_cap:
-            trend_series = trend_series[-weeks_cap:]
-            trend_label = f"last {weeks_cap} wks"
-        render_fitness_index(
-            fitness["current"],
-            fitness["baseline_date"],
-            trend_series,
-            window_label=trend_label,
-            drift=fitness.get("drift"),
-        )
-        console.print()
 
     if not activities:
         if window_label:

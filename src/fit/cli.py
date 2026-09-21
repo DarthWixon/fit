@@ -56,68 +56,6 @@ def _pbs_for_window(activities: list[dict], months: int, today: date_cls) -> dic
     return _windowed_pbs(activities, start, today.isoformat())
 
 
-def _write_new_baseline(
-    value: float, activities: list[dict], baseline_date: date_cls
-) -> dict:
-    """Build and persist the fitness.json dict. "baseline_from" records how much
-    history sat behind the anchor, so a later backfill can be *detected*
-    without breaking stickiness (compute.baseline_drift)."""
-    date_iso = baseline_date.isoformat()
-    baseline = {
-        "baseline_date": date_iso,
-        "baseline_value": value,
-        "baseline_from": compute.baseline_activity_count(activities, date_iso),
-    }
-    storage.write_fitness_baseline(baseline)
-    return baseline
-
-
-def _get_or_init_fitness_baseline(activities: list[dict]) -> dict:
-    """Lazy init. Unlike pbs.json the baseline is sticky once set: only
-    `fit fitness-reset` replaces it."""
-    stored = storage.read_fitness_baseline()
-    if stored:
-        return stored
-    baseline_value = compute.compute_baseline_value(activities, date_cls.today())
-    if not baseline_value:
-        return {}
-    return _write_new_baseline(baseline_value, activities, date_cls.today())
-
-
-_EMPTY_FITNESS_SNAPSHOT = {
-    "current": None,
-    "baseline_date": None,
-    "weekly": [],
-    "drift": None,
-}
-
-
-def _fitness_snapshot(
-    activities: list[dict],
-    today: date_cls,
-    baseline: dict,
-    window: tuple[str, str] | None = None,
-) -> dict:
-    """activities must be the full, unfiltered list, so the index stays one
-    combined index as of today. window narrows only the trend series."""
-    if not baseline:
-        return _EMPTY_FITNESS_SNAPSHOT
-
-    raw_series = compute.fitness_ewma_daily(activities, today)
-    index_series = compute.rescale_to_index(raw_series, baseline["baseline_value"])
-    current = index_series[-1]["index"] if index_series else None
-    display_series = (
-        compute.filter_series_by_date(index_series, *window) if window else index_series
-    )
-    weekly = compute.weekly_fitness_index(display_series)
-    return {
-        "current": current,
-        "baseline_date": baseline["baseline_date"],
-        "weekly": weekly,
-        "drift": compute.baseline_drift(baseline, activities),
-    }
-
-
 def _dashboard_window(
     all_activities: list[dict],
     timerange: str | None,
@@ -125,7 +63,7 @@ def _dashboard_window(
     today: date_cls,
 ) -> dict:
     """--timerange beats pbs_window_months beats all-time ->
-    {activities, pbs, window_months, window_label, date_window}."""
+    {activities, pbs, window_months, window_label}."""
     if timerange is not None:
         start, end = compute.parse_timerange(timerange, today)
         activities = compute.filter_by_date(all_activities, start, end)
@@ -134,14 +72,12 @@ def _dashboard_window(
             "pbs": _windowed_pbs(activities, start, end),
             "window_months": 0,
             "window_label": f"last {timerange.strip().lower()}",
-            "date_window": (start, end),
         }
     return {
         "activities": all_activities,
         "pbs": _pbs_for_window(all_activities, config_months, today),
         "window_months": config_months,
         "window_label": None,
-        "date_window": None,
     }
 
 
@@ -178,20 +114,11 @@ def dashboard(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
-    if config["show_fitness_index"]:
-        baseline = _get_or_init_fitness_baseline(all_activities)
-        fitness = _fitness_snapshot(
-            all_activities, today, baseline, window["date_window"]
-        )
-    else:
-        fitness = _EMPTY_FITNESS_SNAPSHOT
-
     sports = [sport] if sport is not None else (config["sports"] or None)
     display.render_dashboard(
         window["activities"],
         window["pbs"],
         config,
-        fitness,
         today,
         sports=sports,
         window_months=window["window_months"],
@@ -232,46 +159,6 @@ def pbs(
     display.render_pbs_table(
         current_pbs, sports=config["sports"] or None, window_months=window
     )
-
-
-@app.command()
-def fitness() -> None:
-    activities = _load_activities()
-    baseline = _get_or_init_fitness_baseline(activities)
-    snapshot = _fitness_snapshot(activities, date_cls.today(), baseline)
-    display.render_fitness_index(
-        snapshot["current"],
-        snapshot["baseline_date"],
-        snapshot["weekly"],
-        drift=snapshot["drift"],
-    )
-
-
-@app.command(name="fitness-reset")
-def fitness_reset(
-    as_of: str = typer.Option(
-        None,
-        "--as-of",
-        help="Re-anchor at this date (YYYY-MM-DD) instead of today — recomputes "
-        "the existing baseline against the history you have now",
-    ),
-) -> None:
-    activities = _load_activities()
-
-    try:
-        anchor = date_cls.fromisoformat(as_of) if as_of else date_cls.today()
-    except ValueError:
-        typer.echo(f"invalid date: {as_of} (expected YYYY-MM-DD)", err=True)
-        raise typer.Exit(code=1)
-
-    old_baseline = storage.read_fitness_baseline()
-    new_value = compute.compute_baseline_value(activities, anchor)
-    if not new_value:
-        typer.echo("Not enough activity data to set a fitness baseline yet.", err=True)
-        raise typer.Exit(code=1)
-
-    new_baseline = _write_new_baseline(new_value, activities, anchor)
-    display.render_fitness_reset(old_baseline, new_baseline)
 
 
 @app.command()
