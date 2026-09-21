@@ -672,6 +672,12 @@ that had all been trained 2-3 days off their date. The mirror case is accepted:
 a Sunday session done on the Monday after falls in the next week and does not
 count.
 
+Pairs are claimed **closest first across the week**, not session by session,
+and a lifting session only takes an activity that shares a lift with it (when
+both sides record lifts). Going session by session let Monday's deadlift day
+claim Wednesday's squat session on 2026-09-14, marking the session actually
+trained as missed.
+
 ---
 
 ## Commands

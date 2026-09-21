@@ -289,6 +289,23 @@ def test_match_completion_marks_sessions_in_the_same_week():
     matched = training.match_completion(other, [{"type": "run", "date": "2026-09-01"}])
     assert [s["completed"] for s in matched] == [False, False]
 
+    # Closest pair first, and lifts must overlap: the one lift of the week
+    # (Wednesday's squat) completes Wednesday, not Monday's deadlift day.
+    def lifting(day, *lifts):
+        exercises = [{"exercise": lift} for lift in lifts]
+        return {"date": day, "sport": "strength", "params": {"exercises": exercises}}
+
+    week = [lifting("2026-09-14", "deadlift"), lifting("2026-09-16", "squat")]
+    squatted = {
+        "type": "strength",
+        "date": "2026-09-16",
+        "exercises": [{"name": "squat"}],
+    }
+    matched = training.match_completion(week, [squatted])
+    assert [s["completed"] for s in matched] == [False, True]
+    matched = training.match_completion(week[:1], [squatted])
+    assert [s["completed"] for s in matched] == [False]
+
 
 def test_one_activity_cannot_complete_two_sessions():
     sessions = [

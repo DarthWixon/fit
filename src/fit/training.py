@@ -1350,35 +1350,56 @@ def session_to_build_args(session: dict) -> tuple[str, str, dict] | None:
 # --- completion and views -------------------------------------------------
 
 
+def _lifts(session_or_activity: dict) -> set:
+    """Lift names a strength session prescribes or an activity recorded."""
+    params = session_or_activity.get("params", {})
+    named = [e.get("exercise") for e in params.get("exercises", [])]
+    named += [params.get("exercise")]
+    named += [e.get("name") for e in session_or_activity.get("exercises") or []]
+    return {name for name in named if name}
+
+
 def match_completion(sessions: list[dict], activities: list[dict]) -> list[dict]:
     """Copies with "completed" set: same sport in the same ISO week, each
-    activity claiming at most one session (nearest first) so one ride can't
-    tick off a whole week. Extras are never matched.
+    activity claiming at most one session so one ride can't tick off a whole
+    week. Extras are never matched.
 
     The week, not a day window, is the unit: a plan is periodised in whole ISO
     weeks, so Friday's lift done on the Sunday is still that week's work. A ±1
     day window scored three sessions-as-missed that had all been trained 2-3
-    days off their date."""
+    days off their date.
+
+    Pairs are claimed closest first across the whole week, not session by
+    session, and a lifting session only takes an activity sharing a lift with
+    it (when both record lifts). Going session by session let Monday's deadlift
+    day claim Wednesday's squat session, leaving Wednesday missed."""
     candidates = [a for a in activities if a.get("type") and a.get("date")]
+    pairs = []
+    for si, session in enumerate(sessions):
+        if session.get("is_extra"):
+            continue
+        session_date = date.fromisoformat(session["date"])
+        wanted = _lifts(session)
+        for ai, activity in enumerate(candidates):
+            activity_date = date.fromisoformat(activity["date"])
+            if activity.get("type") != session.get("sport"):
+                continue
+            if activity_date.isocalendar()[:2] != session_date.isocalendar()[:2]:
+                continue
+            done = _lifts(activity)
+            if wanted and done and not wanted & done:
+                continue
+            pairs.append((abs((activity_date - session_date).days), si, ai))
+
+    completed: set[int] = set()
     claimed: set[int] = set()
-    matched = []
-    for session in sessions:
-        completed = False
-        if not session.get("is_extra"):
-            session_date = date.fromisoformat(session["date"])
-            session_week = session_date.isocalendar()[:2]
-            nearby = sorted(
-                (abs((date.fromisoformat(a["date"]) - session_date).days), i)
-                for i, a in enumerate(candidates)
-                if i not in claimed
-                and a.get("type") == session.get("sport")
-                and date.fromisoformat(a["date"]).isocalendar()[:2] == session_week
-            )
-            if nearby:
-                claimed.add(nearby[0][1])
-                completed = True
-        matched.append({**session, "completed": completed})
-    return matched
+    for _, si, ai in sorted(pairs):
+        if si not in completed and ai not in claimed:
+            completed.add(si)
+            claimed.add(ai)
+    return [
+        {**session, "completed": si in completed} for si, session in enumerate(sessions)
+    ]
 
 
 def group_by_week(sessions: list[dict]) -> list[dict]:
