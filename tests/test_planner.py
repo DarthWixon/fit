@@ -558,14 +558,15 @@ def test_straight_sets_payload_matches_the_live_schema():
     the end condition, load on the step with targetType left no.target."""
     steps = _steps("strength", "straight_sets", _straight_sets_params())
 
-    # Four ramp sets and their rests (1-8) ahead of each working group.
-    assert [s["stepOrder"] for s in steps] == [*range(1, 10), *range(12, 21)]
+    # Ramp sets and their rests ahead of each working group: three for the
+    # deadlift (1-6), which starts at 40kg, four for the squat.
+    assert [s["stepOrder"] for s in steps] == [*range(1, 8), *range(10, 19)]
     first, second = [s for s in steps if s["type"] == "RepeatGroupDTO"]
-    assert first["stepOrder"] == 9
+    assert first["stepOrder"] == 7
     assert first["numberOfIterations"] == 3
 
     lift, rest = first["workoutSteps"]
-    assert lift["stepOrder"] == 10 and rest["stepOrder"] == 11
+    assert lift["stepOrder"] == 8 and rest["stepOrder"] == 9
     assert lift["category"] == "DEADLIFT"
     assert lift["endCondition"]["conditionTypeKey"] == "reps"
     assert lift["endConditionValue"] == 10.0
@@ -580,8 +581,8 @@ def test_straight_sets_payload_matches_the_live_schema():
     assert rest["stepType"]["stepTypeKey"] == "rest"
 
     # Numbering continues across groups rather than restarting per exercise.
-    assert second["stepOrder"] == 20
-    assert [s["stepOrder"] for s in second["workoutSteps"]] == [21, 22]
+    assert second["stepOrder"] == 18
+    assert [s["stepOrder"] for s in second["workoutSteps"]] == [19, 20]
 
 
 def test_warmup_ramps_to_the_working_weight():
@@ -678,9 +679,9 @@ def test_describe_plan_names_each_lift():
         "strength", "straight_sets", _straight_sets_params(), "2026-09-05T10:00:00"
     )
     assert planner.describe_plan(plan) == [
-        # Each ramp set folds its own press-lap rest onto one line.
-        "Warmup Deadlift 5 reps @ 20kg, until lap rest",
-        "Warmup Deadlift 5 reps @ 32.5kg, until lap rest",
+        # Each ramp set folds its own press-lap rest onto one line. A deadlift
+        # starts at 40kg, not the bar, so its 55% rung (32.5kg) drops out.
+        "Warmup Deadlift 5 reps @ 40kg, until lap rest",
         "Warmup Deadlift 3 reps @ 42.5kg, until lap rest",
         "Warmup Deadlift 2 reps @ 50kg, until lap rest",
         "3 x Deadlift 10 reps @ 60kg, 1:30 rest",

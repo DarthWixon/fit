@@ -210,6 +210,10 @@ consequences that read as gaps:
   only if strictly heavier than the last and strictly lighter than the work
   set, so a 35kg bench ramps 20/25/30 rather than 20/20/25/30. That one rule is
   the whole of the small-weight handling.
+- **A deadlift ramp starts at 40kg, not the bar** (`_WARMUP_START_KG`), because
+  the bar alone is too light to deadlift with proper form. A deadlift working
+  at 40kg or less therefore gets no ramp, and a 55% rung under 40kg is dropped
+  by the same strictly-heavier rule.
 
 There is no config key and no prompt for any of this: a ramp is a training
 decision fit owns, the same way it owns periodisation.

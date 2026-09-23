@@ -141,6 +141,9 @@ _LAP_BUTTON_END_VALUE = 10.0
 # than training's whole-kg-or-2.5kg rule — a warmup set does not need 1kg
 # precision, and planner may not import training.
 _BAR_WEIGHT_KG = 20.0
+# A lift whose ramp starts above the empty bar: the bar alone is too light to
+# deadlift with proper form.
+_WARMUP_START_KG = {"deadlift": 40.0}
 _WARMUP_ROUNDING_KG = 2.5
 _WARMUP_RAMP = ((0.55, 5), (0.70, 3), (0.85, 2))
 _BAR_SET_REPS = 5
@@ -933,8 +936,9 @@ def _lift_step(
     return step
 
 
-def _warmup_sets(working_kg: float | None) -> list[tuple[float, int]]:
-    """The ramp up to a working weight: the empty bar, then percentages of the
+def _warmup_sets(exercise: str, working_kg: float | None) -> list[tuple[float, int]]:
+    """The ramp up to a working weight: the empty bar (or the lift's own
+    starting weight in _WARMUP_START_KG), then percentages of the
     work set at descending reps. A lifting warmup is lighter lifting — there is
     nothing to ramp to without a prescribed load, and warming up heavier than
     you lift is not a warmup.
@@ -942,10 +946,11 @@ def _warmup_sets(working_kg: float | None) -> list[tuple[float, int]]:
     Kept sets are strictly heavier than the last and strictly lighter than the
     work set, which is the whole of the degenerate-case handling: a 35kg bench
     rounds 55% back onto the bar and simply loses that rung."""
-    if not working_kg or working_kg <= _BAR_WEIGHT_KG:
+    start_kg = _WARMUP_START_KG.get(exercise, _BAR_WEIGHT_KG)
+    if not working_kg or working_kg <= start_kg:
         return []
 
-    sets = [(_BAR_WEIGHT_KG, _BAR_SET_REPS)]
+    sets = [(start_kg, _BAR_SET_REPS)]
     for fraction, reps in _WARMUP_RAMP:
         rungs = round(working_kg * fraction / _WARMUP_ROUNDING_KG)
         weight = round(rungs * _WARMUP_ROUNDING_KG, 2)
@@ -982,7 +987,7 @@ def _strength_straight_sets(params: dict) -> tuple[str, list[dict]]:
     rest = params.get("rest", 0)
     for exercise in exercises:
         weight = exercise.get("target_weight_kg")
-        for ramp_weight, ramp_reps in _warmup_sets(weight):
+        for ramp_weight, ramp_reps in _warmup_sets(exercise["exercise"], weight):
             steps.append(
                 _lift_step(
                     order, exercise["exercise"], ramp_reps, ramp_weight, "warmup"
