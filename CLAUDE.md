@@ -630,7 +630,8 @@ date beside it), so a stale prompt reads as stale. And `garmin-sync` compares
 each newly imported activity's `workoutId` against the ledger and warns when it
 ran another day's workout (`training.followed_other_session`). It warns rather
 than re-attributing completion: same-week matching still ticks the day off.
-Names are now up to ~63 chars; unverified on a live push until the next sync.
+A dated name round-tripped live on 2026-10-13 (`27/10 Cycle intervals 5x6:00 @
+210W`, 35 chars); strength names reach ~63 and are not yet proven.
 
 `match_completion` marks a session done when an activity of the same sport falls
 in the **same ISO week**, each activity claiming at most one session (nearest

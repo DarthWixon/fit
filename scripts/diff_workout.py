@@ -151,7 +151,9 @@ def _load_session(session_date: str, sport: str | None) -> dict:
         )
     session = matches[0]
     args = training.session_to_build_args(session)
-    built = planner.build_plan(*args, session["date"])
+    # Dated as `train sync` sends it. Sessions pushed before 2026-10-13 went
+    # out undated, so diffing one of those shows a workoutName-only difference.
+    built = planner.build_plan(*args, session["date"], session["date"])
     return {
         "payload": built["payload"],
         "workout_name": session.get("workout_name", built["workout_name"]),
