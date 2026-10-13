@@ -1515,14 +1515,16 @@ def ledger_entry(session: dict, workout_id, schedule_id) -> dict:
 
 
 def sync_window(sessions: list[dict], today: date, window_days: int) -> list[dict]:
-    """Not-yet-pushed, non-extra sessions in [today, today + window_days].
-    Re-running sync finds fewer, which is what makes it idempotent."""
+    """Not-yet-pushed, not-yet-done, non-extra sessions in [today, today +
+    window_days]. Re-running sync finds fewer, which is what makes it
+    idempotent; a session trained already today has nothing left to push."""
     end = (today + timedelta(days=window_days)).isoformat()
     return [
         s
         for s in sessions
         if not s.get("is_extra")
         and not s.get("pushed")
+        and not s.get("completed")
         and today.isoformat() <= s["date"] <= end
     ]
 
@@ -1555,9 +1557,19 @@ def followed_other_session(rides: list[dict], pushed: list[dict]) -> list[dict]:
     return out
 
 
-def future_pushed(pushed: list[dict], today: date) -> list[dict]:
-    """Ledger rows still ahead of today — what `train clear` unschedules."""
-    return [e for e in pushed if e["date"] >= today.isoformat()]
+def future_pushed(
+    pushed: list[dict], today: date, sessions: list[dict] = ()
+) -> list[dict]:
+    """Ledger rows still ahead of today — what `train clear` unschedules —
+    less any whose session in `sessions` is already done. "Ahead" includes
+    today, and clearing a session already trained today would only strip it
+    from the calendar it was ridden from."""
+    done = {ledger_key(s) for s in sessions if s.get("completed")}
+    return [
+        e
+        for e in pushed
+        if e["date"] >= today.isoformat() and (e["date"], e["sport"]) not in done
+    ]
 
 
 def unreadable_plan(stored: dict) -> list[dict] | None:

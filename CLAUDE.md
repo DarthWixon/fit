@@ -607,6 +607,10 @@ both as plain functions, so it **passes every option explicitly** — an omitted
 one is typer's `OptionInfo` default, which is truthy. A missing `dry_run` made
 the first version clear the calendar, push nothing and exit 0.
 
+**A session already done is neither cleared nor re-pushed.** "Future" includes
+today, so a `refresh` after the day's workout would otherwise have unscheduled
+it and pushed a duplicate onto the calendar it was ridden from (2026-10-13).
+
 `train sync` appends a ledger row per pushed session — the row stores the
 `params` and name that were **actually sent**, which is what lets a pushed
 session render frozen. `train clear` removes future rows, after which those

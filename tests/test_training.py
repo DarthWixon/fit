@@ -892,12 +892,23 @@ def test_sync_finds_only_what_is_not_already_pushed():
     assert not any(
         training.ledger_key(s) in {(e["date"], e["sport"]) for e in ledger} for s in due
     )
+    # Trained already: refresh re-pushed today's finished ride as a duplicate.
+    done = [{**s, "completed": True} if s is due[0] else s for s in overlaid]
+    assert training.ledger_key(due[0]) not in {
+        training.ledger_key(s) for s in training.sync_window(done, REFERENCE, 60)
+    }
 
 
 def test_clear_takes_only_future_ledger_rows():
-    _, _, ledger = _pushed_plan()
+    _, plan, ledger = _pushed_plan()
     past = [{**ledger[0], "date": "2026-01-05"}]
     assert training.future_pushed(ledger + past, REFERENCE) == ledger
+    trained = [
+        {**s, "completed": True}
+        for s in plan["sessions"]
+        if training.ledger_key(s) == (ledger[0]["date"], ledger[0]["sport"])
+    ]
+    assert training.future_pushed(ledger, REFERENCE, trained) == ledger[1:]
 
 
 def test_a_pre_stateless_plan_is_refused_rather_than_read_as_unpushed():

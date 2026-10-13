@@ -679,7 +679,8 @@ def train_clear() -> None:
     """Remove the plan's future sessions from the Garmin calendar."""
     stored = _stored_plan()
     today = date_cls.today()
-    pending = training.future_pushed(stored.get("pushed", []), today)
+    sessions = _expand(stored, _load_activities())["sessions"]
+    pending = training.future_pushed(stored.get("pushed", []), today, sessions)
     if not pending:
         display.render_training_cleared({"cleared": 0, "failed": []})
         return
@@ -718,7 +719,10 @@ def train_refresh(
     `fit garmin-sync` has imported the effort that moved them.
     """
     stored = _stored_plan()
-    pending = training.future_pushed(stored.get("pushed", []), date_cls.today())
+    sessions = _expand(stored, _load_activities())["sessions"]
+    pending = training.future_pushed(
+        stored.get("pushed", []), date_cls.today(), sessions
+    )
     # Confirm before the clear, not between the two steps: `sync` asks for
     # itself, and answering no there would leave the calendar already emptied.
     if not yes and not typer.confirm(
