@@ -1089,13 +1089,29 @@ def estimate_seconds(sport: str, workout_type: str, params: dict) -> int:
     return round(_estimate_seconds(steps, sport))
 
 
-def build_plan(sport: str, workout_type: str, params: dict, created: str) -> dict:
+def build_plan(
+    sport: str,
+    workout_type: str,
+    params: dict,
+    created: str,
+    scheduled: str | None = None,
+) -> dict:
     """The saved-plan dict. created (ISO seconds) becomes the id/filename;
-    "payload" is ready for garmin.push_workout."""
+    "payload" is ready for garmin.push_workout.
+
+    `scheduled` (ISO date) prefixes the name Garmin shows with that day, as
+    "13/10 Cycle intervals ...". A device that missed a sync prompts with the
+    last calendar it held, and an undated "2x6:00" passed for that day's
+    "4x6:00" on 2026-10-13; dated, a stale workout reads as stale. Only the
+    payload's name carries it — "workout_name" stays bare because every
+    caller already shows the date beside it."""
     workout_params(sport, workout_type)  # reuse its ValueError on bad combos
     name, steps = _BUILDERS[(sport, workout_type)](params)
+    shown = name
+    if scheduled is not None:
+        shown = f"{date.fromisoformat(scheduled).strftime('%d/%m')} {name}"
     payload = {
-        "workoutName": name,
+        "workoutName": shown,
         "sportType": dict(SPORT_TYPES[sport]),
         "estimatedDurationInSecs": round(_estimate_seconds(steps, sport)),
         "author": {},

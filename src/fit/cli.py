@@ -174,8 +174,9 @@ def stats(week: bool = False, month: bool = False, year: bool = False) -> None:
     display.render_stats(activities, today)
 
 
-def _import_and_report(new_activities: list[dict]) -> None:
-    """Every import path's tail: dedupe, write, announce PBs, recompute cache."""
+def _import_and_report(new_activities: list[dict]) -> list[dict]:
+    """Every import path's tail: dedupe, write, announce PBs, recompute cache.
+    Returns what was written."""
     pbs_before_import = storage.read_pbs()
 
     written = []
@@ -196,6 +197,7 @@ def _import_and_report(new_activities: list[dict]) -> None:
         _recompute_and_write_pbs(_load_activities())
 
     typer.echo(f"Imported {imported} new activities, skipped {skipped} duplicates")
+    return written
 
 
 @app.command(name="import")
@@ -257,6 +259,7 @@ def garmin_sync(
     )
 
     new_activities, tmp_paths = [], []
+    workout_ids = {}  # activity id -> the Garmin workout the device ran
     try:
         for summary in summaries:
             fit_bytes = garmin.download_activity_fit(client, summary["activityId"])
@@ -271,11 +274,26 @@ def garmin_sync(
                     activity, garmin.get_exercise_sets(client, summary["activityId"])
                 )
             new_activities.append(activity)
+            workout_ids[activity["id"]] = summary.get("workoutId")
 
-        _import_and_report(new_activities)
+        written = _import_and_report(new_activities)
     finally:
         for tmp_path in tmp_paths:
             Path(tmp_path).unlink(missing_ok=True)
+
+    # Only what this run wrote, so a re-sync doesn't repeat the warning.
+    # No plan, or one train commands would refuse, just means nothing to check.
+    stored = storage.read_training_plan()
+    if not stored or training.unreadable_plan(stored) is not None:
+        return
+    rides = [
+        {"date": a["date"], "workout_id": workout_ids[a["id"]]}
+        for a in written
+        if workout_ids[a["id"]] is not None
+    ]
+    display.render_followed_other_session(
+        training.followed_other_session(rides, stored["pushed"])
+    )
 
 
 def _prompt_params(specs: list[dict]) -> dict:
@@ -388,7 +406,7 @@ def plan(
     if repeated_key:
         params[repeated_key] = _prompt_repeated_params(repeated_specs)
     created = datetime.now().isoformat(timespec="seconds")
-    plan_dict = planner.build_plan(sport, type, params, created)
+    plan_dict = planner.build_plan(sport, type, params, created, schedule_date)
     storage.write_plan(plan_dict)
     display.render_plan_saved(plan_dict, planner.describe_plan(plan_dict))
 
@@ -626,7 +644,7 @@ def train_sync(
         if args is None:  # extras never reach here, but stay defensive
             continue
         try:
-            built = planner.build_plan(*args, session["date"])
+            built = planner.build_plan(*args, session["date"], session["date"])
             response = garmin.push_workout(client, built["payload"])
             workout_id = response.get("workoutId")
             if workout_id is None:

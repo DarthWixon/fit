@@ -1527,6 +1527,34 @@ def sync_window(sessions: list[dict], today: date, window_days: int) -> list[dic
     ]
 
 
+def followed_other_session(rides: list[dict], pushed: list[dict]) -> list[dict]:
+    """Activities that followed a pushed workout scheduled for another day.
+
+    `rides` are {date, workout_id} — the workout a device actually ran, which
+    Garmin's activity summary records. A device that has not synced since a
+    push still holds the old calendar and prompts with whatever it last had:
+    on 2026-10-13 an Edge offered the unridden 06/10 2x6:00 in place of that
+    day's 4x6:00, and same-week completion matching ticked the session off.
+    Each returned {date, followed, scheduled} pairs the ledger row that was
+    ridden with the one meant for that day (None when nothing was).
+    """
+    by_id = {e["workout_id"]: e for e in pushed if e.get("workout_id") is not None}
+    by_key = {(e["date"], e["sport"]): e for e in pushed}
+    out = []
+    for ride in rides:
+        followed = by_id.get(ride["workout_id"])
+        if followed is None or followed["date"] == ride["date"]:
+            continue
+        out.append(
+            {
+                "date": ride["date"],
+                "followed": followed,
+                "scheduled": by_key.get((ride["date"], followed["sport"])),
+            }
+        )
+    return out
+
+
 def future_pushed(pushed: list[dict], today: date) -> list[dict]:
     """Ledger rows still ahead of today — what `train clear` unschedules."""
     return [e for e in pushed if e["date"] >= today.isoformat()]

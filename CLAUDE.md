@@ -621,6 +621,17 @@ schedules only `planned` sessions inside the rolling window, so re-running is
 safe, and rewrites the plan file after **every** session so a crash can't leave
 it claiming less than what is on the calendar.
 
+**A device that hasn't synced prompts with an old workout.** On 2026-10-13 an
+Edge offered the unridden 06/10 "2x6:00" in place of that day's "4x6:00": the
+session had reached Garmin only the day before. Two defences, neither of which
+can force a sync. Pushed workouts are **named with their date** (`13/10 Cycle
+...`, payload only — the ledger keeps the bare name, since every view prints the
+date beside it), so a stale prompt reads as stale. And `garmin-sync` compares
+each newly imported activity's `workoutId` against the ledger and warns when it
+ran another day's workout (`training.followed_other_session`). It warns rather
+than re-attributing completion: same-week matching still ticks the day off.
+Names are now up to ~63 chars; unverified on a live push until the next sync.
+
 `match_completion` marks a session done when an activity of the same sport falls
 in the **same ISO week**, each activity claiming at most one session (nearest
 first) so one ride can't tick off a whole week. The week is the unit because the

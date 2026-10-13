@@ -647,6 +647,26 @@ def render_training_sync_preview(sessions: list[dict]) -> None:
         console.print(f"  {session['date']}  {session.get('workout_name', '')}")
 
 
+def render_followed_other_session(mismatches: list[dict]) -> None:
+    """Rides that ran another day's workout (training.followed_other_session)."""
+
+    def day(iso: str) -> str:
+        return date.fromisoformat(iso).strftime("%d/%m")
+
+    for m in mismatches:
+        followed = m["followed"]
+        meant = m["scheduled"]
+        instead = (
+            f", not {day(meant['date'])}'s {meant['workout_name']}" if meant else ""
+        )
+        console.print(
+            f"warning: your {day(m['date'])} {followed['sport']} followed the "
+            f"{day(followed['date'])} workout ({followed['workout_name']}){instead}. "
+            "The device was likely holding an old calendar: sync it before "
+            "the next session."
+        )
+
+
 def render_training_synced(summary: dict) -> None:
     """{scheduled, already, window_days, failed}."""
     console.print(
