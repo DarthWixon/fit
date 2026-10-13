@@ -291,23 +291,17 @@ planner.py's docstring — keep both current):
 | `strength`/`straight_sets` | 2026-09-05 | `weightValue` is **kilograms** (62.5 → 62.5); reps end condition; timed rest; bare `category` |
 | `strength`/`baseline`, `cycle`/`baseline` | 2026-09-05 | untargeted top set / open-target timed block survive as sent |
 | `cycle`/`long` | 2026-09-11 | `power.zone` id 2 correct; `targetValueOne`/`Two` = low/high **watts** on a top-level step (120/170 as sent); one-step workout with a target accepted |
+| `cycle`/`long` (easy) | 2026-10-13 | the untargeted one-step ride fit has sent since 2026-09-21 |
+| `strength` warmup ramp | 2026-10-13 | lift `category` *and* `weightValue` together on a `warmup` step; a dated 63-char name kept |
 
-**Still unverified: the steady combos and the strength warmup ramp** — but the
-risk in them is now small, and worth scoping before spending a round trip.
+**Still unverified: `run` easy/long and `swim` continuous.** They pair a
+`pace.zone` proven *nested* with a top-level position proven *with power*
+(`cycle`/`long`, 2026-09-11); that exact combination has not been sent. Low
+risk, not zero. Diff one when one is next pushed, then update both tables.
 
-The ramp sends a lift `category` *and* a `weightValue` on a **warmup** step.
-2026-09-05 proved each half on its own — category plus weight on an `interval`
-step, `CARDIO` on a `warmup` step — but never together, so Connect could blank
-one of the two. Diff the next real strength push.
-
-`run` easy/long and `swim` continuous pair a `pace.zone` proven *nested* with a
-top-level position proven *with power* (`cycle`/`long`, 2026-09-11); that exact
-combination has not been sent. The easy rides (`cycle` endurance/long) have
-carried **no target** since 2026-09-21 — a power band on an easy ride only made
-the watch beep — which is the untargeted one-step shape `strength`/`baseline`
-proved, so the 2026-09-11 `cycle`/`long` row now describes a payload fit no
-longer sends. Low risk, not zero. Diff one when one is next pushed, then update
-both tables.
+**Strength's sport `displayOrder` is 3, not the 4 its dump showed.** Every
+strength push came back stored as 3 (seen 2026-10-13), so fit sends 3 and the
+diff stays clean. It is a sort key only; `sportTypeId` 5 was always kept.
 
 Strength is shaped unlike every cardio combo, all forced by Garmin's own schema:
 load is **not** a target (`no.target` + `weightValue`/`weightUnit` on the step),

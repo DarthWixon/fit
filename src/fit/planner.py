@@ -15,13 +15,11 @@ Verified by live round-trip (scripts/diff_workout.py):
   cycle/long             2026-09-11  power.zone id 2 correct; targetValueOne/
                                      Two = low/high watts on a top-level step;
                                      one-step workout with a target accepted
-Still unverified: run easy/long, swim continuous, the untargeted easy rides
-(cycle endurance/long), and the strength warmup ramp. The run/swim steady
-combos pair a nested-proven pace.zone with a power-proven top-level position.
-The easy rides are one untargeted step, the shape strength/baseline proved.
-The ramp sends a lift category and a weightValue on a *warmup* step: the
-2026-09-05 dump proved each half alone (category + weight on an interval step,
-CARDIO on a warmup step) but never together, so Connect may blank one of them.
+  cycle/long (easy)      2026-10-13  untargeted one-step ride, as now sent
+  strength warmup ramp   2026-10-13  lift category + weightValue together on
+                                     a warmup step; dated 63-char name kept
+Still unverified: run easy/long and swim continuous, which pair a
+nested-proven pace.zone with a power-proven top-level position.
 Re-run the diff after first pushing any unverified combo, and update this.
 """
 
@@ -34,12 +32,13 @@ SPORT_TYPES = {
     "run": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
     "cycle": {"sportTypeId": 2, "sportTypeKey": "cycling", "displayOrder": 2},
     "swim": {"sportTypeId": 4, "sportTypeKey": "swimming", "displayOrder": 3},
-    # Copied verbatim from a live strength workout's dump (see
-    # docs/STRENGTH_PLAN.md Findings), not inferred.
+    # Copied from a live strength workout's dump (see docs/STRENGTH_PLAN.md
+    # Findings), except displayOrder: that dump said 4, but every push has
+    # come back stored as 3 (seen 2026-10-13), so send what Garmin keeps.
     "strength": {
         "sportTypeId": 5,
         "sportTypeKey": "strength_training",
-        "displayOrder": 4,
+        "displayOrder": 3,
     },
 }
 
