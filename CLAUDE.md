@@ -185,6 +185,18 @@ e1RM measured *today* plus one step per week since week 1, so every good session
 raised the base *and* the week count kept adding: success counted twice. Each
 lift has one rep scheme per goal, which the rule depends on.
 
+**Bodyweight work progresses on reps, by the same rule.** An exercise carrying
+a `rep_cap` (pull-ups) has no load to add, so `training.next_rep_target` adds a
+rep instead: every set reaching the target earns one, a miss holds it, and
+there is no reset — there is no lighter bodyweight. It is judged in build weeks
+only (nothing tests it) and stops at the cap, which warns that it is time to
+move on; the next stage is a template edit. Rep counts are corrected **on the
+watch**: a later app correction disagrees with the FIT's reps, and
+`apply_garmin_exercise_sets` abandons its merge on exactly that. Core work is
+prescribed and never progressed. Only the four barbell lifts get e1RM targets
+(`template_lifts`) or identify a session for completion matching (`_lifts`) —
+dead bugs on Monday and Friday would otherwise make every session alike.
+
 **Every prescribed load is a whole kg or a multiple of 2.5kg.** Each lift
 rounds to its own increment — bench and press 1kg, squat and deadlift 2.5kg —
 so `LIFT_INCREMENT_KG` must hold only those two values. A 1.25kg step prescribed
@@ -644,8 +656,8 @@ a Sunday session done on the Monday after falls in the next week and does not
 count.
 
 Pairs are claimed **closest first across the week**, not session by session,
-and a lifting session only takes an activity that shares a lift with it (when
-both sides record lifts). Going session by session let Monday's deadlift day
+and a lifting session only takes an activity that shares a barbell lift with
+it (when both sides record one). Going session by session let Monday's deadlift day
 claim Wednesday's squat session on 2026-09-14, marking the session actually
 trained as missed.
 

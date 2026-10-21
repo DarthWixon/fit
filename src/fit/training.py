@@ -661,6 +661,18 @@ def next_working_weight(
     return level
 
 
+def next_rep_target(history: list[dict], sets: int, start_reps: int, cap: int) -> int:
+    """next_working_weight for a bodyweight exercise: reps rise instead of
+    load. Every set reaching the target earns one more rep, up to `cap`; a
+    miss holds it. No reset — there is no lighter bodyweight to drop to."""
+    level = start_reps
+    for session in history:
+        done = [s.get("reps") or 0 for s in session["sets"]]
+        if sum(1 for reps in done if reps >= level) >= sets:
+            level = min(level + 1, cap)
+    return level
+
+
 def derive_lift_1rm(recent: list[dict], exercise: str) -> tuple[float, str] | None:
     """(best e1RM, why), or None. The raw measurement, unguarded — same split
     planner.derive_run_5k has with planner.derive_target."""
@@ -709,12 +721,14 @@ def volume_sports(goal: str) -> set:
 
 
 def template_lifts(goal: str) -> list[str]:
-    """Lifts the goal prescribes, in first-appearance order. Scopes target
-    derivation so a plan never derives a lift it never prescribes."""
+    """Barbell lifts the goal prescribes, in first-appearance order. Scopes
+    target derivation so a plan never derives a lift it never prescribes.
+    Bodyweight and core work carry no load, so no e1RM target either."""
     lifts: list[str] = []
     for session in GOAL_TEMPLATES[goal]["weekly_sessions"]:
         for exercise in session["params"].get("exercises", []):
-            if exercise["exercise"] not in lifts:
+            name = exercise["exercise"]
+            if name in LIFT_INCREMENT_KG and name not in lifts:
                 lifts.append(exercise["exercise"])
     return lifts
 
@@ -946,6 +960,30 @@ def _iso_week(iso_date: str) -> tuple:
     return date.fromisoformat(iso_date).isocalendar()[:2]
 
 
+def _lift_history(
+    lift: str,
+    lifting: list[dict],
+    week_roles: dict,
+    tested: set,
+    today: str,
+) -> list[dict]:
+    """One exercise's judged sessions, oldest first: build weeks, plus test
+    weeks (flagged) so a test can raise the level. Lifting in a deload or
+    taper week is not judged — a light week passing is not evidence."""
+    history = []
+    for activity in lifting:
+        week = _iso_week(activity["date"])
+        test = week in tested or week_roles.get(week) == "test"
+        if activity["date"] > today or not (test or week_roles.get(week) == "build"):
+            continue
+        history.extend(
+            {"date": activity["date"], "sets": e.get("sets") or [], "test": test}
+            for e in activity.get("exercises") or []
+            if e.get("name") == lift
+        )
+    return history
+
+
 def _progress_lifts(
     sessions: list[dict],
     targets: dict,
@@ -985,19 +1023,7 @@ def _progress_lifts(
             for s in sessions
             if s.get("is_benchmark") and s["params"].get("exercise") == lift
         }
-        history = []
-        for activity in lifting:
-            week = _iso_week(activity["date"])
-            test = week in tested or week_roles.get(week) == "test"
-            if activity["date"] > today or not (
-                test or week_roles.get(week) == "build"
-            ):
-                continue
-            history.extend(
-                {"date": activity["date"], "sets": e.get("sets") or [], "test": test}
-                for e in activity.get("exercises") or []
-                if e.get("name") == lift
-            )
+        history = _lift_history(lift, lifting, week_roles, tested, today)
 
         start = working_weight_from_1rm(entry["current_e1rm_kg"], reps, increment)
 
@@ -1040,6 +1066,43 @@ def _progress_lifts(
                     ahead += 1
             factor = _STRENGTH_ROLE_FACTORS.get(role, 1.0)
             exercise["target_weight_kg"] = _round_to_plates(level * factor, increment)
+
+    # Bodyweight work progresses on reps, by the same rules. A test week does
+    # not test it, so only build weeks are judged.
+    by_rep_exercise: dict[str, list] = {}
+    for session in sessions:
+        if session["sport"] != "strength" or session["session_type"] != (
+            "straight_sets"
+        ):
+            continue
+        for exercise in session["params"].get("exercises", []):
+            if exercise.get("rep_cap"):
+                by_rep_exercise.setdefault(exercise["exercise"], []).append(
+                    (session, exercise)
+                )
+    for name, planned in by_rep_exercise.items():
+        first = planned[0][1]
+        sets, start, cap = first["sets"], first["reps"], first["rep_cap"]
+        history = [
+            h
+            for h in _lift_history(name, lifting, week_roles, set(), today)
+            if not h["test"]
+        ]
+        now = next_rep_target(history, sets, start, cap)
+        if now >= cap:
+            warnings.append(
+                f"{name.replace('_', ' ')}: at {sets}x{cap} — ready to move on "
+                "to the next progression."
+            )
+        ahead = 0
+        for session, exercise in planned:
+            if session["date"] <= today:
+                done = [h for h in history if h["date"] < session["date"]]
+                exercise["reps"] = next_rep_target(done, sets, start, cap)
+                continue
+            exercise["reps"] = min(now + ahead, cap)
+            if roles[session["week"] - 1] == "build":
+                ahead += 1
 
     for session in sessions:
         if (
@@ -1355,12 +1418,14 @@ def session_to_build_args(session: dict) -> tuple[str, str, dict] | None:
 
 
 def _lifts(session_or_activity: dict) -> set:
-    """Lift names a strength session prescribes or an activity recorded."""
+    """Barbell lifts a strength session prescribes or an activity recorded.
+    Accessories are left out: dead bugs on Monday and Friday would otherwise
+    make every session share a lift with every other."""
     params = session_or_activity.get("params", {})
     named = [e.get("exercise") for e in params.get("exercises", [])]
     named += [params.get("exercise")]
     named += [e.get("name") for e in session_or_activity.get("exercises") or []]
-    return {name for name in named if name}
+    return {name for name in named if name in LIFT_INCREMENT_KG}
 
 
 def match_completion(sessions: list[dict], activities: list[dict]) -> list[dict]:

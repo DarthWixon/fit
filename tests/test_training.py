@@ -146,6 +146,12 @@ def test_every_goal_expands_into_buildable_sessions(goal):
             # display; the payload is rebuilt from params at sync time. If the
             # two disagree, the calendar describes a different workout.
             assert built["workout_name"] == session["workout_name"]
+        # Only a barbell lift has an e1RM to load from: a pull-up "@ 55kg"
+        # would be a target invented from a fallback.
+        for e in session["params"].get("exercises", []):
+            assert "target_weight_kg" not in e or e["exercise"] in (
+                training.LIFT_INCREMENT_KG
+            )
     # next_working_weight judges a lift against one scheme per goal.
     schemes = {}
     for session in templates.GOAL_TEMPLATES[goal]["weekly_sessions"]:
@@ -970,6 +976,18 @@ def test_a_miss_holds_the_weight_and_the_third_running_resets_it():
     # A test lifts the level to what it measured, but never lowers it.
     assert next_press([done, lifted((40, 3), test=True)]) == 33.0
     assert next_press([done, lifted((20, 3), test=True)]) == 25.0
+
+
+def test_bodyweight_reps_rise_on_every_set_done_and_stop_at_the_cap():
+    def did(*reps):
+        return {"sets": [{"reps": r} for r in reps], "test": False}
+
+    def next_pull_ups(history):
+        return training.next_rep_target(history, 3, 3, 5)
+
+    assert next_pull_ups([did(3, 3, 3)]) == 4
+    assert next_pull_ups([did(3, 3, 2)]) == 3  # a miss holds, never drops
+    assert next_pull_ups([did(9, 9, 9)] * 4) == 5
 
 
 def _roles_of(plan):
