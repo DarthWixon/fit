@@ -52,7 +52,21 @@ WORKOUT_TYPES = {
 # Not Garmin's whole catalogue: an unknown category is silently blanked on the
 # watch, so a typo would become a nameless step. Same vocabulary importers.py
 # stores, uppercased for the payload.
-STRENGTH_CATEGORIES = ("deadlift", "squat", "bench_press", "shoulder_press")
+STRENGTH_CATEGORIES = (
+    "deadlift",
+    "squat",
+    "bench_press",
+    "shoulder_press",
+    "pull_up",
+    "hip_stability",
+    "core",
+    "hyperextension",
+)
+
+# Core work is prescribed but not progressed, so a workout name says only that
+# it is there: listing three accessories would push a dated name well past the
+# 63 characters Garmin has been seen to keep.
+_CORE_CATEGORIES = ("hip_stability", "core", "hyperextension")
 
 # Quality workouts (intervals/tempo/baseline) are warmup -> main ->
 # cooldown. The steady types above (easy/long/endurance/continuous) are a
@@ -923,14 +937,17 @@ def _lift_step(
     reps: int,
     weight_kg: float | None,
     kind: str = "interval",
+    variant: str | None = None,
 ) -> dict:
     """One set: reps as the end condition, load on the step itself.
-    `exerciseName` (the variant) is left unset — every lift fit plans is a
-    category in its own right, and Connect accepts a bare one. `kind` is
-    "warmup" for a ramp set, which differs from a working set in nothing but
-    the step type."""
+    `exerciseName` is sent only for an accessory's `variant`: each barbell
+    lift is a category in its own right and Connect accepts a bare one, but a
+    bare HIP_STABILITY tells nobody to do dead bugs. `kind` is "warmup" for a
+    ramp set, which differs from a working set in nothing but the step type."""
     step = _step(order, kind, "reps", reps, _no_target())
     step["category"] = exercise.upper()
+    if variant:
+        step["exerciseName"] = variant.upper()
     step.update(_weight_fields(weight_kg))
     return step
 
@@ -983,8 +1000,9 @@ def _strength_straight_sets(params: dict) -> tuple[str, list[dict]]:
 
     steps: list[dict] = []
     order = 1
-    rest = params.get("rest", 0)
     for exercise in exercises:
+        # A heavy squat needs its three minutes; a set of dead bugs does not.
+        rest = exercise.get("rest", params.get("rest", 0))
         weight = exercise.get("target_weight_kg")
         for ramp_weight, ramp_reps in _warmup_sets(exercise["exercise"], weight):
             steps.append(
@@ -1005,6 +1023,7 @@ def _strength_straight_sets(params: dict) -> tuple[str, list[dict]]:
                         exercise["exercise"],
                         exercise["reps"],
                         weight,
+                        variant=exercise.get("variant"),
                     ),
                     _rest_step(order + 2, rest),
                 ],
@@ -1012,11 +1031,22 @@ def _strength_straight_sets(params: dict) -> tuple[str, list[dict]]:
         )
         order += 3
 
+    # Last, after the work: stretching cold muscles first is not a warmup.
+    mobility = params.get("mobility_minutes")
+    if mobility:
+        steps.append(_step(order, "cooldown", "time", mobility * 60, _no_target()))
+
+    listed = [e for e in exercises if e["exercise"] not in _CORE_CATEGORIES]
     name = "Strength " + ", ".join(
         f"{_describe_exercise(e['exercise'])} {e['sets']}x{e['reps']}"
         + (f" @ {e['target_weight_kg']:g}kg" if e.get("target_weight_kg") else "")
-        for e in exercises
+        for e in listed
     )
+    extras = ["core"] if len(listed) < len(exercises) else []
+    if mobility:
+        extras.append("mobility")
+    if extras:
+        name += " + " + ", ".join(extras)
     return name, steps
 
 
@@ -1173,7 +1203,7 @@ def _step_kind(step: dict) -> str:
 def _describe_step(step: dict, sport: str) -> str:
     kind = _step_kind(step)
     body = _describe_extent(step) + _describe_target(step, sport) + _describe_load(step)
-    category = step.get("category")
+    category = step.get("exerciseName") or step.get("category")
     if category:
         body = f"{_describe_exercise(category.lower()).capitalize()} {body}"
     if kind in ("warmup", "cooldown"):

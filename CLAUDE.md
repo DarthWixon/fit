@@ -307,7 +307,10 @@ Strength is shaped unlike every cardio combo, all forced by Garmin's own schema:
 load is **not** a target (`no.target` + `weightValue`/`weightUnit` on the step),
 reps are the `endCondition`, one `RepeatGroupDTO` per exercise as siblings
 numbered globally, and `params` carries a **list** of exercises. `exerciseName`
-(the variant) stays unset — each lift fit plans is a category in its own right.
+(the variant) is unset for the barbell lifts — each is a category in its own
+right — and sent only for an accessory's `variant` (`HIP_STABILITY` alone does
+not say "dead bug"). An exercise may carry its own `rest` over the session's:
+a set of dead bugs does not need a squat's three minutes.
 The exercise vocabulary is shared with the import side by construction:
 `importers.py` stores FIT's lowercase name, the payload upper-cases it.
 
