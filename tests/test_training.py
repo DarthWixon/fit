@@ -401,9 +401,15 @@ def test_volume_is_measured_by_mean_not_median():
     """Training in 2 weeks out of 8 makes the median zero, which under a median
     would fall through to "too sparse to measure" and hand somebody barely
     riding the full template volume. The mean sees it."""
-    sparse = _rides(1, 3, 3600) + _rides(8, 3, 3600)  # weeks 2-7 back are empty
+    # Weeks 2-7 back empty; 2.5h rides keep the mean off both clamps.
+    sparse = [
+        r
+        for r in _rides(8, 3, 9000)
+        if date.fromisoformat(r["date"]) < REFERENCE - timedelta(weeks=7)
+        or date.fromisoformat(r["date"]) >= REFERENCE - timedelta(weeks=1)
+    ]
     plan = _plan(SPORTIVE, sparse)
-    assert 0 < plan["volume"]["start_scale"] < 1.0
+    assert training.VOLUME_SCALE_MIN < plan["volume"]["start_scale"] < 1.0
     assert "h/week" in plan["volume"]["why"]
 
 
@@ -535,31 +541,6 @@ def _scale_for(template: dict, session: dict) -> dict | None:
     return None
 
 
-def test_the_tt_block_session_progresses_by_extending_the_block():
-    """A 2-5 rep count is too coarse to express a progression at all, so the
-    sustained-block day lengthens the block toward race duration instead."""
-    goal = "cycle_strength"
-    template = templates.GOAL_TEMPLATES[goal]
-    plan = _at_length(goal, template["weeks"])
-    # Guarded: strength entries carry no scale at all.
-    entry = next(
-        e
-        for e in template["weekly_sessions"]
-        if e["scale"] and e["scale"]["param"] == "work"
-    )
-    blocks = [
-        s["params"]["work"]
-        for s in sorted(plan["sessions"], key=lambda x: x["week"])
-        if (s["sport"], s["session_type"]) == (entry["sport"], entry["session_type"])
-        and date.fromisoformat(s["date"]).weekday() == entry["day"]
-    ]
-    assert len(set(blocks)) >= len(blocks) - 2, f"{goal}: barely progresses"
-    assert blocks[0] < max(blocks), f"{goal}: never grows"
-    assert not [
-        b for b in blocks if b in (entry["scale"]["min"], entry["scale"]["max"])
-    ]
-
-
 @pytest.mark.parametrize("goal", ALL_GOALS)
 def test_scaled_params_keep_headroom_inside_their_clamps(goal):
     """A clamp that binds often flattens the curve. Hitting the floor on a
@@ -621,7 +602,8 @@ def test_days_per_week_accepts_a_range_and_builds_frequency():
 def test_frequency_builds_in_priority_order():
     """The sessions that arrive later are the lower-priority ones, so a
     two-ride week is still the two rides that matter most."""
-    plan = _plan(RAMPED)
+    # A re-test replaces a session outright, which would read as a swap.
+    plan = _plan(RAMPED + "benchmarks: false\n")
     weeks = training.group_by_week(plan["sessions"])
     first = {s["session_type"] for s in weeks[0]["sessions"] if not s["is_extra"]}
     last = {s["session_type"] for s in weeks[-3]["sessions"] if not s["is_extra"]}
@@ -632,10 +614,17 @@ def test_frequency_builds_in_priority_order():
 def test_the_opening_week_is_measured_against_its_own_smaller_session_list():
     """With frequency building, week 1 has fewer sessions than the template —
     measuring recent training against the full week would understate it."""
-    # ~4h/week: enough that neither reading hits the clamp, so the comparison
-    # is between the two measurements rather than between two floors.
-    history = _rides(8, 4, 3600)
-    ramped = _plan(RAMPED.replace("volume: 100\n", ""), history)
+    # Opening at one day, so week 1 is the long ride alone: lifting is never
+    # measured, so only a missing *ride* makes the week smaller. ~1.8h/week
+    # keeps both readings off the clamps, so the comparison is between the two
+    # measurements rather than between two limits.
+    history = _rides(8, 2, 3240)
+    ramped = _plan(
+        RAMPED.replace("volume: 100\n", "").replace(
+            "days_per_week: [2, 4]", "days_per_week: [1, 4]"
+        ),
+        history,
+    )
     fixed = _plan(
         RAMPED.replace("volume: 100\n", "").replace(
             "days_per_week: [2, 4]", "days_per_week: 4"

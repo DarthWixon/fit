@@ -113,12 +113,17 @@ GOAL_TEMPLATES = {
     # --- cycling ---------------------------------------------------------
     "cycle_strength": {
         "label": "Cycling + strength",
-        "description": "40km bike time, supported by squat/deadlift/bench/press",
+        "description": "40km bike time, built on three days of squat/deadlift-led lifting",
         "weeks": 12,
         "days_per_week": 5,
-        "rest_day": 3,  # Thu; Sun is empty too, so the long ride can slide
+        "rest_day": 1,  # Tue; Sun is empty too, so the long ride can slide
         "phases": [("base", 5), ("build", 5), ("peak", 2)],
         "weekly_sessions": [
+            # Mon squat, Tue rest, Wed upper, Thu 30/15s, Fri deadlift, Sat
+            # long, Sun rest. Lower / upper / lower gives the two heavy
+            # lower-body sessions a week the cyclist strength studies used,
+            # and keeps Wednesday off the legs so Thursday's intervals start
+            # fresh. The long ride follows Friday's deadlifts, but it is easy.
             _session(
                 "cycle",
                 "long",
@@ -127,59 +132,102 @@ GOAL_TEMPLATES = {
                 key=True,
                 scale=_scale("distance_m", 40000, 25000, 90000, 500),
             ),
+            # Rønnestad's 30/15s: three sets of short efforts beat effort-
+            # matched 4x5min for VO2max and 40-minute power, and with one hard
+            # ride a week it should be the one that raises the ceiling. Reps
+            # per set are the scale; his 13 sits inside the clamp.
             _session(
                 "cycle",
                 "intervals",
-                day=1,
-                priority=3,
-                key=True,
-                scale=_scale("reps", 4, 2, 6, 1),
-                warmup_minutes=15,
-                work=360,
-                recovery=300,
-                cooldown_minutes=10,
-            ),
-            _session(
-                "cycle",
-                "intervals",
-                day=4,
+                day=3,
                 priority=2,
                 key=True,
-                scale=_scale("work", 600, 300, 1500, 30),
+                scale=_scale("reps", 9, 6, 15, 1),
                 warmup_minutes=15,
-                reps=3,
-                recovery=420,
+                sets=3,
+                work=30,
+                recovery=15,
+                set_recovery=180,
                 cooldown_minutes=10,
+                ftp_pct=120,
             ),
-            # Each day pairs one heavy lower-body lift with a press, rather
-            # than stacking squat and deadlift into one session.
-            #
-            # Mon deadlift, Tue ride, Wed squat, Thu rest, Fri ride, Sat long,
-            # Sun rest. With a lift on Monday one ride must follow a lifting
-            # day, so it is the hinge, not the squat, and the shorter session.
-            # Squat gets Thursday's rest before Friday's longer reps, which
-            # outrank Tuesday's so the benchmark replaces Friday: a test the
-            # day after deadlifts reads low.
+            # Core is dynamic, not held: in cyclists with back pain dynamic
+            # stabilisation beat static. Prescribed, not progressed.
             _session(
                 "strength",
                 "straight_sets",
-                day=2,
-                priority=4,
+                day=0,
+                priority=3,
                 rest=180,
                 exercises=[
                     {"exercise": "squat", "sets": 4, "reps": 6},
                     {"exercise": "bench_press", "sets": 3, "reps": 10},
+                    {
+                        "exercise": "hip_stability",
+                        "variant": "dead_bug",
+                        "rest": 45,
+                        "sets": 3,
+                        "reps": 10,
+                    },
+                ],
+            ),
+            # Pull-ups from zero: jump to the top, lower over 3-5s. Reps rise
+            # to the cap, which is the point to move on to strict ones.
+            _session(
+                "strength",
+                "straight_sets",
+                day=4,
+                priority=4,
+                rest=180,
+                exercises=[
+                    {"exercise": "deadlift", "sets": 3, "reps": 5},
+                    {
+                        "exercise": "pull_up",
+                        "variant": "jumping_pull_ups",
+                        "rest": 90,
+                        "sets": 3,
+                        "reps": 3,
+                        "rep_cap": 8,
+                    },
+                    {
+                        "exercise": "hip_stability",
+                        "variant": "dead_bug",
+                        "rest": 45,
+                        "sets": 3,
+                        "reps": 10,
+                    },
                 ],
             ),
             _session(
                 "strength",
                 "straight_sets",
-                day=0,
+                day=2,
                 priority=5,
                 rest=180,
+                mobility_minutes=10,
                 exercises=[
-                    {"exercise": "deadlift", "sets": 3, "reps": 5},
                     {"exercise": "shoulder_press", "sets": 3, "reps": 10},
+                    {
+                        "exercise": "pull_up",
+                        "variant": "jumping_pull_ups",
+                        "rest": 90,
+                        "sets": 3,
+                        "reps": 3,
+                        "rep_cap": 8,
+                    },
+                    {
+                        "exercise": "core",
+                        "variant": "cable_core_press",
+                        "rest": 45,
+                        "sets": 3,
+                        "reps": 10,
+                    },
+                    {
+                        "exercise": "hyperextension",
+                        "rest": 45,
+                        "sets": 3,
+                        "reps": 10,
+                    },
                 ],
             ),
         ],

@@ -20,6 +20,9 @@ Verified by live round-trip (scripts/diff_workout.py):
                                      a warmup step; dated 63-char name kept
 Still unverified: run easy/long and swim continuous, which pair a
 nested-proven pace.zone with a power-proven top-level position.
+Also unverified (2026-10-21): cycle/intervals with `sets` (sibling repeat
+groups), a strength step's exerciseName, a timed cooldown closing a strength
+workout, and dated strength names of ~71 chars.
 Re-run the diff after first pushing any unverified combo, and update this.
 """
 

@@ -311,6 +311,13 @@ planner.py's docstring — keep both current):
 (`cycle`/`long`, 2026-09-11); that exact combination has not been sent. Low
 risk, not zero. Diff one when one is next pushed, then update both tables.
 
+**Also unverified, from the 2026-10-21 `cycle_strength` rework:** `cycle`/
+`intervals` with `sets` (30/15s — three sibling `RepeatGroupDTO`s with a timed
+`recovery` between, siblings being the shape strength proved); a strength
+step's `exerciseName`; a timed `cooldown` step closing a strength workout; and
+a dated strength name of ~71 characters. Diff a Wednesday and a Thursday
+session after their first push.
+
 **Strength's sport `displayOrder` is 3, not the 4 its dump showed.** Every
 strength push came back stored as 3 (seen 2026-10-13), so fit sends 3 and the
 diff stays clean. It is a sort key only; `sportTypeId` 5 was always kept.
@@ -509,9 +516,11 @@ first, so trimming a week never strips a whole discipline. (Below three days
 there aren't enough slots and the lowest-priority sports do drop out.)
 
 **Each session scales along exactly one axis** — `scale["param"]`, a training
-decision: distance for long sessions, duration for steady, rep *count* for most
-intervals, but rep *duration* for `cycle_strength`'s sustained-block day, where
-a 2–5 rep count is too coarse to express a progression.
+decision: distance for long sessions, duration for steady, rep *count* for
+intervals — for `cycle_strength`'s 30/15s, reps *per set*, the sets fixed at
+three. Its sustained-block day, which scaled rep *duration*, went with the
+2026-10-21 rework: one hard ride a week is better spent on 30/15s, which
+beat effort-matched long intervals for 40-minute power (Rønnestad 2015).
 
 **The clamps are load-bearing.** Peak volume depends on plan length (8 weeks
 ~1.36x, 12 ~1.59x, 16 ~2.2x), so `standard_triathlon`'s bases sit lower relative
@@ -706,10 +715,12 @@ not business logic, so it stays inline.
 `planner`, `training`, or how `cli`'s `train` commands compose.
 
 **The suite is small on purpose** and has been trimmed twice (192 → 154 → 195
-cases, having regrown in between). 179 now: the stateless-plan commit added
+cases, having regrown in between). 181 now: the stateless-plan commit added
 four, cutting the goals from ten to four shrank the `ALL_GOALS` loops to 181,
-the two live-account fixes since added one each, the warmup ramp one more, and
-removing the fitness index took five.
+the two live-account fixes since added one each, the warmup ramp one more,
+removing the fitness index took five, and the `cycle_strength` rework added
+three (rep progression, 30/15 payload, moved rides) and dropped the
+sustained-block test with its session.
 `test_cli.py` is the only CLI test and stays that narrow — command composition that writes to Garmin,
 with every `garmin` call stubbed. Three things do not earn a test:
 
