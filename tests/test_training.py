@@ -990,6 +990,24 @@ def test_bodyweight_reps_rise_on_every_set_done_and_stop_at_the_cap():
     assert next_pull_ups([did(9, 9, 9)] * 4) == 5
 
 
+def test_a_moved_ride_warns_only_when_it_came_from_another_week():
+    """A stale device prompts with last week's workout; a long ride ridden on
+    Sunday instead of Saturday is the plan working."""
+    pushed = [
+        {"date": "2026-10-06", "sport": "cycle", "workout_id": 1},
+        {"date": "2026-10-13", "sport": "cycle", "workout_id": 2},
+        {"date": "2026-10-17", "sport": "cycle", "workout_id": 3},
+    ]
+    rides = [
+        {"date": "2026-10-13", "workout_id": 1},
+        {"date": "2026-10-18", "workout_id": 3},
+    ]
+    warned = training.followed_other_session(rides, pushed)
+    assert [(w["date"], w["followed"]["workout_id"]) for w in warned] == [
+        ("2026-10-13", 1)
+    ]
+
+
 def _roles_of(plan):
     """Week roles, from the phases the expanded sessions carry."""
     phases = [w["phase"] for w in training.group_by_week(plan["sessions"]) if w["week"]]

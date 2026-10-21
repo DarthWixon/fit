@@ -1608,6 +1608,10 @@ def followed_other_session(rides: list[dict], pushed: list[dict]) -> list[dict]:
     day's 4x6:00, and same-week completion matching ticked the session off.
     Each returned {date, followed, scheduled} pairs the ledger row that was
     ridden with the one meant for that day (None when nothing was).
+
+    A session moved within its own week onto a free day is not stale — the
+    long ride is planned for Saturday and ridden Saturday or Sunday — so it
+    passes unremarked, as completion matching already treats it.
     """
     by_id = {e["workout_id"]: e for e in pushed if e.get("workout_id") is not None}
     by_key = {(e["date"], e["sport"]): e for e in pushed}
@@ -1616,13 +1620,10 @@ def followed_other_session(rides: list[dict], pushed: list[dict]) -> list[dict]:
         followed = by_id.get(ride["workout_id"])
         if followed is None or followed["date"] == ride["date"]:
             continue
-        out.append(
-            {
-                "date": ride["date"],
-                "followed": followed,
-                "scheduled": by_key.get((ride["date"], followed["sport"])),
-            }
-        )
+        scheduled = by_key.get((ride["date"], followed["sport"]))
+        if scheduled is None and _iso_week(ride["date"]) == _iso_week(followed["date"]):
+            continue
+        out.append({"date": ride["date"], "followed": followed, "scheduled": scheduled})
     return out
 
 
