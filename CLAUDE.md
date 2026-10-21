@@ -669,7 +669,9 @@ baseline, strength straight_sets/baseline. Quality types are warmup → main →
 cooldown; the five *steady* combos (run easy/long, cycle endurance/long, swim
 continuous) are a **single block** with a wider target band, because a warmup
 inside an easy run is just more easy running. The easy rides carry no target at
-all and are named `... easy`, so the watch never beeps on them.
+all and are named `... easy`, so the watch never beeps on them. Cycle intervals
+take optional `sets`/`set_recovery` (30/15s) and an `ftp_pct` of the measured
+FTP; without them the payload is what it always was.
 
 `fit plan` **saves before pushing**, so a failed push never loses the workout;
 the id and scheduled date are written back after each step succeeds, making the

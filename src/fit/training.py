@@ -878,7 +878,11 @@ def _apply_target(sport: str, session_type: str, params: dict, targets: dict) ->
             params["target_pace"] = planner.easy_pace_from_5k(targets["run_5k_seconds"])
     elif sport == "cycle":
         if session_type == "intervals":
-            params["target_watts"] = targets["bike_ftp"]
+            # A fixed fraction of the measured FTP, never a projected one: 30s
+            # efforts sit above threshold by design, not by expected progress.
+            params["target_watts"] = round(
+                targets["bike_ftp"] * params.get("ftp_pct", 100) / 100
+            )
     elif sport == "swim" and session_type in ("intervals", "continuous"):
         params["target_pace_100m"] = targets["swim_css_100m"]
 

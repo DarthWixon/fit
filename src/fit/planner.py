@@ -815,25 +815,45 @@ def _swim_intervals(params: dict) -> tuple[str, list[dict]]:
 
 
 def _cycle_intervals(params: dict) -> tuple[str, list[dict]]:
-    steps = [
-        _step(1, "warmup", "time", params["warmup_minutes"] * 60, _no_target()),
-        _repeat(
-            2,
-            params["reps"],
-            [
-                _step(
-                    3,
-                    "interval",
-                    "time",
-                    params["work"],
-                    _power_target(params["target_watts"]),
-                ),
-                _step(4, "recovery", "time", params["recovery"], _no_target()),
-            ],
-        ),
-        _step(5, "cooldown", "time", params["cooldown_minutes"] * 60, _no_target()),
-    ]
-    name = f"Cycle intervals {params['reps']}x{_format_mmss(params['work'])} @ {params['target_watts']}W"
+    """`sets` > 1 makes it Rønnestad-style: that many repeat groups as
+    siblings, a timed `set_recovery` between each. Siblings rather than a
+    nested repeat because siblings are the shape Garmin is proven to keep
+    (strength, 2026-09-05). Without `sets` the payload is unchanged."""
+    sets = params.get("sets", 1)
+    steps = [_step(1, "warmup", "time", params["warmup_minutes"] * 60, _no_target())]
+    order = 2
+    for index in range(sets):
+        if index:
+            steps.append(
+                _step(order, "recovery", "time", params["set_recovery"], _no_target())
+            )
+            order += 1
+        steps.append(
+            _repeat(
+                order,
+                params["reps"],
+                [
+                    _step(
+                        order + 1,
+                        "interval",
+                        "time",
+                        params["work"],
+                        _power_target(params["target_watts"]),
+                    ),
+                    _step(
+                        order + 2, "recovery", "time", params["recovery"], _no_target()
+                    ),
+                ],
+            )
+        )
+        order += 3
+    steps.append(
+        _step(order, "cooldown", "time", params["cooldown_minutes"] * 60, _no_target())
+    )
+    shape = f"{params['reps']}x{_format_mmss(params['work'])}"
+    if sets > 1:
+        shape = f"{sets}x{shape}"
+    name = f"Cycle intervals {shape} @ {params['target_watts']}W"
     return name, steps
 
 

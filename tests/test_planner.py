@@ -149,6 +149,37 @@ def test_cycle_intervals_power_zone():
     assert plan["payload"]["sportType"]["sportTypeId"] == 2
 
 
+def test_cycle_intervals_in_sets_are_sibling_repeats_with_a_rest_between():
+    params = {
+        "warmup_minutes": 15,
+        "sets": 3,
+        "reps": 13,
+        "work": 30,
+        "recovery": 15,
+        "set_recovery": 180,
+        "cooldown_minutes": 10,
+        "target_watts": 250,
+    }
+    plan = planner.build_plan("cycle", "intervals", params, "t")
+    steps = plan["payload"]["workoutSegments"][0]["workoutSteps"]
+    shape = [
+        (s["stepOrder"], s["stepType"]["stepTypeKey"], s.get("numberOfIterations"))
+        for s in steps
+    ]
+    assert shape == [
+        (1, "warmup", None),
+        (2, "repeat", 13),
+        (5, "recovery", None),
+        (6, "repeat", 13),
+        (9, "recovery", None),
+        (10, "repeat", 13),
+        (13, "cooldown", None),
+    ]
+    assert [c["stepOrder"] for c in steps[3]["workoutSteps"]] == [7, 8]
+    assert steps[2]["endConditionValue"] == 180.0
+    assert plan["workout_name"] == "Cycle intervals 3x13x0:30 @ 250W"
+
+
 def test_describe_plan_run_intervals():
     plan = planner.build_plan(
         "run", "intervals", _params("run", "intervals"), "2026-07-03T09:00:00"
