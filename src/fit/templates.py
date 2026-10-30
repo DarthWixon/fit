@@ -151,8 +151,9 @@ GOAL_TEMPLATES = {
                 cooldown_minutes=10,
                 ftp_pct=120,
             ),
-            # Core is dynamic, not held: in cyclists with back pain dynamic
-            # stabilisation beat static. Prescribed, not progressed.
+            # Core is done for reps, not held: every strength step ends on a
+            # rep count, and a timed hold would be a step shape Garmin has not
+            # been sent. Prescribed, not progressed.
             _session(
                 "strength",
                 "straight_sets",
@@ -204,9 +205,9 @@ GOAL_TEMPLATES = {
                 day=2,
                 priority=5,
                 rest=180,
-                mobility_minutes=10,
                 exercises=[
                     {"exercise": "shoulder_press", "sets": 3, "reps": 10},
+                    {"exercise": "row", "sets": 3, "reps": 10},
                     {
                         "exercise": "pull_up",
                         "variant": "jumping_pull_ups",
@@ -222,11 +223,14 @@ GOAL_TEMPLATES = {
                         "sets": 3,
                         "reps": 10,
                     },
+                    # Shoulder taps: anti-rotation like the core press, but
+                    # needing nothing but the floor. Reps count both sides.
                     {
-                        "exercise": "hyperextension",
+                        "exercise": "plank",
+                        "variant": "straight_arm_plank_with_shoulder_touch",
                         "rest": 45,
                         "sets": 3,
-                        "reps": 10,
+                        "reps": 20,
                     },
                 ],
             ),

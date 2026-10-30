@@ -21,8 +21,9 @@ Verified by live round-trip (scripts/diff_workout.py):
 Still unverified: run easy/long and swim continuous, which pair a
 nested-proven pace.zone with a power-proven top-level position.
 Also unverified (2026-10-21): cycle/intervals with `sets` (sibling repeat
-groups), a strength step's exerciseName, a timed cooldown closing a strength
-workout, and dated strength names of ~71 chars.
+groups), a strength step's exerciseName, and dated strength names of ~71
+chars. From 2026-10-29: the ROW and PLANK categories, and the plank's
+STRAIGHT_ARM_PLANK_WITH_SHOULDER_TOUCH exerciseName, in a 78-char dated name.
 Re-run the diff after first pushing any unverified combo, and update this.
 """
 
@@ -61,15 +62,17 @@ STRENGTH_CATEGORIES = (
     "bench_press",
     "shoulder_press",
     "pull_up",
+    "row",
     "hip_stability",
     "core",
     "hyperextension",
+    "plank",
 )
 
 # Core work is prescribed but not progressed, so a workout name says only that
 # it is there: listing three accessories would push a dated name well past the
 # 63 characters Garmin has been seen to keep.
-_CORE_CATEGORIES = ("hip_stability", "core", "hyperextension")
+_CORE_CATEGORIES = ("hip_stability", "core", "hyperextension", "plank")
 
 # Quality workouts (intervals/tempo/baseline) are warmup -> main ->
 # cooldown. The steady types above (easy/long/endurance/continuous) are a
@@ -1054,22 +1057,14 @@ def _strength_straight_sets(params: dict) -> tuple[str, list[dict]]:
         )
         order += 3
 
-    # Last, after the work: stretching cold muscles first is not a warmup.
-    mobility = params.get("mobility_minutes")
-    if mobility:
-        steps.append(_step(order, "cooldown", "time", mobility * 60, _no_target()))
-
     listed = [e for e in exercises if e["exercise"] not in _CORE_CATEGORIES]
     name = "Strength " + ", ".join(
         f"{_describe_exercise(e['exercise'])} {e['sets']}x{e['reps']}"
         + (f" @ {e['target_weight_kg']:g}kg" if e.get("target_weight_kg") else "")
         for e in listed
     )
-    extras = ["core"] if len(listed) < len(exercises) else []
-    if mobility:
-        extras.append("mobility")
-    if extras:
-        name += " + " + ", ".join(extras)
+    if len(listed) < len(exercises):
+        name += " + core"
     return name, steps
 
 

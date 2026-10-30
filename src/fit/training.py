@@ -147,6 +147,7 @@ LIFT_INCREMENT_KG = {
     "squat": 2.5,
     "bench_press": 1.0,
     "shoulder_press": 1.0,
+    "row": 1.0,
 }
 DEFAULT_LIFT_INCREMENT_KG = 2.5
 
@@ -171,6 +172,7 @@ FALLBACK_LIFT_E1RM_KG = {
     "squat": 70.0,
     "bench_press": 50.0,
     "shoulder_press": 35.0,
+    "row": 40.0,
 }
 
 

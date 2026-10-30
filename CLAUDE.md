@@ -193,12 +193,12 @@ only (nothing tests it) and stops at the cap, which warns that it is time to
 move on; the next stage is a template edit. Rep counts are corrected **on the
 watch**: a later app correction disagrees with the FIT's reps, and
 `apply_garmin_exercise_sets` abandons its merge on exactly that. Core work is
-prescribed and never progressed. Only the four barbell lifts get e1RM targets
+prescribed and never progressed. Only the five barbell lifts get e1RM targets
 (`template_lifts`) or identify a session for completion matching (`_lifts`) —
 dead bugs on Monday and Friday would otherwise make every session alike.
 
 **Every prescribed load is a whole kg or a multiple of 2.5kg.** Each lift
-rounds to its own increment — bench and press 1kg, squat and deadlift 2.5kg —
+rounds to its own increment — bench, press and row 1kg, squat and deadlift 2.5kg —
 so `LIFT_INCREMENT_KG` must hold only those two values. A 1.25kg step prescribed
 23.75kg, which the watch showed as 23.8 and no bar could hold. Rounding to the
 nearest loadable weight instead was tried and dropped: 67 + 2.5 lands on 69
@@ -314,9 +314,14 @@ risk, not zero. Diff one when one is next pushed, then update both tables.
 **Also unverified, from the 2026-10-21 `cycle_strength` rework:** `cycle`/
 `intervals` with `sets` (30/15s — three sibling `RepeatGroupDTO`s with a timed
 `recovery` between, siblings being the shape strength proved); a strength
-step's `exerciseName`; a timed `cooldown` step closing a strength workout; and
-a dated strength name of ~71 characters. Diff a Wednesday and a Thursday
-session after their first push.
+step's `exerciseName`; and a dated strength name of ~71 characters. Diff a
+Wednesday and a Thursday session after their first push. The Wednesday also
+carries the first `ROW` and `PLANK` categories (2026-10-29, barbell row and
+shoulder taps replacing hyperextensions and mobility), and its dated name is
+now 78 characters.
+The barbell row has no Garmin variant: the only barbell one in the
+FIT profile is reverse-grip. So, like the other four lifts, it goes as the
+bare category.
 
 **Strength's sport `displayOrder` is 3, not the 4 its dump showed.** Every
 strength push came back stored as 3 (seen 2026-10-13), so fit sends 3 and the
