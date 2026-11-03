@@ -1,15 +1,19 @@
-"""The training content behind `fit train`: one template per goal — plan
-length, phase structure and the weekly session mix, plus the two constructors
-that build them.
+"""The training content behind `fit train`: the one week the plan repeats —
+StrongLifts 5x5 on Mon/Wed/Fri around easy riding — and how each session grows.
 
-Imports nothing from fit, which is the point: adding or recalibrating a goal
-never touches the engine that expands one. These docstrings say what a
-template *author* needs; training.py says what the engine does with it.
+Imports nothing from fit, which is the point: changing the week never touches
+the engine that expands it. training.py says what the engine does with it.
 """
 
-# Phase lengths sum to weeks - PROGRESSION_DEFAULTS["taper_weeks"] (the taper
-# is not listed here). A moved start_date reapportions them, so they need not
-# sum exactly — but keeping them tidy makes the intent readable.
+TITLE = "StrongLifts 5x5 with easy riding"
+
+# Ride sizes grow by this much a week, compounding. There is no event to peak
+# for, so no recovery weeks or taper either: the bar moves only by StrongLifts'
+# own rule, and the rides climb steadily from the opening week.
+WEEKLY_RAMP_PCT = 4
+
+# Training days when the description does not say; Tuesday is the one day off.
+DAYS_PER_WEEK = 6
 
 
 def _scale(param: str, base: int, low: int, high: int, step: int) -> dict:
@@ -23,379 +27,103 @@ def _session(
     day: int,
     priority: int,
     scale: dict | None = None,
-    key: bool = False,
-    brick: bool = False,
+    week_parity: int | None = None,
     **params,
 ) -> dict:
-    """One weekly session template.
+    """One weekly session.
 
-    day       0=Mon, in the template's own week; rotated as a whole if the
-              description names a different rest_day
-    priority  1 = drop last, when days_per_week trims the week. Multi-sport
-              goals interleave the sports rather than ranking every long
-              session first, so a trimmed week keeps one of each discipline
-    key       a hard session; extras are never placed on these days
-    brick     runs straight off the session sharing its day
+    day       0=Mon
+    priority  1 = drop last, when days_per_week trims the week; a description
+              building days_per_week adds sessions in this order
     scale     the one param that grows, or None. Only strength is None: its
               progression is load, and ramping sets too would be two
               progressions at once
-    params    fixed build_plan params; the intensity one is filled in by
-              training._apply_target
+    week_parity
+              0 or 1 to run only in alternate weeks (counting week 1 as 0), so
+              StrongLifts can alternate its workouts; None runs every week
+    params    fixed planner.build_plan params
     """
     return {
         "sport": sport,
         "session_type": session_type,
         "day": day,
         "priority": priority,
-        "key": key,
-        "brick": brick,
+        "week_parity": week_parity,
         "params": params,
         "scale": scale,
     }
 
 
-GOAL_TEMPLATES = {
-    # --- running ---------------------------------------------------------
-    "run_10k": {
-        "label": "10k",
-        "description": "10km race",
-        "weeks": 10,
-        "days_per_week": 5,
-        "rest_day": 0,
-        "phases": [("base", 4), ("build", 3), ("peak", 1)],
-        "weekly_sessions": [
-            _session(
-                "run",
-                "long",
-                day=5,
-                priority=1,
-                key=True,
-                scale=_scale("distance_m", 10000, 8000, 18000, 250),
-            ),
-            _session(
-                "run",
-                "intervals",
-                day=1,
-                priority=2,
-                key=True,
-                scale=_scale("reps", 5, 3, 8, 1),
-                warmup_minutes=10,
-                rep_distance_m=1000,
-                recovery=150,
-                cooldown_minutes=10,
-            ),
-            _session(
-                "run",
-                "tempo",
-                day=3,
-                priority=3,
-                key=True,
-                scale=_scale("tempo_minutes", 25, 15, 45, 5),
-                warmup_minutes=10,
-                cooldown_minutes=10,
-            ),
-            _session(
-                "run",
-                "easy",
-                day=6,
-                priority=4,
-                scale=_scale("duration_minutes", 40, 25, 70, 5),
-            ),
-            _session(
-                "run",
-                "easy",
-                day=2,
-                priority=5,
-                scale=_scale("duration_minutes", 35, 20, 60, 5),
-            ),
-        ],
+def _alternating(day: int, priority: int, first: list, second: list) -> list[dict]:
+    """One lifting day that swaps workouts week by week: `first` in week 1,
+    `second` in week 2, and so on."""
+    return [
+        _session(
+            "strength",
+            "straight_sets",
+            day=day,
+            priority=priority,
+            week_parity=parity,
+            rest=180,
+            exercises=exercises,
+        )
+        for parity, exercises in ((0, first), (1, second))
+    ]
+
+
+# StrongLifts 5x5: A and B alternate every time you lift, so Mon/Wed/Fri runs
+# A/B/A one week and B/A/B the next. Squat, then the press, then the pull,
+# which is the programme's own order. Deadlift is a single work set, as the
+# programme has it: the heaviest lift, straight after five sets of squats. One
+# rep scheme per lift across both workouts, which
+# training.next_working_weight depends on.
+_STRONGLIFTS_A = [
+    {"exercise": "squat", "sets": 5, "reps": 5},
+    {"exercise": "bench_press", "sets": 5, "reps": 5},
+    {"exercise": "row", "sets": 5, "reps": 5},
+]
+# Pull-ups are B's assistance work, where the programme suggests them: A
+# already pulls with the row. Jump to the top, lower over 3-5s; reps rise to the
+# cap, which is the point to move on to strict ones.
+_STRONGLIFTS_B = [
+    {"exercise": "squat", "sets": 5, "reps": 5},
+    {"exercise": "shoulder_press", "sets": 5, "reps": 5},
+    {"exercise": "deadlift", "sets": 1, "reps": 5},
+    {
+        "exercise": "pull_up",
+        "variant": "jumping_pull_ups",
+        "rest": 90,
+        "sets": 3,
+        "reps": 3,
+        "rep_cap": 8,
     },
-    # --- cycling ---------------------------------------------------------
-    "cycle_strength": {
-        "label": "Cycling + strength",
-        "description": "40km bike time, built on three days of squat/deadlift-led lifting",
-        "weeks": 12,
-        "days_per_week": 5,
-        "rest_day": 1,  # Tue; Sun is empty too, so the long ride can slide
-        "phases": [("base", 5), ("build", 5), ("peak", 2)],
-        "weekly_sessions": [
-            # Mon squat, Tue rest, Wed upper, Thu 30/15s, Fri deadlift, Sat
-            # long, Sun rest. Lower / upper / lower gives the two heavy
-            # lower-body sessions a week the cyclist strength studies used,
-            # and keeps Wednesday off the legs so Thursday's intervals start
-            # fresh. The long ride follows Friday's deadlifts, but it is easy.
-            _session(
-                "cycle",
-                "long",
-                day=5,
-                priority=1,
-                key=True,
-                scale=_scale("distance_m", 40000, 25000, 90000, 500),
-            ),
-            # Rønnestad's 30/15s: three sets of short efforts beat effort-
-            # matched 4x5min for VO2max and 40-minute power, and with one hard
-            # ride a week it should be the one that raises the ceiling. Reps
-            # per set are the scale; his 13 sits inside the clamp.
-            _session(
-                "cycle",
-                "intervals",
-                day=3,
-                priority=2,
-                key=True,
-                scale=_scale("reps", 9, 6, 15, 1),
-                warmup_minutes=15,
-                sets=3,
-                work=30,
-                recovery=15,
-                set_recovery=180,
-                cooldown_minutes=10,
-                ftp_pct=120,
-            ),
-            # Core is done for reps, not held: every strength step ends on a
-            # rep count, and a timed hold would be a step shape Garmin has not
-            # been sent. Prescribed, not progressed.
-            _session(
-                "strength",
-                "straight_sets",
-                day=0,
-                priority=3,
-                rest=180,
-                exercises=[
-                    {"exercise": "squat", "sets": 4, "reps": 6},
-                    {"exercise": "bench_press", "sets": 3, "reps": 10},
-                    {
-                        "exercise": "hip_stability",
-                        "variant": "dead_bug",
-                        "rest": 45,
-                        "sets": 3,
-                        "reps": 10,
-                    },
-                ],
-            ),
-            # Pull-ups from zero: jump to the top, lower over 3-5s. Reps rise
-            # to the cap, which is the point to move on to strict ones.
-            _session(
-                "strength",
-                "straight_sets",
-                day=4,
-                priority=4,
-                rest=180,
-                exercises=[
-                    {"exercise": "deadlift", "sets": 3, "reps": 5},
-                    {
-                        "exercise": "pull_up",
-                        "variant": "jumping_pull_ups",
-                        "rest": 90,
-                        "sets": 3,
-                        "reps": 3,
-                        "rep_cap": 8,
-                    },
-                    {
-                        "exercise": "hip_stability",
-                        "variant": "dead_bug",
-                        "rest": 45,
-                        "sets": 3,
-                        "reps": 10,
-                    },
-                ],
-            ),
-            _session(
-                "strength",
-                "straight_sets",
-                day=2,
-                priority=5,
-                rest=180,
-                exercises=[
-                    {"exercise": "shoulder_press", "sets": 3, "reps": 10},
-                    {"exercise": "row", "sets": 3, "reps": 10},
-                    {
-                        "exercise": "pull_up",
-                        "variant": "jumping_pull_ups",
-                        "rest": 90,
-                        "sets": 3,
-                        "reps": 3,
-                        "rep_cap": 8,
-                    },
-                    {
-                        "exercise": "core",
-                        "variant": "cable_core_press",
-                        "rest": 45,
-                        "sets": 3,
-                        "reps": 10,
-                    },
-                    # Shoulder taps: anti-rotation like the core press, but
-                    # needing nothing but the floor. Reps count both sides.
-                    {
-                        "exercise": "plank",
-                        "variant": "straight_arm_plank_with_shoulder_touch",
-                        "rest": 45,
-                        "sets": 3,
-                        "reps": 20,
-                    },
-                ],
-            ),
-        ],
-    },
-    # --- triathlon -------------------------------------------------------
-    "standard_triathlon": {
-        "label": "Standard triathlon",
-        "description": "1.5km swim / 40km bike / 10km run",
-        "weeks": 16,
-        "days_per_week": 6,
-        "rest_day": 0,
-        "phases": [("base", 6), ("build", 5), ("peak", 3)],
-        "weekly_sessions": [
-            # Clamps matter most here: at 16 weeks the ramp compounds to
-            # ~2.2x, which without these caps would put a 108km ride and a
-            # 22km run in an Olympic-distance plan.
-            _session(
-                "cycle",
-                "long",
-                day=5,
-                priority=1,
-                key=True,
-                scale=_scale("distance_m", 40000, 25000, 90000, 500),
-            ),
-            _session(
-                "run",
-                "long",
-                day=6,
-                priority=2,
-                key=True,
-                scale=_scale("distance_m", 8000, 6000, 16000, 250),
-            ),
-            _session(
-                "swim",
-                "intervals",
-                day=2,
-                priority=3,
-                key=True,
-                scale=_scale("reps", 8, 6, 20, 1),
-                warmup_m=300,
-                rep_distance_m=100,
-                rest=20,
-                cooldown_m=200,
-            ),
-            _session(
-                "run",
-                "intervals",
-                day=1,
-                priority=6,
-                key=True,
-                scale=_scale("reps", 4, 3, 8, 1),
-                warmup_minutes=10,
-                rep_distance_m=1000,
-                recovery=150,
-                cooldown_minutes=10,
-            ),
-            _session(
-                "cycle",
-                "intervals",
-                day=3,
-                priority=4,
-                key=True,
-                scale=_scale("reps", 3, 3, 8, 1),
-                warmup_minutes=15,
-                work=300,
-                recovery=240,
-                cooldown_minutes=10,
-            ),
-            _session(
-                "run",
-                "easy",
-                day=5,
-                priority=7,
-                brick=True,
-                scale=_scale("duration_minutes", 15, 10, 40, 5),
-            ),
-            _session(
-                "swim",
-                "continuous",
-                day=4,
-                priority=5,
-                scale=_scale("distance_m", 1200, 900, 2500, 100),
-            ),
-            # Same two sessions as the sprint plan, a rep heavier: 16 weeks is
-            # long enough for the gym work to be worth something, and the
-            # endurance volume it sits alongside is capped by clamps anyway.
-            _session(
-                "strength",
-                "straight_sets",
-                day=1,
-                priority=8,
-                rest=150,
-                exercises=[
-                    {"exercise": "squat", "sets": 3, "reps": 8},
-                    {"exercise": "bench_press", "sets": 3, "reps": 8},
-                ],
-            ),
-            _session(
-                "strength",
-                "straight_sets",
-                day=3,
-                priority=9,
-                rest=150,
-                exercises=[
-                    {"exercise": "deadlift", "sets": 3, "reps": 8},
-                    {"exercise": "shoulder_press", "sets": 3, "reps": 8},
-                ],
-            ),
-        ],
-    },
-    # --- strength --------------------------------------------------------
-    #
-    # No endurance event behind it, and the only goal whose sessions are all
-    # unscaled: the whole progression is the number on the bar. Phases and
-    # taper still decide which weeks deload, so `event_date` is the day you
-    # plan to re-test rather than a race.
-    "strength_program": {
-        "label": "Strength block",
-        "description": "linear progression on the four barbell lifts",
-        "weeks": 12,
-        "days_per_week": 3,
-        "rest_day": 6,  # Sun
-        "phases": [("base", 4), ("build", 4), ("peak", 2)],
-        "weekly_sessions": [
-            # A/B/A across Mon/Wed/Fri: squat and press twice a fortnight
-            # each, deadlift once a week, which is as often as most people can
-            # pull heavy and keep adding to it. Fives throughout — heavy enough
-            # to drive the numbers, light enough to keep the reps clean.
-            _session(
-                "strength",
-                "straight_sets",
-                day=0,
-                priority=1,
-                key=True,
-                rest=180,
-                exercises=[
-                    {"exercise": "squat", "sets": 3, "reps": 5},
-                    {"exercise": "bench_press", "sets": 3, "reps": 5},
-                ],
-            ),
-            _session(
-                "strength",
-                "straight_sets",
-                day=2,
-                priority=2,
-                key=True,
-                rest=180,
-                exercises=[
-                    {"exercise": "deadlift", "sets": 3, "reps": 5},
-                    {"exercise": "shoulder_press", "sets": 3, "reps": 5},
-                ],
-            ),
-            _session(
-                "strength",
-                "straight_sets",
-                day=4,
-                priority=3,
-                key=True,
-                rest=180,
-                exercises=[
-                    {"exercise": "squat", "sets": 3, "reps": 5},
-                    {"exercise": "bench_press", "sets": 3, "reps": 5},
-                ],
-            ),
-        ],
-    },
-}
+]
+
+# Every ride is easy and untargeted. Saturday ranks last, so a description
+# building days_per_week from 5 to 6 adds it later.
+WEEKLY_SESSIONS = [
+    _session(
+        "cycle",
+        "long",
+        day=6,
+        priority=1,
+        scale=_scale("distance_m", 40000, 25000, 90000, 500),
+    ),
+    *_alternating(0, 2, _STRONGLIFTS_A, _STRONGLIFTS_B),
+    *_alternating(2, 3, _STRONGLIFTS_B, _STRONGLIFTS_A),
+    *_alternating(4, 4, _STRONGLIFTS_A, _STRONGLIFTS_B),
+    _session(
+        "cycle",
+        "endurance",
+        day=3,
+        priority=5,
+        scale=_scale("duration_minutes", 50, 30, 90, 5),
+    ),
+    _session(
+        "cycle",
+        "long",
+        day=5,
+        priority=6,
+        scale=_scale("distance_m", 30000, 20000, 70000, 500),
+    ),
+]

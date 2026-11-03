@@ -35,11 +35,11 @@ def render_usage() -> None:
         "fit gs                                      = garmin-sync --days 7\n"
         "fit plan --sport S --type T [--no-push]     build a workout, push to Garmin\n"
         "fit plan ... --schedule YYYY-MM-DD          also put it on the Garmin calendar\n"
-        "fit train import <plan.yaml>                expand a goal into a full plan\n"
+        "fit train import <plan.yaml>                date the plan from a description\n"
         "fit train show [--weeks N]                  the plan, with what's done\n"
         "fit train sync [--days N] [--dry-run]       push + schedule the next sessions\n"
         "fit train clear                             unschedule future sessions\n"
-        "fit train refresh [--days N]                clear + sync at current fitness\n"
+        "fit train refresh [--days N]                clear + sync at current loads\n"
         "fit history [N]                             last N activities (default 10)\n"
         "fit calendar                                active days, last 2 months\n"
         "fit usage                                   this screen\n"
@@ -496,22 +496,6 @@ def render_plan_scheduled(plan: dict) -> None:
 
 # --- training plans (fit train) -------------------------------------------
 
-_TARGET_LABELS = {
-    "run_5k_seconds": ("Run 5k", "time"),
-    "swim_css_100m": ("Swim CSS", "pace"),
-    "bike_ftp": ("Bike FTP", "watts"),
-}
-
-
-def _format_target_value(key: str, value) -> str:
-    """'22:30', '1:45/100m', '245W'."""
-    _, kind = _TARGET_LABELS[key]
-    if kind == "time":
-        return _format_seconds_colon(value)
-    if kind == "pace":
-        return f"{_format_seconds_colon(value)}/100m"
-    return f"{value}W"
-
 
 def _format_lift_target(lift: str, entry: dict) -> str:
     """'Squat 105 → 123kg': a strength target is a journey, not a figure. Both
@@ -524,69 +508,38 @@ def _format_lift_target(lift: str, entry: dict) -> str:
     )
 
 
-def _format_targets(targets: dict) -> str:
-    """'Run 5k 22:30 · Bike FTP 245W', with strength lifts appended as pairs."""
-    parts = [
-        f"{label} {_format_target_value(key, targets[key])}"
-        for key, (label, _) in _TARGET_LABELS.items()
-        if targets.get(key) is not None
-    ]
-    parts.extend(
-        _format_lift_target(lift, entry)
-        for lift, entry in (targets.get("strength") or {}).items()
-    )
-    return " · ".join(parts)
-
-
 def render_training_plan(summary: dict, weeks: list[dict]) -> None:
     """plan_summary's dict + group_by_week's rows. All grouping and counting
     happens there; this only prints."""
-    console.print(f"[bold]{summary['label']}[/bold] — {summary['description']}")
+    console.print(f"[bold]{summary['title']}[/bold]")
 
     days = summary["days_to_go"]
     when = (
         f"in {days} days" if days > 0 else "today" if days == 0 else f"{-days} days ago"
     )
-    length = f"{summary['weeks']} weeks"
-    if summary.get("test_week"):
-        length = f"week 0 + {length}"
     console.print(
-        f"Event {summary['event_date']} ({when}) · "
-        f"{length} from {summary['start_date']}"
+        f"{summary['weeks']} weeks from {summary['start_date']} · ends "
+        f"{summary['end_date']} ({when})"
     )
     console.print(
-        f"{summary['completed']}/{summary['sessions'] - summary['extras']} sessions "
-        f"done · {summary['scheduled']} on the Garmin calendar · "
-        f"{summary['extras']} extras (tracked locally)"
+        f"{summary['completed']}/{summary['sessions']} sessions done · "
+        f"{summary['scheduled']} on the Garmin calendar"
     )
-    targets = _format_targets(summary.get("targets", {}))
+    targets = " · ".join(
+        _format_lift_target(lift, entry)
+        for lift, entry in summary.get("targets", {}).items()
+    )
     if targets:
-        console.print(f"[dim]Targets: {targets}[/dim]")
+        console.print(f"[dim]Lifts (e1RM): {targets}[/dim]")
     volume = summary.get("volume") or {}
     if volume.get("why"):
         scale = round(volume.get("start_scale", 1) * 100)
         console.print(f"[dim]Starting volume: {scale}% — {volume['why']}[/dim]")
-    # Not `weeks`: that is the parameter the table below iterates, and
-    # shadowing it here made this raise on every plan with a re-test.
-    if summary.get("test_week"):
-        console.print(
-            "[dim]Week 0 is a test week: every target below was derived from "
-            "your history, so do the tests and `fit garmin-sync` — the plan "
-            "re-derives from them automatically.[/dim]"
-        )
-    benchmark_weeks = summary.get("benchmark_weeks") or []
-    if benchmark_weeks:
-        console.print(
-            f"[dim]Re-test weeks: {', '.join(str(w) for w in benchmark_weeks)} — "
-            "do the test and `fit garmin-sync`; the plan re-derives from it "
-            "automatically.[/dim]"
-        )
     if summary.get("stale"):
         console.print(
             f"[dim]{summary['stale']} session(s) marked * were pushed at an "
-            "earlier target and can't be updated — Garmin has no edit endpoint. "
-            "`fit train clear` removes them so they re-push at your current "
-            "fitness.[/dim]"
+            "earlier load and can't be updated — Garmin has no edit endpoint. "
+            "`fit train clear` removes them so they re-push at current loads.[/dim]"
         )
     for warning in summary.get("warnings", []):
         console.print(f"[yellow]note:[/yellow] {warning}")
@@ -601,29 +554,20 @@ def render_training_plan(summary: dict, weeks: list[dict]) -> None:
     for week in weeks:
         table.add_section()
         for index, session in enumerate(week["sessions"]):
-            when_label = "" if index else f"{week['week']} [dim]{week['phase']}[/dim]"
             day = date.fromisoformat(session["date"])
-            name = _format_session_name(session)
             table.add_row(
-                when_label,
-                f"{day.strftime('%a')} {session['date'][5:]}",
-                name,
+                "" if index else str(week["week"]),
+                f"{day.strftime('%a')} {day.strftime('%d/%m')}",
+                session["workout_name"],
                 _format_session_garmin(session),
                 _format_session_done(session),
             )
     console.print(table)
 
 
-def _format_session_name(session: dict) -> str:
-    text = session.get("description", session.get("workout_name", ""))
-    return f"[dim]{text}[/dim]" if session.get("is_extra") else text
-
-
 def _format_session_garmin(session: dict) -> str:
     """A pushed session is a frozen copy on the account; "stale" means the live
     derivation has moved on from what the watch holds."""
-    if session.get("is_extra"):
-        return "[dim]—[/dim]"
     if session.get("stale"):
         return "[yellow]on watch*[/yellow]"
     if session.get("pushed"):
@@ -632,8 +576,6 @@ def _format_session_garmin(session: dict) -> str:
 
 
 def _format_session_done(session: dict) -> str:
-    if session.get("is_extra"):
-        return "[dim]—[/dim]"
     return "[green]✓[/green]" if session.get("completed") else "[dim]·[/dim]"
 
 

@@ -22,8 +22,8 @@ for itself; the code holds its own API — don't look for function signatures he
   | `display.py` | Rich rendering | I/O, arithmetic (delegate to `compute`) |
   | `importers.py` | parse TCX/FIT/Strava | import `storage`, dedupe, read config |
   | `planner.py` | build Garmin payloads | I/O, network, import `garminconnect` |
-  | `training.py` | expand plan descriptions | I/O, network (may import `compute`/`planner`/`templates`) |
-  | `templates.py` | goal data only | import anything from `fit` |
+  | `training.py` | expand the plan description | I/O, network (may import `compute`/`planner`/`templates`) |
+  | `templates.py` | the plan's weekly sessions only | import anything from `fit` |
   | `garmin.py` | the network API | build fit's activity shape, touch the data dir |
   | `cli.py` | storage → compute → display | business logic |
 - **Always `.get()`** activity fields — older activities lack later additions.
@@ -107,7 +107,7 @@ plus `garmin_workout_id` after a push and `scheduled_date` after a `--schedule`.
 {"spec": {...},            # the normalised description
  "created": "2026-08-24",
  "volume": {"start_scale": 0.83, "why": "..."},   # pinned at import
- "pushed": [{"date": "2026-08-25", "sport": "run", "workout_id": 1,
+ "pushed": [{"date": "2026-08-25", "sport": "cycle", "workout_id": 1,
              "schedule_id": 2, "workout_name": "...", "params": {...}}]}
 ```
 
@@ -154,16 +154,15 @@ and meaningless** — accelerometer noise (~0.07km) and 0.0 respectively. Droppi
 the key would make them the only types missing one of the five always-present
 fields, so the set suppresses it at display and PB time instead.
 
-**Intensity is measured, never projected** (except strength — see below). Every
-session is built against the targets found at expansion and does not drift
-upward on the assumption you'll improve: prescribing a pace you might not have
-by week 10 prescribes work you cannot complete, which is worse than work that is
-slightly easy. A plan earns a faster pace by re-measuring.
+**Intensity is measured, never projected** — for `fit plan`'s defaults, which
+come from your history and do not drift upward on the assumption you'll
+improve: a pace you might not have by week 10 is work you cannot complete. The
+training plan's rides carry no intensity at all; only lifting load progresses.
 
-**Strength inverts both axes.** Volume is fixed (3x10 stays 3x10) and *load*
+**Strength inverts both axes.** Volume is fixed (5x5 stays 5x5) and *load*
 ramps, because that is what linear progression is and a weight that turns out
 too heavy is a failed rep, not a failed session. So strength sessions carry no
-`scale`, `volume_sports` excludes them, and the clamp tests exempt them.
+`scale`, `_SCALED_SPORTS` leaves them out, and the clamp test exempts them.
 
 **Strength progresses on what you lifted, not on a schedule.** Each lift's next
 load comes from `training.next_working_weight` over that lift's own sessions in
@@ -172,34 +171,42 @@ earns one increment, a miss holds the weight, and the third miss running at one
 weight resets it 10% lower. It judges what was *lifted*, not what was
 prescribed, so loading 24kg against a planned 23.75kg is judged at 24kg. Future
 sessions assume each one before them goes to plan, capped at the goal; a past
-session shows what its history prescribed then. Three rules keep it honest:
-
-- **Lifting in a deload or taper week is not judged** — a light week passing is
-  not evidence for adding load, and would drag the level down.
-- **A test only raises the level.** Lifting in a week that tests that lift (or
-  in week 0) is read as a test; misses already have their own way down.
-- **A skipped session does not advance.** No record, no step.
+session shows what its history prescribed then. Every session lifted inside
+the plan's dates is judged — there are no deload weeks and no tests to exempt —
+and **a skipped session does not advance**: no record, no step.
 
 It replaced a weekly e1RM table on 2026-09-21. That table was built on the best
 e1RM measured *today* plus one step per week since week 1, so every good session
 raised the base *and* the week count kept adding: success counted twice. Each
-lift has one rep scheme per goal, which the rule depends on.
+lift has one rep scheme in the plan, which the rule depends on.
+
+**A lift starts at its ten-rep weight, whatever the scheme**
+(`STRENGTH_START_REPS`). This is StrongLifts' start for anyone who has lifted
+before. An e1RM read back at five reps is a true 5RM, and five sets of a 5RM
+fail by the second set, so a plan that started there opened with a week of
+misses until the reset caught up.
+
+**The plan is StrongLifts 5x5** (2026-11-03): A (squat, bench, row) and B
+(squat, overhead press, deadlift 1x5, with pull-ups as B's assistance work)
+alternate every time you lift. So Mon/Wed/Fri runs A/B/A one week and B/A/B the
+next. A weekly session list has no way to say "alternate", so a session
+carries `week_parity`, and `expand_plan` keeps only the matching sessions
+before it trims the week.
 
 **Bodyweight work progresses on reps, by the same rule.** An exercise carrying
 a `rep_cap` (pull-ups) has no load to add, so `training.next_rep_target` adds a
 rep instead: every set reaching the target earns one, a miss holds it, and
-there is no reset — there is no lighter bodyweight. It is judged in build weeks
-only (nothing tests it) and stops at the cap, which warns that it is time to
-move on; the next stage is a template edit. Rep counts are corrected **on the
-watch**: a later app correction disagrees with the FIT's reps, and
-`apply_garmin_exercise_sets` abandons its merge on exactly that. Core work is
-prescribed and never progressed. Only the five barbell lifts get e1RM targets
-(`template_lifts`) or identify a session for completion matching (`_lifts`) —
-dead bugs on Monday and Friday would otherwise make every session alike.
+there is no reset — there is no lighter bodyweight. It stops at the cap, which
+warns that it is time to move on; the next stage is a `templates.py` edit. Rep
+counts are corrected **on the watch**: a later app correction disagrees with
+the FIT's reps, and `apply_garmin_exercise_sets` abandons its merge on exactly
+that. Only the five barbell lifts get e1RM targets (`PLAN_LIFTS`) or identify a
+session for completion matching (`_lifts`).
 
 **Every prescribed load is a whole kg or a multiple of 2.5kg.** Each lift
-rounds to its own increment — bench, press and row 1kg, squat and deadlift 2.5kg —
-so `LIFT_INCREMENT_KG` must hold only those two values. A 1.25kg step prescribed
+rounds to its own increment, so `LIFT_INCREMENT_KG` may hold only 1kg or 2.5kg.
+Every lift is 2.5kg since the StrongLifts move on 2026-11-03, StrongLifts'
+default. Bench, press and row were 1kg before. A 1.25kg step prescribed
 23.75kg, which the watch showed as 23.8 and no bar could hold. Rounding to the
 nearest loadable weight instead was tried and dropped: 67 + 2.5 lands on 69
 and 70 by turns.
@@ -228,11 +235,11 @@ consequences that read as gaps:
   by the same strictly-heavier rule.
 
 There is no config key and no prompt for any of this: a ramp is a training
-decision fit owns, the same way it owns periodisation.
+decision fit owns, the same way it owns the progression.
 
 **The plan is derived, not stored.** `expand_plan` is deterministic and re-runs
-on every `fit train` command, so targets always track your *measured* fitness —
-importing a faster 5k is what applies it, with no retarget step in between.
+on every `fit train` command, so loads always track what you actually lifted —
+importing a session is what applies it, with no retarget step in between.
 Session dates are a pure function of the spec (only `params` depend on history),
 which is what makes `(date, sport)` a stable identity across re-derivations.
 
@@ -245,15 +252,10 @@ Two things are deliberately **not** re-derived:
   Garmin has no edit endpoint, so the watch holds the copy that was sent — the
   plan must show that. When the live derivation moves away from it the session
   is flagged `stale` and rendered `on watch*`; `fit train clear` is how you drop
-  it so it re-pushes at current fitness.
+  it so it re-pushes at current loads.
 
 This is why there is no `fit train retarget`: re-deriving isn't an operation you
 run, it's what every command already does.
-
-**Extras are local-only.** Garmin has no calendar-note or non-workout endpoint
-(`schedule_workout` takes a `workout_id`), so extras are never built or pushed.
-Bricks are two same-day sessions, not a multisport workout — that schema is
-unverified.
 
 **Config keys are functional, never cosmetic.** Every key changes *what* a
 command shows, not how it's formatted. Units/week-start/name knobs were dropped
@@ -311,14 +313,14 @@ planner.py's docstring — keep both current):
 (`cycle`/`long`, 2026-09-11); that exact combination has not been sent. Low
 risk, not zero. Diff one when one is next pushed, then update both tables.
 
-**Also unverified, from the 2026-10-21 `cycle_strength` rework:** `cycle`/
-`intervals` with `sets` (30/15s — three sibling `RepeatGroupDTO`s with a timed
-`recovery` between, siblings being the shape strength proved); a strength
-step's `exerciseName`; and a dated strength name of ~71 characters. Diff a
-Wednesday and a Thursday session after their first push. The Wednesday also
-carries the first `ROW` and `PLANK` categories (2026-10-29, barbell row and
-shoulder taps replacing hyperextensions and mobility), and its dated name is
-now 78 characters.
+**Also unverified:** `cycle`/`endurance`, the plan's Thursday ride — a timed,
+untargeted single step, the shape `cycle`/`baseline`'s open block proved, but
+never sent alone; a strength step's `exerciseName` (the pull-ups' variant); the
+first `ROW` category; and dated strength names of up to **98 characters**,
+the longest fit has sent. Diff a Thursday ride and a workout B after their
+first push. `fit plan`'s `cycle`/`intervals` with `sets` (30/15s — three
+sibling `RepeatGroupDTO`s with a timed `recovery` between) is unverified too,
+and nothing schedules it any more.
 The barbell row has no Garmin variant: the only barbell one in the
 FIT profile is reverse-grip. So, like the other four lifts, it goes as the
 bare category.
@@ -437,192 +439,93 @@ Precedence and scope, all of which have caught people out:
 
 ## Training plans (`fit train`)
 
-A compact YAML **description** expands into a multi-week periodised schedule: a
-real Garmin workout per session, intensities from the user's own history, rolled
-onto the calendar a window at a time. The intended workflow is that the user
-talks a goal through with an external bot, the bot emits the description, and
-**fit owns all the periodisation** — so the description stays thin.
+One plan, fixed in `templates.WEEKLY_SESSIONS`: StrongLifts 5x5 on Mon/Wed/Fri,
+an easy ride on Thursday, a long ride on Sunday and a second on Saturday. A short
+YAML **description** dates it; every session is a real Garmin workout, rolled
+onto the calendar a window at a time.
 
 ```yaml
-goal: standard_triathlon      # required; one of templates.GOAL_TEMPLATES
-event_date: 2026-11-15        # required; the plan counts back from here
-start_date: 2026-08-24        # else event_date - template length
-days_per_week: 6              # or [2, 4] to build frequency
-rest_day: Mon
-extras: {strength: 2, yoga: 1}
-targets: {run_5k: "24:00", bike_ftp: 250, swim_css_100m: "1:45",
-          squat_goal_kg: 140}
-progression: {build_recover: [3, 1], weekly_ramp_pct: 8, taper_weeks: 2}
-volume: 70                    # % of the template's opening week
-test_week: true               # open with week 0, benchmarks only
-benchmarks: true              # in-plan re-tests
+start_date: 2026-11-04        # required
+end_date: 2027-01-31          # required; the plan's last day
+days_per_week: [5, 6]         # or 6 (the default); a range adds sessions later
+volume: 70                    # % of the opening week's riding; else measured
+targets: {squat_goal_kg: 105} # e1RM goal per lift; else what the plan can reach
 ```
 
+**It was cut to one plan on 2026-11-03.** There had been four goals (`run_10k`,
+`standard_triathlon`, `strength_program`, `cycle_strength`) and an engine to
+match: phases, recovery weeks, a taper, a ramp solved from the plan's length,
+in-plan re-tests and a test week, extras, rest-day rotation, and run, swim and
+FTP targets. Only `cycle_strength` was in use, and with no event to peak for it
+had switched all of that off. Don't rebuild it for a hypothetical second plan:
+changing the week is a `templates.py` edit.
+
 **PyYAML is YAML 1.1 and `parse_plan_spec` defends against its coercions**: an
-unquoted date resolves to `datetime.date`; unquoted `24:00` resolves to the
-base-60 int 1440 (which is exactly the seconds meant, so a bare int is accepted);
-`rest_day: no` resolves to `False`, so bools are rejected explicitly
-(`isinstance(True, int)` is `True`).
+unquoted date resolves to `datetime.date`, so both forms are accepted; bools
+are rejected where a number is expected (`isinstance(True, int)` is `True`).
 
-### Periodisation
+### The week
 
-`expand_plan` lays whole ISO weeks from `start_date`'s Monday through the event's
-week, then:
+`expand_plan` lays whole ISO weeks from `start_date`'s Monday through
+`end_date`'s week and drops sessions outside the two dates. Then:
 
-1. **Phases** — the taper takes the final `taper_weeks`; the template's phases
-   share the rest by largest-remainder apportionment, so any length gets a
-   sensible base/build/peak split.
-2. **Volume multiplier** — build weeks ramp; recovery weeks dip to
-   `RECOVERY_FACTOR` (0.6) *without advancing the level*; taper weeks step
-   linearly from 0.75 to 0.45 of peak.
-3. **Session sizing** — `clamp(round(base x multiplier))`. Deliberately **one
-   mechanism**: an early design added a per-week growth increment *on top*,
-   which compounds into nonsense over 12 weeks.
-4. **Extras** — placed on the least-loaded non-key days, so rest days fill first.
+1. **Alternation** — sessions whose `week_parity` doesn't match the week go
+   first, so the trim below sees one session per day.
+2. **Frequency** — `days_per_week` keeps the highest-priority days. A range
+   (`[5, 6]`) builds to its end value by the last week; Saturday ranks last, so
+   that is what arrives. Later weeks only *add*; a falling range is rejected.
+3. **Ride sizing** — `clamp(round(base x multiplier))`, the multiplier growing
+   `WEEKLY_RAMP_PCT` (4%) a week, compounding. Deliberately **one mechanism**: an
+   early design added a per-week increment *on top*, which compounds into
+   nonsense over 12 weeks. There is no recovery week or taper — nothing to peak
+   for — so the rides only climb and lifting is never deloaded by the calendar.
+4. **Loads** — `_progress_lifts` (see "Strength progresses on what you lifted").
 
-Sessions before `start_date` or on/after the event are dropped: race day is not a
-training day.
+**Each ride scales along exactly one axis** — `scale["param"]`: distance for the
+long rides, duration for Thursday's.
 
-**The ramp is solved from the plan's actual length**, not fixed. Compounding a
-fixed rate over a longer block produces a *higher* peak, not a longer climb,
-pinning every session at its clamp. `intended_peak` derives what the template
-reaches at its own length under `REFERENCE_RAMP_PCT` (8); `derive_weekly_ramp`
-solves for that peak and caps at the reference, so a *shorter* plan peaks lower —
-which is what a short run-up honestly buys. `progression.weekly_ramp_pct` is an
-explicit override, which is why it is absent from `PROGRESSION_DEFAULTS`.
+**The clamps are load-bearing.** Read a binding clamp the right way round:
+sitting at the **ceiling** flattens the climb and means a base needs lowering.
+`test_scaled_params_keep_headroom_inside_their_clamps` holds the plan to ≤10%
+at-max, matching each session to its entry **by weekday** — the two long rides
+carry different scales.
 
 **Starting volume converges rather than scaling uniformly.** `volume:` wins, else
-the user's **mean** weekly training in the goal's sports over the last 8 weeks is
-measured against the template's opening week and clamped to [0.6, 1.25]. Three
-easily-broken details: mean not median (a median collapses to zero once half the
-weeks are empty, handing somebody barely training the *full* volume); the current
-week is dropped (it's still filling up); and no history means *unknown*, not
-untrained, so the template stands. It applies fully in week 1 and interpolates
-back to the template's level by the last build week — uniform scaling would start
-them right but leave them under-prepared for a fixed-distance event. Growth
-beyond `VOLUME_RAMP_WARN` (2.2x) appends to `plan["warnings"]`.
+the user's **mean** weekly riding over the last 8 weeks is measured against the
+plan's opening week (week 1's *own* session list, which is smaller when
+frequency builds) and clamped to [0.6, 1.25]. Three easily-broken details: mean
+not median (a median collapses to zero once half the weeks are empty, handing
+somebody barely riding the *full* volume); the current week is dropped (it's
+still filling up); and no history means *unknown*, not untrained, so the plan
+stands. It applies fully in week 1 and interpolates back to the plan's own level
+by the last week.
 
-**Frequency and volume are separate axes.** `days_per_week: [2, 4]` builds to the
-end value by the last build week then **holds through the taper** — a taper cuts
-volume, not frequency. A falling range is rejected. Sessions arrive in template
-priority order, so later weeks only *add*; nothing is swapped out.
+### Lift targets
 
-### Goal templates
-
-Four goals in `templates.GOAL_TEMPLATES` — pure data, no engine logic, which is
-the point of the split: adding or recalibrating a goal touches that file only.
-One per discipline (`run_10k`, `cycle_strength`, `standard_triathlon`,
-`strength_program`): the set was cut from ten on 2026-09-11 because the extras
-were the same shapes at different numbers, and `start_date` already re-lengthens
-a template. The two triathlons were structurally identical.
-
-**Priorities interleave the sports** rather than ranking every long session
-first, so trimming a week never strips a whole discipline. (Below three days
-there aren't enough slots and the lowest-priority sports do drop out.)
-
-**Each session scales along exactly one axis** — `scale["param"]`, a training
-decision: distance for long sessions, duration for steady, rep *count* for
-intervals — for `cycle_strength`'s 30/15s, reps *per set*, the sets fixed at
-three. Its sustained-block day, which scaled rep *duration*, went with the
-2026-10-21 rework: one hard ride a week is better spent on 30/15s, which
-beat effort-matched long intervals for 40-minute power (Rønnestad 2015).
-
-**The clamps are load-bearing.** Peak volume depends on plan length (8 weeks
-~1.36x, 12 ~1.59x, 16 ~2.2x), so `standard_triathlon`'s bases sit lower relative
-to its clamps. Read a binding clamp the right way round: hitting the **floor** on
-a recovery or taper week is the floor working; sitting at the **ceiling**
-flattens the peak and means a base needs lowering.
-`test_scaled_params_keep_headroom_inside_their_clamps` holds every goal to ≤10%
-at-max. When measuring, match each session to its template entry **by weekday as
-well as type** — two sessions of one type carry different scales, and matching on
-type alone reads one against the other's clamps.
-
-**`hills` is gone** (2026-09-11). Its only template user was
-`cycle_100k_sportive`, and a workout type no goal can schedule is dead weight in
-`WORKOUT_TYPES`, two prompt specs and a builder. It was also the one type with no
-pace target — gradient makes pace meaningless — so nothing else now needs that
-shape outside `baseline`. Re-adding it means the builder and prompts back, not
-just a template entry.
-
-### Targets and benchmarks
-
-`derive_targets` resolves only the targets the goal's sports need, once per plan:
-description → `planner.derive_*` over the recent window → `FALLBACK_TARGETS`.
-Each carries a `why`, surfaced in `fit train show`, so a target derived from thin
-history is visible rather than silently wrong. A `targets:` entry for an
-untrained sport is a `ValueError`, not a silent no-op.
-
-`planner.derive_target` guards every derivation against `PLAUSIBLE_TARGETS` and
-returns `{"value", "why", "rejected"}`. `rejected` separates "measured and thrown
-out" from "nothing to measure", so a bad reading is never silently swapped for a
-default: `fit train` folds the `why` into the target's provenance, and
-`recommend_defaults` emits a **why-only rec** (neither `default` nor `derive`) so
-`fit plan` keeps its static default but still says what was discarded. Consumers
-of a rec must test for the key rather than assume one is present. An explicit
-`targets:` entry is the user's own word and is **not** bounded by these guards.
-
-Strength targets are **per lift**, under `targets["strength"]`, deliberately
-outside `_SPORT_TARGETS`/`PLAUSIBLE_TARGETS` — forcing them in would mean giving
-`derive_target` a float path and per-exercise bounds, changing code all three
-cardio sports depend on. `current` is measured; `goal` cannot be (it's a decision
-about the future) so the description wins, else where the progression gets to
-by the last build session. A goal further off than the plan is long is **capped
-and warned about**. Loads themselves come from `_progress_lifts` (see "Strength
-progresses on what you lifted").
-
-**Benchmark shape follows one rule:**
-
-> The recorded activity must BE the test, unless the sport's split machinery can
-> isolate the test from within it.
-
-- **run**: 5km, warmup and cooldown kept — `fastest_split` isolates the window.
-  5km not 3km because 3km is in neither `SPLIT_DISTANCES_KM` nor
-  `MILESTONES_KM`, so a 3km effort was measurable *nowhere*, and the best 5k
-  window containing it dragged in 2km of warmup. That made the old test worse
-  than no test.
-- **cycle**: a normal wrapped 20-minute test — `best_power_window` recovers the
-  effort from wherever it sits. (`avg_power` alone is a whole-activity mean, so
-  a 141W best-20min sat behind a 128W average on a real ride.)
-- **strength**: a heavy triple on whichever lift that week's session leads with —
-  `estimated_1rm` reads a 3RM fine, and a plan shouldn't send anybody to a real
-  1RM alone in a gym every few weeks.
-- **swim**: bare 1km — it lands in the existing `fastest_1k` milestone, and pool
-  swims often carry no distance stream for splits.
-
-A bare test instructs no warmup and nothing in the payload can carry that, so
-`planner._bare_suffix` puts it in the **workout name**. `fit plan --type
-baseline` produces the same test — the prompt defaults mirror
-`BENCHMARK_SESSIONS`, and they drifted once already (the plan moved 3km→5km, the
-prompt didn't), so a test now holds them together.
-
-Benchmarks land **on recovery weeks only, never in the taper** (you test rested),
-**replace** that sport's session rather than adding to it, and **take turns**
-between sports. A week where no testable sport has a suitable session is skipped
-*without consuming a turn*.
-
-`test_week: true` opens with **week 0**: benchmarks and nothing else, because a
-plan's targets are otherwise derived from whatever history exists and an
-unmeasured target sets every session's intensity until week 4 at the earliest.
-It **takes a week out of the plan, not off the front** — both dates are the
-user's — so `plan["weeks"]` stays the *periodised* count and only
-`_default_start_date` compensates. It is independent of `benchmarks:`: measuring
-once up front and re-measuring as you go are separate decisions.
+`derive_targets` gives each lift a `current` e1RM, measured from the recent
+window (thrown out, with its `why`, outside `PLAUSIBLE_LIFT_E1RM_KG`) else
+`FALLBACK_LIFT_E1RM_KG`, and a `goal`. The goal cannot be measured — it's a
+decision about the future — so the description wins, else where the
+progression gets to by the last session. A goal further off than the plan is
+long is **capped and warned about**; one the plan reaches early holds the lift
+there from then on.
 
 ### Sync and the ledger
 
-Applying a re-test is just: do the test → `fit garmin-sync`. The plan re-derives
-from it. `fit train import` is how you change a plan's *shape*, and refuses to
+Applying progress is just: lift → `fit garmin-sync`. The plan re-derives from
+it. `fit train import` is how you change a plan's *shape*, and refuses to
 replace a plan with future ledger rows (clearing needs Garmin; importing may be
 offline).
 
 **Every `train` command checks the stored file's shape first**
 (`training.unreadable_plan`, via `cli._stored_plan`) and refuses anything but
-`{spec, created, volume, pushed}`, listing the schedule ids an older file
-claims. A missing `pushed` is not an empty ledger: a pre-stateless file can
-carry a valid goal, and `sync` would push every session before failing to
-record one — duplicates on the calendar with nothing tracking them.
+`{spec, created, volume, pushed}` with an `end_date` in the spec, listing the
+future ledger rows an older file claims. A description from before 2026-11-03
+(`goal`, `event_date`) cannot be expanded, and replacing the file would drop its
+ledger — stranding whatever it put on the calendar, as happened to three real
+sessions on 2026-09-11. A missing `pushed` is not an empty ledger either.
 
-`train refresh` is `clear` then `sync`, for applying a re-test to sessions the
+`train refresh` is `clear` then `sync`, for applying new loads to sessions the
 watch already holds. It confirms **before** the clear rather than letting `sync`
 ask for itself: answering no between the two steps would leave the calendar
 emptied and nothing re-pushed, which is worse than either end state. It calls
@@ -657,16 +560,15 @@ date beside it), so a stale prompt reads as stale. And `garmin-sync` compares
 each newly imported activity's `workoutId` against the ledger and warns when it
 ran another day's workout (`training.followed_other_session`). It warns rather
 than re-attributing completion: same-week matching still ticks the day off.
-A session moved **within its own week onto a free day** does not warn — the
-long ride is planned for Saturday and ridden either weekend day — so only a
-workout from another week, or one displacing that day's own, reads as stale.
-A dated name round-tripped live on 2026-10-13 (`27/10 Cycle intervals 5x6:00 @
-210W`, 35 chars); strength names reach ~63 and are not yet proven.
+A session moved **within its own week onto a free day** does not warn — a ride
+planned for Saturday and ridden on Sunday — so only a workout from another week,
+or one displacing that day's own, reads as stale. A dated name round-tripped
+live on 2026-10-13 (`27/10 Cycle intervals 5x6:00 @ 210W`, 35 chars).
 
 `match_completion` marks a session done when an activity of the same sport falls
 in the **same ISO week**, each activity claiming at most one session (nearest
 first) so one ride can't tick off a whole week. The week is the unit because the
-plan is periodised in whole weeks: Friday's lift done on the Sunday is still that
+plan is laid in whole weeks: Friday's lift done on the Sunday is still that
 week's work. It was ±1 day until 2026-09-13, which read three sessions as missed
 that had all been trained 2-3 days off their date. The mirror case is accepted:
 a Sunday session done on the Monday after falls in the next week and does not
@@ -674,9 +576,10 @@ count.
 
 Pairs are claimed **closest first across the week**, not session by session,
 and a lifting session only takes an activity that shares a barbell lift with
-it (when both sides record one). Going session by session let Monday's deadlift day
-claim Wednesday's squat session on 2026-09-14, marking the session actually
-trained as missed.
+it (when both sides record one). Going session by session let Monday's deadlift
+day claim Wednesday's squat session on 2026-09-14, marking the session actually
+trained as missed. Every StrongLifts session squats, so within a week it is
+closest-first that pairs them.
 
 ---
 
@@ -702,6 +605,15 @@ all and are named `... easy`, so the watch never beeps on them. Cycle intervals
 take optional `sets`/`set_recovery` (30/15s) and an `ftp_pct` of the measured
 FTP; without them the payload is what it always was.
 
+The `baseline` types are benchmark tests, and follow one rule: **the recorded
+activity must BE the test, unless the sport's split machinery can isolate it
+from within.** So a run test keeps its warmup (`fastest_split` isolates the
+5km — not 3km, which no split or milestone measures), a ride test is wrapped
+(`best_power_window` recovers the 20 minutes), a swim test is a bare 1km (it
+lands in the `fastest_1k` milestone), and a strength test is a heavy triple.
+A bare test instructs no warmup and nothing in the payload can carry that, so
+`planner._bare_suffix` puts it in the **workout name**.
+
 `fit plan` **saves before pushing**, so a failed push never loses the workout;
 the id and scheduled date are written back after each step succeeds, making the
 plan file the reconstructable record of what fit put on the calendar.
@@ -719,27 +631,21 @@ not business logic, so it stays inline.
 `.venv/bin/pytest` after any change to `compute`, `storage`, `importers`,
 `planner`, `training`, or how `cli`'s `train` commands compose.
 
-**The suite is small on purpose** and has been trimmed twice (192 → 154 → 195
-cases, having regrown in between). 181 now: the stateless-plan commit added
-four, cutting the goals from ten to four shrank the `ALL_GOALS` loops to 181,
-the two live-account fixes since added one each, the warmup ramp one more,
-removing the fitness index took five, and the `cycle_strength` rework added
-three (rep progression, 30/15 payload, moved rides) and dropped the
-sustained-block test with its session.
-`test_cli.py` is the only CLI test and stays that narrow — command composition that writes to Garmin,
-with every `garmin` call stubbed. Three things do not earn a test:
+**The suite is small on purpose** and has been trimmed three times (192 → 154
+→ 195 → 182 → 137 cases). The last cut, on 2026-11-03, went with the other
+goals and the periodisation engine: tests of phases, the solved ramp, the
+taper, recovery weeks, re-tests, the test week, extras and run/swim targets,
+and the three `ALL_GOALS` loops, which became single tests of the one plan.
+`test_cli.py` is the only CLI test and stays that narrow — command composition
+that writes to Garmin, with every `garmin` call stubbed. Three things do not
+earn a test:
 
 1. **Restating a constant or one-line definition.** Assert direction through the
    pipeline that consumes it, not against the constant.
 2. **Asserting what the code guarantees by construction.** A clamped value lies
    inside its clamp; two functions calling the same builder agree.
-3. **Running goal-agnostic code once per goal.** `parametrize(ALL_GOALS)` is for
-   properties of the *template data*.
-
-The three `ALL_GOALS` loops are deliberate and should stay — they are the only
-tests that catch mistakes in `GOAL_TEMPLATES`, which is where a plan actually
-goes wrong. Prefer folding a new assertion into an existing loop over adding a
-function beside it.
+3. **Restating the week.** Test what the engine does with `WEEKLY_SESSIONS`
+   (alternation, build order, headroom), not which session sits on which day.
 
 **Before deleting a test, mutate the behaviour it names and confirm something
 still fails.** This is not ceremony: it caught six over-cuts in the last trim,
@@ -753,9 +659,9 @@ payloads), and parsers of data you can't re-obtain.
 
 ## Not doing
 
-Do not design current modules around these: further goal templates (pure data),
-adaptive reflow when sessions are missed, Garmin multisport/brick files,
-multiple concurrent training plans, USB workout delivery (needs a FIT *encoder*;
+Do not design current modules around these: more than one training plan or
+goal (see "It was cut to one plan"), adaptive reflow when sessions are missed,
+Garmin multisport/brick files, USB workout delivery (needs a FIT *encoder*;
 fitparse only reads).
 
 **A fitness index was removed on 2026-09-21** (`fit fitness`, `fitness-reset`,

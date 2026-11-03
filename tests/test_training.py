@@ -1,52 +1,49 @@
 """Tests for training.py: plan-description parsing (including the YAML 1.1
-coercion traps), the periodisation date/volume math, and completion matching.
-Deliberately narrow — the engine's arithmetic, not the CLI around it."""
+coercion traps), the weekly date/volume math, StrongLifts progression, and
+completion matching. Deliberately narrow — the engine's arithmetic, not the
+CLI around it."""
 
 from datetime import date, timedelta
 
 import pytest
 
-from fit import planner, templates, training
+from fit import compute, planner, templates, training
 
 pytest.importorskip("yaml", reason="parse_plan_spec needs the optional [train] extra")
 
-REFERENCE = date(2026, 8, 24)
-MINIMAL = "goal: standard_triathlon\nevent_date: 2026-12-13\n"
+REFERENCE = date(2026, 8, 24)  # a Monday
+PLAN = "start_date: 2026-08-24\nend_date: 2026-11-15\n"  # 12 whole weeks
 
 
-def _plan(text=MINIMAL, activities=None):
+def _plan(text=PLAN, activities=None, volume=None):
     spec = training.parse_plan_spec(text)
-    return training.expand_plan(spec, activities or [], REFERENCE)
+    return training.expand_plan(spec, activities or [], REFERENCE, volume=volume)
 
 
 # --- description parsing -------------------------------------------------------
 
 
-def test_parse_plan_spec_defaults_from_the_goal_template():
-    spec = training.parse_plan_spec(MINIMAL)
-    template = templates.GOAL_TEMPLATES["standard_triathlon"]
-    assert spec["days_per_week"] == template["days_per_week"]
-    assert spec["rest_day"] == template["rest_day"]
-    assert spec["progression"] == training.PROGRESSION_DEFAULTS
-    # start_date defaults to the template's length back from the event's week
-    assert spec["start_date"] == "2026-08-24"
+def test_parse_plan_spec_defaults():
+    spec = training.parse_plan_spec(PLAN)
+    assert spec["days_per_week"] == templates.DAYS_PER_WEEK
+    assert spec["targets"] == {}
+    assert "volume" not in spec
 
 
 @pytest.mark.parametrize(
     "text",
     [
-        "event_date: 2026-11-15\n",  # no goal
-        "goal: run_marathon\nevent_date: 2026-11-15\n",  # unknown goal
-        "goal: standard_triathlon\n",  # no event_date
-        "goal: standard_triathlon\nevent_date: 2026-11-15\nintensity: hard\n",
-        "goal: standard_triathlon\nevent_date: 2026-11-15\nrest_day: nonesuch\n",
-        # `rest_day: no` is False under YAML 1.1, not the string "no".
-        "goal: standard_triathlon\nevent_date: 2026-11-15\nrest_day: no\n",
-        "goal: standard_triathlon\nevent_date: 2026-11-15\ndays_per_week: 9\n",
-        "goal: standard_triathlon\nevent_date: 2026-11-15\ntargets: {run_10k: '44:00'}\n",
-        "goal: standard_triathlon\nevent_date: 2026-11-15\nstart_date: 2026-12-01\n",
+        "end_date: 2026-11-15\n",  # no start_date
+        "start_date: 2026-08-24\n",  # no end_date
+        "start_date: 2026-11-15\nend_date: 2026-08-24\n",  # backwards
+        PLAN + "goal: cycle_strength\n",  # the old description's keys are gone
+        PLAN + "days_per_week: 9\n",
+        PLAN + "days_per_week: [6, 5]\n",  # frequency only builds
+        PLAN + "days_per_week: true\n",
+        PLAN + "targets: {curl_goal_kg: 40}\n",
+        PLAN + "targets: {squat_goal_kg: 900}\n",
         "- a list\n",
-        "goal: [unclosed\n",
+        "start_date: [unclosed\n",
     ],
 )
 def test_parse_plan_spec_rejects(text):
@@ -55,286 +52,127 @@ def test_parse_plan_spec_rejects(text):
 
 
 def test_parse_plan_spec_survives_yaml_coercion():
-    """PyYAML is YAML 1.1: an unquoted date resolves to datetime.date and an
-    unquoted 24:00 to the base-60 integer 1440. Both must land on the same
-    normalised values as their quoted forms."""
-    unquoted = training.parse_plan_spec(
-        "goal: standard_triathlon\nevent_date: 2026-11-15\n"
-        "targets: {run_5k: 24:00, swim_css_100m: 1:45}\n"
-    )
+    """PyYAML is YAML 1.1: an unquoted date resolves to datetime.date. It must
+    land on the same normalised value as its quoted form."""
+    unquoted = training.parse_plan_spec(PLAN + "targets: {squat_goal_kg: 120}\n")
     quoted = training.parse_plan_spec(
-        "goal: standard_triathlon\nevent_date: '2026-11-15'\n"
-        "targets: {run_5k: '24:00', swim_css_100m: '1:45'}\n"
+        "start_date: '2026-08-24'\nend_date: '2026-11-15'\n"
+        "targets: {squat_goal_kg: 120.0}\n"
     )
     assert unquoted == quoted
-    assert unquoted["event_date"] == "2026-11-15"
-    assert unquoted["targets"] == {"run_5k": 1440, "swim_css_100m": 105}
+    assert unquoted["start_date"] == "2026-08-24"
 
 
-def test_plan_needs_a_minimum_number_of_weeks():
-    with pytest.raises(ValueError):
-        _plan(
-            "goal: standard_triathlon\nevent_date: 2026-11-15\nstart_date: 2026-11-02\n"
-        )
+# --- the weekly shape ----------------------------------------------------------
 
 
-# --- periodisation -------------------------------------------------------------
-
-
-def test_expand_plan_covers_every_week_and_stops_before_the_event():
+def test_expand_plan_covers_every_week_within_its_dates():
     plan = _plan()
     weeks = training.group_by_week(plan["sessions"])
-    assert plan["weeks"] == 16
-    assert [w["week"] for w in weeks] == list(range(1, 17))
-    # Race day itself is not a training day.
-    assert all(s["date"] < plan["event_date"] for s in plan["sessions"])
+    assert plan["weeks"] == 12
+    assert [w["week"] for w in weeks] == list(range(1, 13))
+    assert all(
+        plan["start_date"] <= s["date"] <= plan["end_date"] for s in plan["sessions"]
+    )
 
-    # Phases run as contiguous blocks in template order, ending in the taper.
-    phases = [w["phase"] for w in weeks]
-    assert phases[-2:] == ["taper", "taper"]
-    assert [p for i, p in enumerate(phases) if i == 0 or phases[i - 1] != p] == [
-        "base",
-        "build",
-        "peak",
-        "taper",
+
+def _ride_km_by_week(plan, weekday):
+    return {
+        s["week"]: s["params"]["distance_m"]
+        for s in plan["sessions"]
+        if s["session_type"] == "long"
+        and date.fromisoformat(s["date"]).weekday() == weekday
+    }
+
+
+def test_rides_grow_every_week_with_no_deload():
+    """No event, so no recovery weeks or taper: the rides only climb."""
+    sundays = list(_ride_km_by_week(_plan(PLAN + "volume: 100\n"), 6).values())
+    assert sundays == sorted(sundays)
+    assert sundays[-1] > sundays[0]
+
+
+def test_the_plan_is_plain_stronglifts():
+    """A/B/A one week, B/A/B the next — so each workout comes round three times
+    a fortnight, and squats every session. No deload weeks and no tests: the
+    bar only comes down by StrongLifts' own failure rule."""
+    plan = _plan()
+    squats = [
+        e["target_weight_kg"]
+        for s in plan["sessions"]
+        if s["sport"] == "strength"
+        for e in s["params"]["exercises"]
+        if e["exercise"] == "squat"
     ]
+    assert squats == sorted(squats)
+
+    def workouts(week):
+        return [
+            (
+                "A"
+                if "bench_press" in [e["exercise"] for e in s["params"]["exercises"]]
+                else "B"
+            )
+            for s in plan["sessions"]
+            if s["week"] == week and s["sport"] == "strength"
+        ]
+
+    assert workouts(1) == ["A", "B", "A"]
+    assert workouts(2) == ["B", "A", "B"]
 
 
-def _long_ride_km_by_week(plan):
-    by_week = {}
-    for session in plan["sessions"]:
-        if session["sport"] == "cycle" and session["session_type"] == "long":
-            by_week[session["week"]] = session["params"]["distance_m"]
-    return by_week
-
-
-def test_build_weeks_ramp_and_every_fourth_week_recovers():
-    rides = _long_ride_km_by_week(_plan())
-    assert rides[1] < rides[2] < rides[3]  # 3-week build block ramps
-    assert rides[4] < rides[1]  # then a recovery week drops below its start
-    assert rides[5] > rides[3]  # and the ramp resumes above the block's peak
-    assert rides[8] < rides[7]  # the next recovery week dips again
-    # ...and the taper sheds volume, step by step, into the event.
-    assert max(rides.values()) > rides[11] > rides[12]
-
-
-def test_progression_overrides_change_the_cycle():
-    plan = _plan(MINIMAL + "progression:\n  build_recover: [2, 1]\n  taper_weeks: 1\n")
-    phases = [w["phase"] for w in training.group_by_week(plan["sessions"])]
-    assert phases.count("taper") == 1
-    rides = _long_ride_km_by_week(plan)
-    assert rides[3] < rides[2]  # recovery now lands on every third week
-
-
-# --- every goal template -------------------------------------------------------
-
-ALL_GOALS = sorted(templates.GOAL_TEMPLATES)
-
-
-@pytest.mark.parametrize("goal", ALL_GOALS)
-def test_every_goal_expands_into_buildable_sessions(goal):
-    """The pipeline is goal-agnostic, so each template must expand and every
-    non-extra session must hand straight to planner.build_plan."""
-    plan = _plan(f"goal: {goal}\nevent_date: 2027-03-14\n")
-    assert plan["weeks"] == templates.GOAL_TEMPLATES[goal]["weeks"]
-    assert plan["sessions"]
+def test_every_session_builds_and_names_itself():
+    """Every session must hand straight to planner.build_plan, and the stored
+    name is what `fit train show` and the Garmin calendar display — the
+    payload is rebuilt from params at sync time, so the two must agree."""
+    plan = _plan()
     for session in plan["sessions"]:
         args = training.session_to_build_args(session)
-        if args is not None:
-            built = planner.build_plan(*args, session["date"])
-            # The stored name is what `fit train show` and the Garmin calendar
-            # display; the payload is rebuilt from params at sync time. If the
-            # two disagree, the calendar describes a different workout.
-            assert built["workout_name"] == session["workout_name"]
+        built = planner.build_plan(*args, session["date"])
+        assert built["workout_name"] == session["workout_name"]
         # Only a barbell lift has an e1RM to load from: a pull-up "@ 55kg"
         # would be a target invented from a fallback.
         for e in session["params"].get("exercises", []):
             assert "target_weight_kg" not in e or e["exercise"] in (
                 training.LIFT_INCREMENT_KG
             )
-    # next_working_weight judges a lift against one scheme per goal.
+    # next_working_weight judges a lift against one rep scheme.
     schemes = {}
-    for session in templates.GOAL_TEMPLATES[goal]["weekly_sessions"]:
+    for session in templates.WEEKLY_SESSIONS:
         for e in session["params"].get("exercises", []):
             schemes.setdefault(e["exercise"], set()).add((e["sets"], e["reps"]))
     assert all(len(s) == 1 for s in schemes.values())
 
 
-def test_a_target_for_an_untrained_sport_is_rejected():
-    """Silently ignoring it would read as fit disagreeing, not as a no-op."""
-    with pytest.raises(ValueError):
-        training.parse_plan_spec(
-            "goal: run_10k\nevent_date: 2027-03-14\ntargets: {bike_ftp: 250}\n"
-        )
+def test_scaled_params_keep_headroom_inside_their_clamps():
+    """A clamp that binds often flattens the curve: sitting at the ceiling
+    means a base needs lowering. Sessions are matched to their template entry by
+    weekday, since the two long rides carry different scales."""
+    plan = _plan(PLAN + "volume: 100\n")
+    by_day = {s["day"]: s["scale"] for s in templates.WEEKLY_SESSIONS if s["scale"]}
+    at_max = total = 0
+    for session in plan["sessions"]:
+        scale = by_day.get(date.fromisoformat(session["date"]).weekday())
+        if scale is None or session["sport"] == "strength":
+            continue
+        total += 1
+        value = session["params"][scale["param"]]
+        assert scale["min"] <= value <= scale["max"], f"{value} escaped {scale}"
+        at_max += value == scale["max"]
+    assert total and at_max / total <= 0.10, f"{at_max}/{total} pinned at max"
 
 
-# --- weekly layout -------------------------------------------------------------
-
-
-def test_rest_day_rotates_the_whole_week():
-    plan = _plan(MINIMAL + "rest_day: Wed\nextras: {}\n")
-    weekdays = {
-        date.fromisoformat(s["date"]).weekday()
-        for s in plan["sessions"]
-        if s["week"] == 2  # a whole week, clear of the start-date truncation
-    }
-    assert 2 not in weekdays  # Wednesday is free
-
-
-@pytest.mark.parametrize("days_per_week", [6, 5, 4, 3])
-def test_trimming_the_week_keeps_every_discipline(days_per_week):
-    goal = "standard_triathlon"
-    """A triathlon plan with the swimming cut out of it is not a triathlon
-    plan — the template's priorities interleave the sports for this reason."""
-    plan = _plan(
-        f"goal: {goal}\nevent_date: 2027-03-14\n"
-        f"days_per_week: {days_per_week}\nextras: {{}}\n"
-    )
-    week_two = [s for s in plan["sessions"] if s["week"] == 2]
-    # Every endurance discipline survives the trim. Strength may or may not:
-    # it is ranked last precisely so the gym goes before a discipline does.
-    assert {"run", "cycle", "swim"} <= {s["sport"] for s in week_two}
-    assert {s["sport"] for s in week_two} <= {"run", "cycle", "swim", "strength"}
-    training_days = {s["date"] for s in week_two}
-    assert len(training_days) <= days_per_week
-
-
-def test_extras_avoid_key_sessions_and_are_never_pushed():
-    plan = _plan(MINIMAL + "extras: {strength: 2, yoga: 1}\n")
-    week_two = [s for s in plan["sessions"] if s["week"] == 2]
-    extras = [s for s in week_two if s["is_extra"]]
-    assert len(extras) == 3
-    key_dates = {s["date"] for s in week_two if s["is_key"]}
-    assert not key_dates & {s["date"] for s in extras}
-    assert all(training.session_to_build_args(s) is None for s in extras)
-
-
-# --- intensity targets ---------------------------------------------------------
-
-
-def test_targets_fall_back_to_a_documented_default_without_history():
-    plan = _plan()
-    assert (
-        plan["targets"]["run_5k_seconds"] == training.FALLBACK_TARGETS["run_5k_seconds"]
-    )
-    assert "no recent history" in plan["targets"]["why"]["run_5k_seconds"]
-
-
-def test_description_targets_win_over_history():
-    activities = [
-        {
-            "id": "2026-08-01T07:00:00",
-            "type": "run",
-            "date": "2026-08-01",
-            "distance_km": 5.0,
-            "duration_seconds": 1500,
-        }
+def test_days_per_week_builds_frequency_in_priority_order():
+    """Saturday ranks last, so a plan building from five days to six opens
+    without it and adds it — nothing is swapped out, only added."""
+    plan = _plan(PLAN + "days_per_week: [5, 6]\n")
+    weeks = training.group_by_week(plan["sessions"])
+    days = [
+        {date.fromisoformat(s["date"]).weekday() for s in w["sessions"]} for w in weeks
     ]
-    plan = _plan(MINIMAL + 'targets:\n  run_5k: "24:00"\n', activities)
-    assert plan["targets"]["run_5k_seconds"] == 1440
-    assert plan["targets"]["why"]["run_5k_seconds"] == "set in the plan description"
-
-
-def test_targets_reach_the_session_params():
-    plan = _plan(MINIMAL + "targets:\n  bike_ftp: 250\n")
-    intervals = next(
-        s
-        for s in plan["sessions"]
-        if s["sport"] == "cycle" and s["session_type"] == "intervals"
-    )
-    long_ride = next(
-        s
-        for s in plan["sessions"]
-        if s["sport"] == "cycle" and s["session_type"] == "long"
-    )
-    assert intervals["params"]["target_watts"] == 250
-    # Easy rides go untargeted; an easy run sits slower than 5k pace.
-    assert "target_watts" not in long_ride["params"]
-    long_run = next(
-        s
-        for s in plan["sessions"]
-        if s["sport"] == "run" and s["session_type"] == "long"
-    )
-    assert long_run["params"]["target_pace"] > plan["targets"]["run_5k_seconds"] / 5
-
-
-# --- completion ----------------------------------------------------------------
-
-
-def test_match_completion_marks_sessions_in_the_same_week():
-    sessions = [
-        {"date": "2026-09-01", "sport": "run", "is_extra": False},
-        {"date": "2026-09-05", "sport": "run", "is_extra": False},
-    ]
-    activities = [{"type": "run", "date": "2026-09-02"}]
-    matched = training.match_completion(sessions, activities)
-    assert [s["completed"] for s in matched] == [True, False]
-
-    # The week is the unit, not a day window: Wednesday's session trained on
-    # the Sunday is still that week's work (both ISO 2026-W37, 4 days apart).
-    same_week = [{"date": "2026-09-09", "sport": "strength", "is_extra": False}]
-    matched = training.match_completion(
-        same_week, [{"type": "strength", "date": "2026-09-13"}]
-    )
-    assert [s["completed"] for s in matched] == [True]
-
-    # ...and the accepted mirror case: Sunday's session done on the Monday
-    # after lands in W38, so it does not count.
-    matched = training.match_completion(
-        [{"date": "2026-09-13", "sport": "cycle", "is_extra": False}],
-        [{"type": "cycle", "date": "2026-09-14"}],
-    )
-    assert [s["completed"] for s in matched] == [False]
-
-    # An extra is never matched (fit has no strength/yoga activity type), and
-    # neither is a session of a different sport on the very same day.
-    other = [
-        {"date": "2026-09-01", "sport": "strength", "is_extra": True},
-        {"date": "2026-09-01", "sport": "swim", "is_extra": False},
-    ]
-    matched = training.match_completion(other, [{"type": "run", "date": "2026-09-01"}])
-    assert [s["completed"] for s in matched] == [False, False]
-
-    # Closest pair first, and lifts must overlap: the one lift of the week
-    # (Wednesday's squat) completes Wednesday, not Monday's deadlift day.
-    def lifting(day, *lifts):
-        exercises = [{"exercise": lift} for lift in lifts]
-        return {"date": day, "sport": "strength", "params": {"exercises": exercises}}
-
-    week = [lifting("2026-09-14", "deadlift"), lifting("2026-09-16", "squat")]
-    squatted = {
-        "type": "strength",
-        "date": "2026-09-16",
-        "exercises": [{"name": "squat"}],
-    }
-    matched = training.match_completion(week, [squatted])
-    assert [s["completed"] for s in matched] == [False, True]
-    matched = training.match_completion(week[:1], [squatted])
-    assert [s["completed"] for s in matched] == [False]
-
-
-def test_one_activity_cannot_complete_two_sessions():
-    sessions = [
-        {"date": "2026-09-01", "sport": "cycle", "is_extra": False},
-        {"date": "2026-09-02", "sport": "cycle", "is_extra": False},
-    ]
-    activities = [{"type": "cycle", "date": "2026-09-01"}]
-    matched = training.match_completion(sessions, activities)
-    assert [s["completed"] for s in matched] == [True, False]
-
-
-# --- sync windows --------------------------------------------------------------
-
-
-def test_sync_window_is_idempotent_once_pushed():
-    sessions = [
-        {"date": "2026-08-26", "is_extra": False, "pushed": False},
-        {"date": "2026-08-27", "is_extra": False, "pushed": True},
-        {"date": "2026-09-30", "is_extra": False, "pushed": False},  # beyond it
-        {"date": "2026-08-26", "is_extra": True, "pushed": False},  # never pushed
-    ]
-    due = training.sync_window(sessions, REFERENCE, 14)
-    assert [s["date"] for s in due] == ["2026-08-26"]
+    assert 5 not in days[0] and 5 in days[-1]
+    assert all(a <= b for a, b in zip(days, days[1:]))
+    assert plan["days_per_week"] == {"start": 5, "end": 6}
 
 
 # --- starting volume -----------------------------------------------------------
@@ -363,52 +201,45 @@ def _rides(weeks_back: int, per_week: int, seconds: int) -> list[dict]:
 
 
 def _week_hours(plan: dict) -> dict:
-    scalable = training.volume_sports(plan["spec"]["goal"])
     hours: dict = {}
     for session in plan["sessions"]:
-        args = training.session_to_build_args(session)
-        if args and session["sport"] in scalable:
-            hours[session["week"]] = (
-                hours.get(session["week"], 0) + planner.estimate_seconds(*args) / 3600
-            )
+        if session["sport"] == "cycle":
+            seconds = planner.estimate_seconds(*training.session_to_build_args(session))
+            hours[session["week"]] = hours.get(session["week"], 0) + seconds / 3600
     return hours
 
 
-SPORTIVE = "goal: cycle_strength\nevent_date: 2027-03-14\n"
-
-
 def test_starting_volume_scales_down_for_a_rider_barely_training():
-    plan = _plan(SPORTIVE, _rides(8, 1, 1800))  # ~0.5h/week
+    plan = _plan(activities=_rides(8, 1, 1800))  # ~0.5h/week
     assert plan["volume"]["start_scale"] == training.VOLUME_SCALE_MIN
     assert "0.5h/week" in plan["volume"]["why"]
-    # A rider already near the template's opening week is left alone...
-    assert _plan(SPORTIVE, _rides(8, 4, 5400))["volume"]["start_scale"] > 0.8
+    # A rider already near the opening week is left alone...
+    assert _plan(activities=_rides(8, 3, 5400))["volume"]["start_scale"] > 0.8
     # ...and an explicit `volume:` wins over the measurement either way.
-    override = _plan(SPORTIVE + "volume: 70\n", _rides(8, 4, 5400))
+    override = _plan(PLAN + "volume: 70\n", _rides(8, 3, 5400))
     assert override["volume"]["start_scale"] == 0.7
     assert override["volume"]["why"] == "set in the plan description"
 
 
-def test_no_history_in_the_goals_sports_means_unknown_not_untrained():
-    """A user who simply hasn't imported anything keeps the template's own
-    volume — absence of data is not evidence of being untrained."""
-    plan = _plan(SPORTIVE)
+def test_no_riding_history_means_unknown_not_untrained():
+    """A user who simply hasn't imported anything keeps the plan's own volume
+    — absence of data is not evidence of being untrained."""
+    plan = _plan()
     assert plan["volume"]["start_scale"] == 1.0
-    assert "no recent training" in plan["volume"]["why"]
+    assert "no recent riding" in plan["volume"]["why"]
 
 
 def test_volume_is_measured_by_mean_not_median():
-    """Training in 2 weeks out of 8 makes the median zero, which under a median
+    """Riding in 2 weeks out of 8 makes the median zero, which under a median
     would fall through to "too sparse to measure" and hand somebody barely
-    riding the full template volume. The mean sees it."""
-    # Weeks 2-7 back empty; 2.5h rides keep the mean off both clamps.
+    riding the full volume. The mean sees it."""
     sparse = [
         r
-        for r in _rides(8, 3, 9000)
+        for r in _rides(8, 3, 10800)
         if date.fromisoformat(r["date"]) < REFERENCE - timedelta(weeks=7)
         or date.fromisoformat(r["date"]) >= REFERENCE - timedelta(weeks=1)
     ]
-    plan = _plan(SPORTIVE, sparse)
+    plan = _plan(activities=sparse)
     assert training.VOLUME_SCALE_MIN < plan["volume"]["start_scale"] < 1.0
     assert "h/week" in plan["volume"]["why"]
 
@@ -427,549 +258,92 @@ def test_the_partial_current_week_does_not_drag_the_measurement_down():
     # REFERENCE is a Monday, so the current week holds one ride and would
     # otherwise count as a near-empty week.
     assert (
-        _plan(SPORTIVE, with_current)["volume"]["start_scale"]
-        == _plan(SPORTIVE, trained)["volume"]["start_scale"]
+        _plan(activities=with_current)["volume"]["start_scale"]
+        == _plan(activities=trained)["volume"]["start_scale"]
     )
 
 
-def test_a_scaled_plan_still_converges_to_the_goals_own_peak():
+def test_a_scaled_plan_still_converges_to_the_plans_own_level():
     """Scaling uniformly would start the rider in the right place but leave
-    them under-prepared for a fixed-distance event."""
-    scaled = _week_hours(_plan(SPORTIVE + "volume: 60\n"))
-    full = _week_hours(_plan(SPORTIVE + "volume: 100\n"))
+    every later week short of what the plan meant."""
+    scaled = _week_hours(_plan(PLAN + "volume: 60\n"))
+    full = _week_hours(_plan(PLAN + "volume: 100\n"))
     assert scaled[1] < full[1] * 0.75  # opens materially easier
-    assert max(scaled.values()) == pytest.approx(max(full.values()), rel=0.02)
-
-
-def test_a_steep_ramp_is_flagged_rather_than_silently_built():
-    plan = _plan(SPORTIVE + "volume: 60\n")
-    assert any("grows" in w for w in plan["warnings"])
-    assert not _plan(SPORTIVE + "volume: 100\n")["warnings"]
-
-
-# --- plan length ---------------------------------------------------------------
-
-
-def _at_length(goal: str, weeks: int, extra: str = "") -> dict:
-    """The goal expanded over an explicit number of whole weeks."""
-    event = date(2027, 6, 13)
-    start = event - timedelta(weeks=weeks - 1)
-    start -= timedelta(days=start.weekday())
-    return _plan(
-        f"goal: {goal}\nevent_date: {event.isoformat()}\n"
-        f"start_date: {start.isoformat()}\nvolume: 100\n" + extra
-    )
-
-
-def _peak_long_session(plan: dict) -> int:
-    """The plan's biggest long session — the summit the block climbs to."""
-    return max(
-        s["params"]["distance_m"]
-        for s in plan["sessions"]
-        if s.get("session_type") == "long" and "distance_m" in s.get("params", {})
-    )
-
-
-def test_a_plan_at_its_template_length_uses_the_reference_ramp():
-    """Deriving the ramp must not change how any goal behaves by default."""
-    for goal, template in templates.GOAL_TEMPLATES.items():
-        plan = _at_length(goal, template["weeks"])
-        assert plan["progression"]["weekly_ramp_pct"] == float(
-            training.REFERENCE_RAMP_PCT
-        ), goal
-
-
-def test_a_longer_plan_arrives_at_the_same_peak_not_a_higher_one():
-    """The point of the derived ramp: extra weeks buy a gentler climb to the
-    same summit, rather than compounding past it and pinning every long
-    session at its clamp."""
-    base = _peak_long_session(_at_length("cycle_strength", 12))
-    for weeks in (16, 20, 26, 40):
-        assert _peak_long_session(_at_length("cycle_strength", weeks)) == pytest.approx(
-            base, rel=0.02
-        )
-
-
-def test_an_explicit_ramp_overrides_the_derived_one():
-    """Otherwise the description's override silently does nothing."""
-    pinned = _at_length("cycle_strength", 26, "progression:\n  weekly_ramp_pct: 12\n")
-    assert pinned["progression"] == {**pinned["progression"], "weekly_ramp_pct": 12}
-    assert pinned["progression"]["derived"] is False
-    assert _at_length("cycle_strength", 26)["progression"]["derived"] is True
-
-
-def test_a_shorter_plan_peaks_lower_rather_than_ramping_violently():
-    """Chasing the full peak over four weeks would demand a ~70%/week ramp."""
-    short = _at_length("cycle_strength", 5)
-    assert short["progression"]["weekly_ramp_pct"] == float(training.REFERENCE_RAMP_PCT)
-    assert _peak_long_session(short) < _peak_long_session(
-        _at_length("cycle_strength", 12)
-    )
-
-
-def test_week_roles_drive_both_the_curve_and_the_ramp():
-    """Both read the same role list, so they cannot disagree about which weeks
-    actually ramp."""
-    roles = training._week_roles(
-        ["base", "base", "base", "base", "build", "taper", "taper"], [3, 1]
-    )
-    assert roles == [
-        "build",
-        "build",
-        "build",
-        "recover",
-        "build",
-        "taper",
-        "taper",
-    ]
-
-
-# --- scaled-param headroom -----------------------------------------------------
-
-
-def _scale_for(template: dict, session: dict) -> dict | None:
-    """The template entry a session came from, matched by weekday as well as
-    type — a template may carry two sessions of the same type on different days
-    with different scales, and matching on type alone reads one against the
-    other's clamps."""
-    for entry in template["weekly_sessions"]:
-        if (entry["sport"], entry["session_type"]) == (
-            session["sport"],
-            session["session_type"],
-        ) and entry["day"] == date.fromisoformat(session["date"]).weekday():
-            return entry["scale"]
-    return None
-
-
-@pytest.mark.parametrize("goal", ALL_GOALS)
-def test_scaled_params_keep_headroom_inside_their_clamps(goal):
-    """A clamp that binds often flattens the curve. Hitting the floor on a
-    recovery or taper week is the floor working; sitting at the ceiling is not.
-    """
-    template = templates.GOAL_TEMPLATES[goal]
-    plan = _at_length(goal, template["weeks"])
-    at_max = total = 0
-    for session in plan["sessions"]:
-        if session["is_extra"]:
-            continue
-        scale = _scale_for(template, session)
-        if scale is None:
-            continue
-        total += 1
-        value = session["params"][scale["param"]]
-        assert scale["min"] <= value <= scale["max"], f"{goal}: {value} escaped {scale}"
-        if value == scale["max"]:
-            at_max += 1
-    if not total:
-        assert not training.volume_sports(goal)
-        return
-    assert at_max / total <= 0.10, f"{goal}: {at_max}/{total} sessions pinned at max"
-
-
-# --- building frequency across the plan ----------------------------------------
-
-
-RAMPED = (
-    "goal: cycle_strength\nevent_date: 2026-12-13\nstart_date: 2026-09-07\n"
-    "days_per_week: [2, 4]\nvolume: 100\n"
-)
-
-
-def _rides_per_week(plan: dict) -> list[int]:
-    return [
-        len({s["date"] for s in w["sessions"] if not s["is_extra"]})
-        for w in training.group_by_week(plan["sessions"])
-    ]
-
-
-def test_days_per_week_accepts_a_range_and_builds_frequency():
-    plan = _plan(RAMPED)
-    counts = _rides_per_week(plan)
-    assert counts[0] == 2
-    assert max(counts) == 4
-    assert counts == sorted(counts[:-1]) + counts[-1:]  # never drops mid-build
-    assert plan["days_per_week"] == {"start": 2, "end": 4}
-
-    # A taper cuts volume, not frequency — dropping a session in race week
-    # would lose the sharpening the taper exists for. The final week loses
-    # only whatever falls on race day itself.
-    taper = [
-        w for w in training.group_by_week(plan["sessions"]) if w["phase"] == "taper"
-    ]
-    assert len({s["date"] for s in taper[0]["sessions"] if not s["is_extra"]}) == 4
-
-
-def test_frequency_builds_in_priority_order():
-    """The sessions that arrive later are the lower-priority ones, so a
-    two-ride week is still the two rides that matter most."""
-    # A re-test replaces a session outright, which would read as a swap.
-    plan = _plan(RAMPED + "benchmarks: false\n")
-    weeks = training.group_by_week(plan["sessions"])
-    first = {s["session_type"] for s in weeks[0]["sessions"] if not s["is_extra"]}
-    last = {s["session_type"] for s in weeks[-3]["sessions"] if not s["is_extra"]}
-    assert first < last  # a strict subset: nothing is swapped out, only added
-    assert "long" in first
+    last = max(full)
+    assert scaled[last] == pytest.approx(full[last], rel=0.02)
 
 
 def test_the_opening_week_is_measured_against_its_own_smaller_session_list():
-    """With frequency building, week 1 has fewer sessions than the template —
-    measuring recent training against the full week would understate it."""
-    # Opening at one day, so week 1 is the long ride alone: lifting is never
-    # measured, so only a missing *ride* makes the week smaller. ~1.8h/week
-    # keeps both readings off the clamps, so the comparison is between the two
-    # measurements rather than between two limits.
-    history = _rides(8, 2, 3240)
-    ramped = _plan(
-        RAMPED.replace("volume: 100\n", "").replace(
-            "days_per_week: [2, 4]", "days_per_week: [1, 4]"
-        ),
-        history,
-    )
-    fixed = _plan(
-        RAMPED.replace("volume: 100\n", "").replace(
-            "days_per_week: [2, 4]", "days_per_week: 4"
-        ),
-        history,
-    )
+    """With frequency building, week 1 has fewer rides than the full week —
+    measuring recent riding against the full week would understate it."""
+    history = _rides(8, 2, 5400)
+    ramped = _plan(PLAN + "days_per_week: [5, 6]\n", history)
+    fixed = _plan(PLAN + "days_per_week: 6\n", history)
     assert training.VOLUME_SCALE_MIN < fixed["volume"]["start_scale"]
     assert ramped["volume"]["start_scale"] > fixed["volume"]["start_scale"]
 
 
-@pytest.mark.parametrize(
-    "bad",
-    [
-        "days_per_week: [4, 2]\n",  # frequency must not fall through the plan
-        "days_per_week: [2, 4, 6]\n",  # a range is exactly two numbers
-    ],
-)
-def test_days_per_week_range_rejects(bad):
-    with pytest.raises(ValueError):
-        training.parse_plan_spec("goal: cycle_strength\nevent_date: 2026-12-13\n" + bad)
-
-
-# --- benchmarks and pace progression -------------------------------------------
-
-
-def _benchmarks(plan: dict) -> list[dict]:
-    return [s for s in plan["sessions"] if s.get("is_benchmark")]
-
-
-def test_intensity_targets_do_not_drift_across_the_plan():
-    """Targets are measured, never projected: the same session type carries the
-    same target in week 1 and at the peak. Guessing a future pace risks
-    prescribing work the athlete cannot complete."""
-    plan = _plan(SPORTIVE)
-    watts = [
-        s["params"]["target_watts"]
-        for s in plan["sessions"]
-        if s.get("session_type") == "intervals" and "target_watts" in s["params"]
-    ]
-    assert len(set(watts)) == 1
-    # ...while the volume on that same session very much does move.
-    distances = {
-        s["params"]["distance_m"]
-        for s in plan["sessions"]
-        if s.get("session_type") == "long"
-    }
-    assert len(distances) > 1
-
-
-@pytest.mark.parametrize("goal", ALL_GOALS)
-def test_every_goal_schedules_a_re_test(goal):
-    """Without a benchmark the plan has no moment where it re-measures, so a
-    pace can never legitimately improve."""
-    plan = _at_length(goal, templates.GOAL_TEMPLATES[goal]["weeks"])
-    assert _benchmarks(plan), f"{goal} never re-tests"
-
-
-def test_benchmarks_land_on_recovery_weeks():
-    """You test rested — that is what makes one test comparable to the next."""
-    plan = _at_length("standard_triathlon", 22, "days_per_week: [3, 5]\n")
-    roles = training._week_roles(
-        [w["phase"] for w in training.group_by_week(plan["sessions"])],
-        plan["spec"]["progression"]["build_recover"],
-    )
-    for session in _benchmarks(plan):
-        assert roles[session["week"] - 1] == "recover"
-        assert session["phase"] != "taper"
-
-
-def test_a_test_week_comes_out_of_the_plan_rather_than_extending_it():
-    """Week 0 sits inside the user's own start/event dates: it takes a week from
-    the periodised block rather than pushing start_date a week earlier, so both
-    dates still mean what they said."""
-    plain = _at_length("cycle_strength", 15)
-    tested = _at_length("cycle_strength", 15, "test_week: true\n")
-
-    assert plain["weeks"] == 15 and tested["weeks"] == 14
-    assert tested["start_date"] == plain["start_date"]
-    assert tested["event_date"] == plain["event_date"]
-    # Week 1 begins a week later, and is still a full periodised week 1.
-    week_one = [s for s in tested["sessions"] if s["week"] == 1]
-    assert min(s["date"] for s in week_one) > min(s["date"] for s in plain["sessions"])
-    assert all(s["phase"] == "base" for s in week_one)
-
-    # Week 0 is independent of the in-plan re-tests: wanting to measure once
-    # before starting is no reason to be forced into re-measuring as you go.
-    no_retests = _at_length(
-        "cycle_strength", 15, "test_week: true\nbenchmarks: false\n"
-    )
-    assert [s for s in no_retests["sessions"] if s["week"] == 0]
-    assert not [
-        s for s in no_retests["sessions"] if s.get("is_benchmark") and s["week"]
-    ]
-
-
-def test_a_test_week_measures_each_test_once():
-    """Week 0's job is clean measurements, so it carries the tests alone — one
-    per distinct test, where strength counts per lift rather than per sport."""
-    plan = _at_length("cycle_strength", 15, "test_week: true\n")
-    week_zero = [s for s in plan["sessions"] if s["week"] == 0]
-
-    assert week_zero and all(s.get("is_benchmark") for s in week_zero)
-    identities = [(s["sport"], s["params"].get("exercise")) for s in week_zero]
-    assert len(identities) == len(set(identities))
-    assert ("cycle", None) in identities
-    assert sum(1 for sport, _ in identities if sport == "strength") > 1
-
-
-def test_benchmarks_replace_a_session_and_stay_unscaled_and_untargeted():
-    """A test is only a benchmark if it stands in for a session rather than
-    adding one, and is the same distance at an open effort every time."""
-    with_tests = _at_length("run_10k", 12)
-    without = _at_length("run_10k", 12, "benchmarks: false\n")
-    assert len(with_tests["sessions"]) == len(without["sessions"])
-    assert _benchmarks(with_tests) and not _benchmarks(without)
-
-    plan = _at_length("standard_triathlon", 22, "days_per_week: [3, 5]\n")
-    runs = [s for s in _benchmarks(plan) if s["sport"] == "run"]
-    assert len({s["params"]["test_distance_m"] for s in runs}) == 1
-    for session in _benchmarks(plan):
-        assert "target_pace" not in session["params"]
-        assert "target_watts" not in session["params"]
-        sport, workout_type, params = training.session_to_build_args(session)
-        planner.build_plan(sport, workout_type, params, session["date"])
-
-
-def test_benchmarks_take_turns_between_a_multisport_goals_disciplines():
-    """Every testable discipline gets a turn, and none is tested twice running
-    while another is waiting — the rotation picks whichever has gone longest."""
-    plan = _at_length("standard_triathlon", 22, "days_per_week: [3, 5]\n")
-    sports = [s["sport"] for s in _benchmarks(plan)]
-    assert set(sports) == {"run", "cycle", "swim", "strength"}
-    assert all(a != b for a, b in zip(sports, sports[1:]))
-
-
-# --- statelessness: live derivation + the Garmin ledger -------------------------
-
-LIVE_SPEC = "goal: run_10k\nevent_date: 2027-02-07\nstart_date: 2026-08-24\n"
-SLOW_5K = [
-    {
-        "id": "a",
-        "type": "run",
-        "date": "2026-08-01",
-        "distance_km": 5.0,
-        "duration_seconds": 1916,
-    }
-]
-FAST_5K = SLOW_5K + [
-    {
-        "id": "b",
-        "type": "run",
-        "date": "2026-08-20",
-        "distance_km": 5.0,
-        "duration_seconds": 1374,
-    }
-]
-
-
-def _paces(plan):
-    return {
-        (s["date"], s["session_type"]): s["params"].get("target_pace")
-        for s in plan["sessions"]
-        if not s["is_extra"] and "target_pace" in s.get("params", {})
-    }
-
-
-def _volume_of(plan):
-    intensity = ("target_pace", "target_watts", "target_pace_100m")
-    return {
-        (s["date"], s["sport"], s["session_type"]): {
-            k: v for k, v in s["params"].items() if k not in intensity
-        }
-        for s in plan["sessions"]
-        if not s["is_extra"]
-    }
-
-
-def test_targets_follow_new_history_with_no_retarget_step():
-    """The whole point of storing only the description: importing a faster 5k
-    is what applies it — there is no command in between."""
-    spec = training.parse_plan_spec(LIVE_SPEC)
-    slow = training.expand_plan(spec, SLOW_5K, REFERENCE)
-    fast = training.expand_plan(spec, FAST_5K, REFERENCE)
-
-    assert slow["targets"]["run_5k_seconds"] == 1916
-    assert fast["targets"]["run_5k_seconds"] == 1374
-    slow_paces, fast_paces = _paces(slow), _paces(fast)
-    assert slow_paces and slow_paces.keys() == fast_paces.keys()
-    assert all(fast_paces[k] < slow_paces[k] for k in slow_paces)
-
-
-def test_re_deriving_never_changes_volume():
-    """Only intensity tracks fitness. Session sizes come from the multiplier
-    and the pinned starting volume, so they must be identical."""
-    spec = training.parse_plan_spec(LIVE_SPEC)
-    slow = training.expand_plan(spec, SLOW_5K, REFERENCE)
-    fast = training.expand_plan(spec, FAST_5K, REFERENCE, volume=slow["volume"])
-    assert _volume_of(fast) == _volume_of(slow)
-
-
-def test_a_pinned_volume_survives_a_fitter_athlete():
+def test_a_pinned_volume_survives_new_history():
     """Starting volume is a decision about where you were, taken once."""
-    spec = training.parse_plan_spec(LIVE_SPEC)
     pinned = {"start_scale": 0.6, "why": "pinned at import"}
-    plan = training.expand_plan(spec, FAST_5K, REFERENCE, volume=pinned)
+    plan = _plan(activities=_rides(8, 3, 5400), volume=pinned)
     assert plan["volume"] == pinned
-
-
-def _pushed_plan(activities=SLOW_5K):
-    """A plan with its first two real sessions pushed to Garmin."""
-    spec = training.parse_plan_spec(LIVE_SPEC)
-    plan = training.expand_plan(spec, activities, REFERENCE)
-    due = [s for s in plan["sessions"] if not s["is_extra"]][:2]
-    ledger = [training.ledger_entry(s, 100 + i, 200 + i) for i, s in enumerate(due)]
-    return spec, plan, ledger
-
-
-def test_a_pushed_session_keeps_what_was_actually_sent():
-    """Garmin has no edit endpoint, so the watch holds the old copy — the plan
-    must show that, not a fresh derivation."""
-    spec, _, ledger = _pushed_plan(SLOW_5K)
-    # Re-derive against faster history: unpushed sessions move, pushed do not.
-    fresh = training.expand_plan(spec, FAST_5K, REFERENCE)
-    overlaid = training.apply_pushed(fresh["sessions"], ledger)
-
-    pushed = [s for s in overlaid if s["pushed"]]
-    assert len(pushed) == len(ledger)
-    for session, entry in zip(pushed, ledger):
-        assert session["params"] == entry["params"]
-        assert session["workout_name"] == entry["workout_name"]
-        assert session["garmin_workout_id"] == entry["workout_id"]
-        assert session["scheduled_workout_id"] == entry["schedule_id"]
-    # ...and it is flagged, since the live derivation has moved away from it.
-    assert all(s["stale"] for s in pushed)
-
-
-def test_a_pushed_session_is_not_stale_when_nothing_moved():
-    spec, _, ledger = _pushed_plan(SLOW_5K)
-    fresh = training.expand_plan(spec, SLOW_5K, REFERENCE)
-    overlaid = training.apply_pushed(fresh["sessions"], ledger)
-    assert not any(s["stale"] for s in overlaid)
-
-
-def test_the_ledger_key_survives_re_derivation():
-    """(date, sport) must still name the same session after re-expanding, or
-    the overlay would attach a workout to the wrong day."""
-    spec = training.parse_plan_spec(LIVE_SPEC)
-    a = training.expand_plan(spec, SLOW_5K, REFERENCE)
-    b = training.expand_plan(spec, FAST_5K, REFERENCE)
-    assert [training.ledger_key(s) for s in a["sessions"]] == [
-        training.ledger_key(s) for s in b["sessions"]
-    ]
-
-
-def test_sync_finds_only_what_is_not_already_pushed():
-    spec, plan, ledger = _pushed_plan()
-    overlaid = training.apply_pushed(plan["sessions"], ledger)
-    due = training.sync_window(overlaid, REFERENCE, 60)
-    assert due, "something should still be due"
-    assert not any(
-        training.ledger_key(s) in {(e["date"], e["sport"]) for e in ledger} for s in due
-    )
-    # Trained already: refresh re-pushed today's finished ride as a duplicate.
-    done = [{**s, "completed": True} if s is due[0] else s for s in overlaid]
-    assert training.ledger_key(due[0]) not in {
-        training.ledger_key(s) for s in training.sync_window(done, REFERENCE, 60)
-    }
-
-
-def test_clear_takes_only_future_ledger_rows():
-    _, plan, ledger = _pushed_plan()
-    past = [{**ledger[0], "date": "2026-01-05"}]
-    assert training.future_pushed(ledger + past, REFERENCE) == ledger
-    trained = [
-        {**s, "completed": True}
-        for s in plan["sessions"]
-        if training.ledger_key(s) == (ledger[0]["date"], ledger[0]["sport"])
-    ]
-    assert training.future_pushed(ledger, REFERENCE, trained) == ledger[1:]
-
-
-def test_a_pre_stateless_plan_is_refused_rather_than_read_as_unpushed():
-    """A plan file older than the ledger has no "pushed" key, so a guard that
-    reads `.get("pushed", [])` sees an empty ledger and replaces the file —
-    stranding its calendar entries. That happened to three real sessions on
-    2026-09-11, so the shape is checked before the ledger is trusted."""
-    _, _, ledger = _pushed_plan()
-    current = {"spec": {}, "created": "2026-09-11", "volume": {}, "pushed": ledger}
-    assert training.unreadable_plan(current) is None
-
-    # The old shape: no ledger, push state stamped on each session instead.
-    legacy = {
-        "spec": {},
-        "created": "2026-09-05",
-        "volume": {},
-        "sessions": [
-            {"date": "2026-09-11", "scheduled_workout_id": 1767273144},
-            {"date": "2026-09-13", "scheduled_workout_id": None},
-        ],
-    }
-    stranded = training.unreadable_plan(legacy)
-    assert [s["scheduled_workout_id"] for s in stranded] == [1767273144]
-
-    # Empty is still a refusal, not an all-clear: absent push state in an
-    # unreadable file says nothing about what is on the calendar.
-    assert training.unreadable_plan({"spec": {}, "sessions": []}) == []
 
 
 # --- strength progression ------------------------------------------------------
 
 
-STRENGTH = "goal: strength_program\nevent_date: 2027-06-13\n"
-
-
-def _lifted(date_iso, exercise, reps, weight_kg):
+def _lifted(date_iso, exercise, reps, weight_kg, sets=1):
     return {
         "type": "strength",
         "date": date_iso,
         "duration_seconds": 2700,
         "exercises": [
-            {"name": exercise, "sets": [{"reps": reps, "weight_kg": weight_kg}]}
+            {"name": exercise, "sets": [{"reps": reps, "weight_kg": weight_kg}] * sets}
         ],
     }
 
 
+def _squats(plan):
+    return [
+        (s["date"], e["target_weight_kg"])
+        for s in plan["sessions"]
+        if s["sport"] == "strength"
+        for e in s["params"]["exercises"]
+        if e["exercise"] == "squat"
+    ]
+
+
 def test_a_miss_holds_the_weight_and_the_third_running_resets_it():
-    def lifted(*sets, test=False):
-        return {"sets": [{"reps": r, "weight_kg": w} for w, r in sets], "test": test}
+    def lifted(*sets):
+        return {"sets": [{"reps": r, "weight_kg": w} for w, r in sets]}
 
-    def next_press(history):
-        return training.next_working_weight(history, 3, 10, 1.0, 20.0)
+    def next_squat(history):
+        return training.next_working_weight(history, 5, 5, 2.5, 60.0)
 
-    done = lifted((20, 5), (24, 10), (24, 10), (24, 10))
-    missed = lifted((20, 5), (24, 10), (24, 10), (24, 8))
-    assert next_press([done]) == 25.0
-    assert next_press([missed, missed]) == 24.0
-    assert next_press([missed, missed, missed]) == 22.0  # 21.6, loadable
-    # A test lifts the level to what it measured, but never lowers it.
-    assert next_press([done, lifted((40, 3), test=True)]) == 33.0
-    assert next_press([done, lifted((20, 3), test=True)]) == 25.0
+    done = lifted((20, 5), *[(70, 5)] * 5)
+    missed = lifted((20, 5), *[(70, 5)] * 4, (70, 3))
+    assert next_squat([done]) == 72.5
+    assert next_squat([missed, missed]) == 70.0
+    assert next_squat([missed, missed, missed]) == 62.5  # 63, loadable
+
+
+def test_lifting_in_the_plan_moves_the_next_session():
+    """Each future session assumes the one before goes to plan; a session
+    done short holds the weight from there on."""
+    plan = _plan()
+    (first_day, first), (second_day, _) = _squats(plan)[:2]
+    # Today is past the first session, which was lifted short.
+    later = date.fromisoformat(second_day) - timedelta(days=1)
+    missed = [_lifted(first_day, "squat", 3, first, sets=5)]
+    spec = training.parse_plan_spec(PLAN)
+    held = dict(_squats(training.expand_plan(spec, missed, later)))
+    assert held[second_day] == first
 
 
 def test_bodyweight_reps_rise_on_every_set_done_and_stop_at_the_cap():
     def did(*reps):
-        return {"sets": [{"reps": r} for r in reps], "test": False}
+        return {"sets": [{"reps": r} for r in reps]}
 
     def next_pull_ups(history):
         return training.next_rep_target(history, 3, 3, 5)
@@ -979,9 +353,128 @@ def test_bodyweight_reps_rise_on_every_set_done_and_stop_at_the_cap():
     assert next_pull_ups([did(9, 9, 9)] * 4) == 5
 
 
+def test_a_goal_further_off_than_the_plan_is_long_is_capped_and_warned():
+    """Better to say the timeline doesn't reach than to prescribe a curve
+    nobody could lift."""
+    plan = _plan(PLAN + "targets: {deadlift_goal_kg: 300}\n")
+    loads = [
+        e["target_weight_kg"]
+        for s in plan["sessions"]
+        if s["sport"] == "strength"
+        for e in s["params"]["exercises"]
+        if e["exercise"] == "deadlift"
+    ]
+    steps = [b - a for a, b in zip(loads, loads[1:])]
+    assert max(steps) <= training.lift_increment("deadlift")
+    assert loads[-1] < training.working_weight_from_1rm(300, 5, 2.5)
+    assert any("deadlift" in w for w in plan["warnings"])
+
+
+def test_an_underived_goal_is_what_the_plans_length_can_deliver():
+    plan = _plan()
+    for entry in plan["targets"].values():
+        assert entry["goal_e1rm_kg"] > entry["current_e1rm_kg"]
+    # Derived, so it can never trip its own warning.
+    assert not plan["warnings"]
+
+
+def test_working_weight_round_trips_through_the_e1rm_formula():
+    """The PB table and the plan must agree about the same set — both go
+    through compute.estimated_1rm, one of them backwards."""
+    for reps in (3, 5, 8, 10):
+        e1rm = compute.estimated_1rm(100.0, reps)
+        assert training.working_weight_from_1rm(e1rm, reps, 2.5) == 100.0
+    # ...and lands on a loadable weight: 23.75kg is not one.
+    press = compute.estimated_1rm(23.75, 10)
+    assert training.working_weight_from_1rm(press, 10, 2.5) == 25.0
+
+
+def test_each_session_gets_its_own_exercise_dicts():
+    """A shallow copy of the template's params would have every week sharing
+    one exercise list, and the last week written would win everywhere."""
+    assert len({w for _, w in _squats(_plan())}) > 1
+
+
+def test_re_deriving_strength_moves_load_but_never_sets_or_reps():
+    def lifts(plan):
+        return [
+            (e["exercise"], e["sets"], e["reps"], e.get("target_weight_kg"))
+            for s in plan["sessions"]
+            if s["sport"] == "strength"
+            for e in s["params"]["exercises"]
+        ]
+
+    weak = _plan()
+    stronger = [_lifted("2026-08-20", lift, 3, 150.0) for lift in ("squat", "deadlift")]
+    strong = _plan(activities=stronger)
+
+    assert [x[:3] for x in lifts(strong)] == [x[:3] for x in lifts(weak)]
+    assert [x[3] for x in lifts(strong)] != [x[3] for x in lifts(weak)]
+    # StrongLifts' start for a returning lifter: the ten-rep weight, not the
+    # five, since five sets of a 5RM fail by the second.
+    e1rm = strong["targets"]["squat"]["current_e1rm_kg"]
+    assert _squats(strong)[0][1] == training.working_weight_from_1rm(e1rm, 10, 2.5)
+
+
+# --- completion ----------------------------------------------------------------
+
+
+def test_match_completion_marks_sessions_in_the_same_week():
+    sessions = [
+        {"date": "2026-09-01", "sport": "cycle"},
+        {"date": "2026-09-05", "sport": "cycle"},
+    ]
+    activities = [{"type": "cycle", "date": "2026-09-02"}]
+    matched = training.match_completion(sessions, activities)
+    assert [s["completed"] for s in matched] == [True, False]
+
+    # The week is the unit, not a day window: Wednesday's session trained on
+    # the Sunday is still that week's work (both ISO 2026-W37, 4 days apart).
+    same_week = [{"date": "2026-09-09", "sport": "strength"}]
+    matched = training.match_completion(
+        same_week, [{"type": "strength", "date": "2026-09-13"}]
+    )
+    assert [s["completed"] for s in matched] == [True]
+
+    # ...and the accepted mirror case: Sunday's session done on the Monday
+    # after lands in W38, so it does not count.
+    matched = training.match_completion(
+        [{"date": "2026-09-13", "sport": "cycle"}],
+        [{"type": "cycle", "date": "2026-09-14"}],
+    )
+    assert [s["completed"] for s in matched] == [False]
+
+    # Closest pair first, and lifts must overlap: the one lift of the week
+    # (Wednesday's squat) completes Wednesday, not Monday's deadlift day.
+    def lifting(day, *lifts):
+        exercises = [{"exercise": lift} for lift in lifts]
+        return {"date": day, "sport": "strength", "params": {"exercises": exercises}}
+
+    week = [lifting("2026-09-14", "deadlift"), lifting("2026-09-16", "squat")]
+    squatted = {
+        "type": "strength",
+        "date": "2026-09-16",
+        "exercises": [{"name": "squat"}],
+    }
+    matched = training.match_completion(week, [squatted])
+    assert [s["completed"] for s in matched] == [False, True]
+    matched = training.match_completion(week[:1], [squatted])
+    assert [s["completed"] for s in matched] == [False]
+
+
+def test_one_activity_cannot_complete_two_sessions():
+    sessions = [
+        {"date": "2026-09-01", "sport": "cycle"},
+        {"date": "2026-09-02", "sport": "cycle"},
+    ]
+    activities = [{"type": "cycle", "date": "2026-09-01"}]
+    matched = training.match_completion(sessions, activities)
+    assert [s["completed"] for s in matched] == [True, False]
+
+
 def test_a_moved_ride_warns_only_when_it_came_from_another_week():
-    """A stale device prompts with last week's workout; a long ride ridden on
-    Sunday instead of Saturday is the plan working."""
+    """A stale device prompts with last week's workout; a ride planned for
+    Saturday and ridden on Sunday is the plan working."""
     pushed = [
         {"date": "2026-10-06", "sport": "cycle", "workout_id": 1},
         {"date": "2026-10-13", "sport": "cycle", "workout_id": 2},
@@ -997,91 +490,96 @@ def test_a_moved_ride_warns_only_when_it_came_from_another_week():
     ]
 
 
-def _roles_of(plan):
-    """Week roles, from the phases the expanded sessions carry."""
-    phases = [w["phase"] for w in training.group_by_week(plan["sessions"]) if w["week"]]
-    return training._week_roles(phases, plan["spec"]["progression"]["build_recover"])
+# --- the Garmin ledger ---------------------------------------------------------
+
+LIGHT = [_lifted("2026-08-01", "squat", 5, 60.0)]
+HEAVY = LIGHT + [_lifted("2026-08-20", "squat", 5, 100.0)]
 
 
-def test_a_goal_further_off_than_the_plan_is_long_is_capped_and_warned():
-    """Better to say the timeline doesn't reach than to prescribe a curve
-    nobody could ride."""
-    plan = _plan(STRENGTH + "targets: {deadlift_goal_kg: 300}\n")
-    roles = _roles_of(plan)
-    build = [
-        s["params"]["exercises"][0]["target_weight_kg"]
-        for s in plan["sessions"]
-        if s["session_type"] == "straight_sets"
-        and s["params"]["exercises"][0]["exercise"] == "deadlift"
-        and roles[s["week"] - 1] == "build"
+def _pushed_plan(activities=LIGHT):
+    """A plan with its first two sessions pushed to Garmin: Monday's and
+    Wednesday's lifting, both of which squat."""
+    spec = training.parse_plan_spec(PLAN)
+    plan = training.expand_plan(spec, activities, REFERENCE)
+    due = plan["sessions"][:2]
+    ledger = [training.ledger_entry(s, 100 + i, 200 + i) for i, s in enumerate(due)]
+    return spec, plan, ledger
+
+
+def test_a_pushed_session_keeps_what_was_actually_sent():
+    """Garmin has no edit endpoint, so the watch holds the old copy — the plan
+    must show that, not a fresh derivation."""
+    spec, _, ledger = _pushed_plan(LIGHT)
+    # Re-derive against heavier history: unpushed sessions move, pushed do not.
+    fresh = training.expand_plan(spec, HEAVY, REFERENCE)
+    overlaid = training.apply_pushed(fresh["sessions"], ledger)
+
+    pushed = [s for s in overlaid if s["pushed"]]
+    assert len(pushed) == len(ledger)
+    for session, entry in zip(pushed, ledger):
+        assert session["params"] == entry["params"]
+        assert session["workout_name"] == entry["workout_name"]
+        assert session["garmin_workout_id"] == entry["workout_id"]
+        assert session["scheduled_workout_id"] == entry["schedule_id"]
+    # ...and it is flagged, since the live derivation has moved away from it.
+    assert all(s["stale"] for s in pushed)
+
+    unmoved = training.apply_pushed(
+        training.expand_plan(spec, LIGHT, REFERENCE)["sessions"], ledger
+    )
+    assert not any(s["stale"] for s in unmoved)
+
+
+def test_the_ledger_key_survives_re_derivation():
+    """(date, sport) must still name the same session after re-expanding, or
+    the overlay would attach a workout to the wrong day."""
+    spec = training.parse_plan_spec(PLAN)
+    a = training.expand_plan(spec, LIGHT, REFERENCE)
+    b = training.expand_plan(spec, HEAVY, REFERENCE)
+    assert [training.ledger_key(s) for s in a["sessions"]] == [
+        training.ledger_key(s) for s in b["sessions"]
     ]
-    steps = [b - a for a, b in zip(build, build[1:])]
-    assert max(steps) <= training.lift_increment("deadlift")
-    assert build[-1] < training.working_weight_from_1rm(300, 5, 2.5)
-    assert any("deadlift" in w for w in plan["warnings"])
 
 
-def test_an_underived_goal_is_what_the_plans_length_can_deliver():
-    plan = _plan(STRENGTH)
-    for entry in plan["targets"]["strength"].values():
-        assert entry["goal_e1rm_kg"] > entry["current_e1rm_kg"]
-    # Derived, so it can never trip its own warning.
-    assert not plan["warnings"]
-
-
-def test_working_weight_round_trips_through_the_e1rm_formula():
-    """The PB table and the plan must agree about the same set — both go
-    through compute.estimated_1rm, one of them backwards."""
-    from fit import compute
-
-    for reps in (3, 5, 8, 10):
-        e1rm = compute.estimated_1rm(100.0, reps)
-        assert training.working_weight_from_1rm(e1rm, reps, 2.5) == 100.0
-    # ...and lands on a loadable weight: 23.75kg is not one.
-    press = compute.estimated_1rm(23.75, 10)
-    assert training.working_weight_from_1rm(press, 10, 1.0) == 24.0
-
-
-def test_each_week_gets_its_own_exercise_dicts():
-    """A shallow copy of the template's params would have every week sharing
-    one exercise list, and the last week written would win everywhere."""
-    plan = _plan(STRENGTH)
-    loads = {
-        s["week"]: s["params"]["exercises"][0]["target_weight_kg"]
-        for s in plan["sessions"]
-        if s["sport"] == "strength" and not s.get("is_benchmark")
+def test_sync_finds_only_what_is_not_already_pushed():
+    _, plan, ledger = _pushed_plan()
+    overlaid = training.apply_pushed(plan["sessions"], ledger)
+    due = training.sync_window(overlaid, REFERENCE, 14)
+    assert due, "something should still be due"
+    assert not any(
+        training.ledger_key(s) in {(e["date"], e["sport"]) for e in ledger} for s in due
+    )
+    assert all(s["date"] <= (REFERENCE + timedelta(days=14)).isoformat() for s in due)
+    # Trained already: refresh re-pushed today's finished ride as a duplicate.
+    done = [{**s, "completed": True} if s is due[0] else s for s in overlaid]
+    assert training.ledger_key(due[0]) not in {
+        training.ledger_key(s) for s in training.sync_window(done, REFERENCE, 14)
     }
-    assert len(set(loads.values())) > 1
 
 
-def test_re_deriving_strength_moves_load_but_never_sets_or_reps():
-    def lifts(plan):
-        return [
-            (
-                s["params"]["exercises"][0]["sets"],
-                s["params"]["exercises"][0]["reps"],
-                s["params"]["exercises"][0]["target_weight_kg"],
-            )
-            for s in plan["sessions"]
-            if s["sport"] == "strength" and not s.get("is_benchmark")
-        ]
-
-    weak = _plan(STRENGTH)
-    stronger = [_lifted("2026-08-20", lift, 3, 150.0) for lift in ("squat", "deadlift")]
-    strong = _plan(STRENGTH, stronger)
-
-    assert [(a, b) for a, b, _ in lifts(strong)] == [(a, b) for a, b, _ in lifts(weak)]
-    assert [w for _, _, w in lifts(strong)] != [w for _, _, w in lifts(weak)]
+def test_clear_takes_only_future_ledger_rows():
+    _, plan, ledger = _pushed_plan()
+    past = [{**ledger[0], "date": "2026-01-05"}]
+    assert training.future_pushed(ledger + past, REFERENCE) == ledger
+    trained = [
+        {**s, "completed": True}
+        for s in plan["sessions"]
+        if training.ledger_key(s) == (ledger[0]["date"], ledger[0]["sport"])
+    ]
+    assert training.future_pushed(ledger, REFERENCE, trained) == ledger[1:]
 
 
-def test_a_strength_benchmark_tests_the_lift_its_session_leads_with():
-    plan = _plan(STRENGTH)
-    tests = [s for s in plan["sessions"] if s.get("is_benchmark")]
-    assert tests
-    for session in tests:
-        assert session["sport"] == "strength"
-        assert session["params"]["exercise"] in training.template_lifts(
-            "strength_program"
-        )
-        # Untargeted: a test at a prescribed load is not a test.
-        assert "target_weight_kg" not in session["params"]
+def test_an_old_plan_file_is_refused_rather_than_read_as_unpushed():
+    """Replacing a plan this version cannot expand would drop its ledger and
+    strand its calendar entries — that happened to three real sessions on
+    2026-09-11 — so the shape is checked before anything trusts it."""
+    spec, _, ledger = _pushed_plan()
+    current = {"spec": spec, "created": "2026-08-24", "volume": {}, "pushed": ledger}
+    assert training.unreadable_plan(current) is None
+
+    # The description before this one had a goal and an event_date.
+    old = {**current, "spec": {"goal": "cycle_strength", "event_date": "2027-01-31"}}
+    assert training.unreadable_plan(old) == ledger
+    # Empty is still a refusal, not an all-clear: a file with no ledger says
+    # nothing about what is on the calendar.
+    assert training.unreadable_plan({"spec": {}, "sessions": []}) == []

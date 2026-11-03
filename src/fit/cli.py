@@ -14,7 +14,6 @@ from fit import (
     importers,
     planner,
     storage,
-    templates,
     training,
 )
 
@@ -456,9 +455,9 @@ def usage() -> None:
     display.render_usage()
 
 
-# --- fit train: multi-week periodised plans -------------------------------
+# --- fit train: the training plan ------------------------------------------
 
-train_app = typer.Typer(help="Multi-week periodised training plans")
+train_app = typer.Typer(help="The training plan: StrongLifts 5x5 with easy riding")
 app.add_typer(train_app, name="train")
 
 
@@ -470,16 +469,7 @@ def _stored_plan() -> dict:
     if not stored:
         display.render_training_missing()
         raise typer.Exit(code=1)
-    # Shape before goal: an older file can carry a valid goal and still have no
-    # ledger, and `sync` would push every session before failing to record one.
     _exit_if_unreadable(stored)
-    if stored["spec"].get("goal") not in templates.GOAL_TEMPLATES:
-        typer.echo(
-            "This plan's goal no longer exists. Run `fit train import` to "
-            "replace it.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
     return stored
 
 
@@ -490,19 +480,20 @@ def _exit_if_unreadable(stored: dict) -> None:
     if stranded is None:
         return
     typer.echo(
-        "The stored plan is in an older format, so this version cannot tell "
-        "what it has on the Garmin calendar. Replacing it would leave anything "
-        "there with nothing tracking it.",
+        "The stored plan is in an older format this version cannot expand. "
+        "Replacing it would leave what it put on the Garmin calendar with "
+        "nothing tracking it.",
         err=True,
     )
-    for session in stranded:
-        typer.echo(
-            f"  {session['date']}  {session.get('workout_name', '')} "
-            f"(schedule id {session['scheduled_workout_id']})",
-            err=True,
-        )
+    for entry in stranded:
+        if entry["date"] >= date_cls.today().isoformat():
+            typer.echo(
+                f"  {entry['date']}  {entry.get('workout_name', '')} "
+                f"(schedule id {entry.get('schedule_id')})",
+                err=True,
+            )
     typer.echo(
-        f"Unschedule the above in Garmin Connect, then delete "
+        f"Unschedule anything listed above in Garmin Connect, then delete "
         f"{storage.training_plan_path()} and import again.",
         err=True,
     )
@@ -547,7 +538,7 @@ def train_import(
         0, "--weeks", help="Only show the first N weeks after importing (0 = all)"
     ),
 ) -> None:
-    """Expand a YAML plan description into a full periodised schedule."""
+    """Expand a YAML plan description into a dated schedule."""
     activities = _load_activities()
 
     existing = storage.read_training_plan()
@@ -641,8 +632,6 @@ def train_sync(
     scheduled, failed = 0, []
     for session in due:
         args = training.session_to_build_args(session)
-        if args is None:  # extras never reach here, but stay defensive
-            continue
         try:
             built = planner.build_plan(*args, session["date"], session["date"])
             response = garmin.push_workout(client, built["payload"])
@@ -711,12 +700,12 @@ def train_refresh(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
 ) -> None:
-    """Re-push the next sessions at your current fitness: `clear` then `sync`.
+    """Re-push the next sessions at current loads: `clear` then `sync`.
 
-    What is already on the calendar was built against the targets you had when
+    What is already on the calendar was built against the loads you had when
     it was pushed, and Garmin has no edit endpoint, so replacing it is the only
-    way to apply a new PB to sessions the watch already holds. Run it after
-    `fit garmin-sync` has imported the effort that moved them.
+    way to apply new progress to sessions the watch already holds. Run it after
+    `fit garmin-sync` has imported the sessions that moved them.
     """
     stored = _stored_plan()
     sessions = _expand(stored, _load_activities())["sessions"]
@@ -726,8 +715,7 @@ def train_refresh(
     # Confirm before the clear, not between the two steps: `sync` asks for
     # itself, and answering no there would leave the calendar already emptied.
     if not yes and not typer.confirm(
-        f"Unschedule {len(pending)} future session(s) and re-push at current "
-        "fitness?",
+        f"Unschedule {len(pending)} future session(s) and re-push at current " "loads?",
         default=False,
     ):
         typer.echo("Nothing changed.")

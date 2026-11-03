@@ -12,7 +12,7 @@ from fit import cli, garmin, storage, training
 pytest.importorskip("yaml", reason="parse_plan_spec needs the optional [train] extra")
 
 TODAY = date(2026, 8, 24)
-SPEC = "goal: run_10k\nevent_date: 2027-02-07\nstart_date: 2026-08-24\n"
+SPEC = "start_date: 2026-08-24\nend_date: 2026-11-15\n"
 
 
 class _FixedDate(date):
@@ -33,7 +33,7 @@ def test_refresh_re_pushes_what_it_unschedules(tmp_path, monkeypatch):
 
     spec = training.parse_plan_spec(SPEC)
     plan = training.expand_plan(spec, [], TODAY)
-    due = [s for s in plan["sessions"] if not s["is_extra"]][:2]
+    due = plan["sessions"][:2]
     ledger = [training.ledger_entry(s, 100 + i, 200 + i) for i, s in enumerate(due)]
     storage.ensure_data_dir()
     storage.write_training_plan(

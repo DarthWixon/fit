@@ -133,13 +133,11 @@ def _load_session(session_date: str, sport: str | None) -> dict:
     matches = [
         s
         for s in sessions
-        if s.get("date") == session_date
-        and not s.get("is_extra")
-        and (sport is None or s.get("sport") == sport)
+        if s.get("date") == session_date and (sport is None or s.get("sport") == sport)
     ]
     if not matches:
         sys.exit(
-            f"error: no non-extra session dated {session_date}"
+            f"error: no session dated {session_date}"
             + (f" for sport {sport}" if sport else "")
             + " — check `fit train show`."
         )

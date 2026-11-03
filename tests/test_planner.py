@@ -542,27 +542,6 @@ def test_a_bare_test_carries_its_instruction_in_the_name():
     )
 
 
-@pytest.mark.parametrize("sport", ["run", "cycle", "swim"])
-def test_planning_a_baseline_by_hand_gives_the_same_test_the_plan_schedules(sport):
-    """Both routes must produce a test fit can actually read back. They drifted
-    once: the plan's run benchmark moved 3km -> 5km while the prompt default
-    stayed at 3km, which is measurable nowhere."""
-    from fit import training
-
-    defaults = {
-        spec["key"]: spec["parse"](str(spec["default"]))
-        for spec in planner.workout_params(sport, "baseline")
-    }
-    # A blank warmup/cooldown parses to 0, which _baseline_steps omits — so the
-    # comparison is against the plan's params with those absent.
-    assert {k: v for k, v in defaults.items() if v} == training.BENCHMARK_SESSIONS[
-        sport
-    ]["params"]
-    assert planner.workout_name(sport, "baseline", defaults) == planner.workout_name(
-        sport, "baseline", training.BENCHMARK_SESSIONS[sport]["params"]
-    )
-
-
 # --- strength -------------------------------------------------------------
 
 
