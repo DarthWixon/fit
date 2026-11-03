@@ -567,19 +567,3 @@ def test_clear_takes_only_future_ledger_rows():
         if training.ledger_key(s) == (ledger[0]["date"], ledger[0]["sport"])
     ]
     assert training.future_pushed(ledger, REFERENCE, trained) == ledger[1:]
-
-
-def test_an_old_plan_file_is_refused_rather_than_read_as_unpushed():
-    """Replacing a plan this version cannot expand would drop its ledger and
-    strand its calendar entries — that happened to three real sessions on
-    2026-09-11 — so the shape is checked before anything trusts it."""
-    spec, _, ledger = _pushed_plan()
-    current = {"spec": spec, "created": "2026-08-24", "volume": {}, "pushed": ledger}
-    assert training.unreadable_plan(current) is None
-
-    # The description before this one had a goal and an event_date.
-    old = {**current, "spec": {"goal": "cycle_strength", "event_date": "2027-01-31"}}
-    assert training.unreadable_plan(old) == ledger
-    # Empty is still a refusal, not an all-clear: a file with no ledger says
-    # nothing about what is on the calendar.
-    assert training.unreadable_plan({"spec": {}, "sessions": []}) == []

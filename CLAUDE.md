@@ -495,13 +495,10 @@ it. `fit train import` is how you change a plan's *shape*, and refuses to
 replace a plan with future ledger rows (clearing needs Garmin; importing may be
 offline).
 
-**Every `train` command checks the stored file's shape first**
-(`training.unreadable_plan`, via `cli._stored_plan`) and refuses anything but
-`{spec, created, volume, pushed}` with an `end_date` in the spec, listing the
-future ledger rows the file claims. Replacing a file it cannot expand would
-drop its ledger, stranding whatever it put on the calendar with nothing
-tracking it. A missing `pushed` is not an empty ledger either: it says nothing
-about what is scheduled.
+**The ledger is read as `stored["pushed"]`, never `.get("pushed", [])`.** A
+missing ledger is not an empty one: reading it as "nothing scheduled" would let
+`import` replace the file and strand whatever it put on the calendar, so a
+malformed plan file fails loudly instead.
 
 `train refresh` is `clear` then `sync`, for applying new loads to sessions the
 watch already holds. It confirms **before** the clear rather than letting `sync`

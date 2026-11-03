@@ -129,7 +129,7 @@ def _load_session(session_date: str, sport: str | None) -> dict:
         date_cls.today(),
         volume=stored.get("volume"),
     )
-    sessions = training.apply_pushed(derived["sessions"], stored.get("pushed", []))
+    sessions = training.apply_pushed(derived["sessions"], stored["pushed"])
     matches = [
         s
         for s in sessions

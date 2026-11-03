@@ -281,9 +281,9 @@ def garmin_sync(
             Path(tmp_path).unlink(missing_ok=True)
 
     # Only what this run wrote, so a re-sync doesn't repeat the warning.
-    # No plan, or one train commands would refuse, just means nothing to check.
+    # No plan just means nothing to check.
     stored = storage.read_training_plan()
-    if not stored or training.unreadable_plan(stored) is not None:
+    if not stored:
         return
     rides = [
         {"date": a["date"], "workout_id": workout_ids[a["id"]]}
@@ -469,35 +469,7 @@ def _stored_plan() -> dict:
     if not stored:
         display.render_training_missing()
         raise typer.Exit(code=1)
-    _exit_if_unreadable(stored)
     return stored
-
-
-def _exit_if_unreadable(stored: dict) -> None:
-    """Refuse a plan file in an older format, naming what it claims is on the
-    Garmin calendar (see training.unreadable_plan)."""
-    stranded = training.unreadable_plan(stored)
-    if stranded is None:
-        return
-    typer.echo(
-        "The stored plan is in an older format this version cannot expand. "
-        "Replacing it would leave what it put on the Garmin calendar with "
-        "nothing tracking it.",
-        err=True,
-    )
-    for entry in stranded:
-        if entry["date"] >= date_cls.today().isoformat():
-            typer.echo(
-                f"  {entry['date']}  {entry.get('workout_name', '')} "
-                f"(schedule id {entry.get('schedule_id')})",
-                err=True,
-            )
-    typer.echo(
-        f"Unschedule anything listed above in Garmin Connect, then delete "
-        f"{storage.training_plan_path()} and import again.",
-        err=True,
-    )
-    raise typer.Exit(code=1)
 
 
 def _expand(stored: dict, activities: list[dict]) -> dict:
@@ -511,7 +483,7 @@ def _expand(stored: dict, activities: list[dict]) -> dict:
         date_cls.today(),
         volume=stored.get("volume"),
     )
-    sessions = training.apply_pushed(plan["sessions"], stored.get("pushed", []))
+    sessions = training.apply_pushed(plan["sessions"], stored["pushed"])
     plan["sessions"] = training.match_completion(sessions, activities)
     return plan
 
@@ -543,11 +515,7 @@ def train_import(
 
     existing = storage.read_training_plan()
     if existing:
-        # Check the shape before the ledger: an older plan file has no
-        # "pushed" key at all, and reading that absence as an empty ledger is
-        # what strands its calendar entries.
-        _exit_if_unreadable(existing)
-        pending = training.future_pushed(existing.get("pushed", []), date_cls.today())
+        pending = training.future_pushed(existing["pushed"], date_cls.today())
         if pending:
             typer.echo(
                 f"The active plan still has {len(pending)} future session(s) on the "
@@ -606,7 +574,7 @@ def train_sync(
     window_days = days or storage.read_config()["train_sync_window_days"]
     today = date_cls.today()
     due = training.sync_window(plan["sessions"], today, window_days)
-    already = len(stored.get("pushed", []))
+    already = len(stored["pushed"])
     if not due:
         display.render_training_synced(
             {
@@ -669,7 +637,7 @@ def train_clear() -> None:
     stored = _stored_plan()
     today = date_cls.today()
     sessions = _expand(stored, _load_activities())["sessions"]
-    pending = training.future_pushed(stored.get("pushed", []), today, sessions)
+    pending = training.future_pushed(stored["pushed"], today, sessions)
     if not pending:
         display.render_training_cleared({"cleared": 0, "failed": []})
         return
@@ -709,9 +677,7 @@ def train_refresh(
     """
     stored = _stored_plan()
     sessions = _expand(stored, _load_activities())["sessions"]
-    pending = training.future_pushed(
-        stored.get("pushed", []), date_cls.today(), sessions
-    )
+    pending = training.future_pushed(stored["pushed"], date_cls.today(), sessions)
     # Confirm before the clear, not between the two steps: `sync` asks for
     # itself, and answering no there would leave the calendar already emptied.
     if not yes and not typer.confirm(

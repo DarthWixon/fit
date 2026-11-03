@@ -857,21 +857,3 @@ def future_pushed(
         for e in pushed
         if e["date"] >= today.isoformat() and (e["date"], e["sport"]) not in done
     ]
-
-
-def unreadable_plan(stored: dict) -> list[dict] | None:
-    """None when `stored` is the current shape — {spec, created, volume,
-    pushed}, with a spec that has an end_date — else the ledger rows it claims
-    are on the Garmin calendar.
-
-    A file this version cannot expand must be refused rather than replaced:
-    replacing it drops its ledger, stranding whatever it put on the calendar
-    with nothing tracking it. That happened to three real sessions on
-    2026-09-11. The returned list may be empty; the caller must refuse either
-    way, since a file with no ledger says nothing about what is scheduled.
-    """
-    if {"spec", "created", "volume", "pushed"} <= set(stored) and "end_date" in (
-        stored["spec"]
-    ):
-        return None
-    return list(stored.get("pushed", []))
