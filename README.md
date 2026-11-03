@@ -136,7 +136,7 @@ fit train import plan.yaml     # expand it into a dated schedule
 fit train show --weeks 2       # what's coming, and what you've already done
 fit train sync --dry-run       # exactly what would be pushed, without pushing
 fit train sync                 # push + schedule the next 14 days on Garmin
-fit train clear                # take future sessions back off the calendar
+fit train clear                # take future sessions off the calendar and library
 fit train refresh              # clear + sync: re-push at your current loads
 ```
 

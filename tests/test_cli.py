@@ -45,10 +45,13 @@ def test_refresh_re_pushes_what_it_unschedules(tmp_path, monkeypatch):
         }
     )
 
-    unscheduled, pushed = [], []
+    unscheduled, deleted, pushed = [], [], []
     monkeypatch.setattr(garmin, "login", lambda: object())
     monkeypatch.setattr(
         garmin, "unschedule_workout", lambda client, sid: unscheduled.append(sid)
+    )
+    monkeypatch.setattr(
+        garmin, "delete_workout", lambda client, wid: deleted.append(wid)
     )
 
     def push(client, payload):
@@ -66,6 +69,8 @@ def test_refresh_re_pushes_what_it_unschedules(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
 
     assert unscheduled == [200, 201]
+    # The cleared workouts leave the library too, not just the calendar.
+    assert deleted == [100, 101]
     after = {training.ledger_key(e): e for e in storage.read_training_plan()["pushed"]}
     for entry in ledger:
         back = after.get((entry["date"], entry["sport"]))

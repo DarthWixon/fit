@@ -88,6 +88,11 @@ def unschedule_workout(client, scheduled_workout_id):
     return client.unschedule_workout(scheduled_workout_id)
 
 
+def delete_workout(client, workout_id):
+    """Remove one workout from the Garmin library. Takes the *workout* id."""
+    return client.delete_workout(workout_id)
+
+
 def list_recent_activities(client, start_date: date, end_date: date) -> list[dict]:
     """Raw activity summaries in range — not yet fit's activity shape."""
     return client.get_activities_by_date(start_date.isoformat(), end_date.isoformat())

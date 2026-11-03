@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -302,7 +302,7 @@ train = [
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=25.0,<26.0" },
     { name = "fitparse", specifier = ">=1.2,<2.0" },
-    { name = "garminconnect", marker = "extra == 'garmin'", specifier = ">=0.2,<1.0" },
+    { name = "garminconnect", marker = "extra == 'garmin'", specifier = ">=0.3,<1.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=6.0,<7.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<9.0" },
     { name = "pyyaml", marker = "extra == 'train'", specifier = ">=6.0,<7.0" },

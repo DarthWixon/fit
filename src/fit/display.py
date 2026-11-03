@@ -38,7 +38,7 @@ def render_usage() -> None:
         "fit train import <plan.yaml>                date the plan from a description\n"
         "fit train show [--weeks N]                  the plan, with what's done\n"
         "fit train sync [--days N] [--dry-run]       push + schedule the next sessions\n"
-        "fit train clear                             unschedule future sessions\n"
+        "fit train clear                             remove future sessions from Garmin\n"
         "fit train refresh [--days N]                clear + sync at current loads\n"
         "fit history [N]                             last N activities (default 10)\n"
         "fit calendar                                active days, last 2 months\n"

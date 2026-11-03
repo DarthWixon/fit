@@ -266,10 +266,21 @@ confirm it; `cli.train_sync` stores it into the ledger and `train clear` needs i
 Were it wrong, the row would take `None`, `train clear` would skip the unschedule
 call, drop the row anyway, and strand a calendar entry with nothing tracking it.
 
-**A pushed workout is frozen.** There is no update-or-delete endpoint, so
-anything already on the calendar can't be rewritten locally without
-desynchronising the two. Unscheduling clears the calendar but leaves the
-workout in the Garmin library.
+**A pushed workout is frozen.** There is no update endpoint, so anything
+already on the calendar can't be rewritten locally without desynchronising the
+two. Changing one means taking it off and pushing a new one.
+
+**Unscheduling and deleting are separate calls.** `unschedule_workout` takes
+the session off the calendar and leaves the workout in the library;
+`delete_workout` (garminconnect 0.3+, hence the extra's floor) removes it from
+the library. `train clear` does both, in that order: whether a library delete
+also clears the calendar is undocumented, and a calendar entry nothing tracks
+is worse than a workout left in the library. So the ledger row goes once the
+unschedule succeeds, and a failed delete is reported but not retried.
+`delete_workout` was proven live on 2026-11-03, removing 106 of fit's own
+workouts; Garmin refuses it (400) for a workout belonging to a Garmin Coach
+plan (`atpPlanId`), which fit never creates. What a delete does to the
+calendar is still unchecked.
 
 ### Payload schema (`planner.py`)
 
@@ -514,9 +525,9 @@ push a duplicate onto the calendar it was ridden from.
 
 `train sync` appends a ledger row per pushed session — the row stores the
 `params` and name that were **actually sent**, which is what lets a pushed
-session render frozen. `train clear` removes future rows, after which those
-sessions simply re-derive as ordinary planned ones; there is no per-session
-state to reset.
+session render frozen. `train clear` unschedules and deletes each future
+session's workout and removes its row, after which those sessions simply
+re-derive as ordinary planned ones; there is no per-session state to reset.
 
 `train sync` prints the batch and **asks before `garmin.login()` is even
 called** — `login()` resumes silently and one sync creates a workout *and* a

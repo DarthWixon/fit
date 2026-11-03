@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-garmin = ["garminconnect>=0.2,<1.0"]
+garmin = ["garminconnect>=0.3,<1.0"]  # 0.3 added delete_workout
 # `fit train import` parses a YAML plan description; show/sync/clear read the
 # stored JSON and need nothing extra. Deliberately opt-in, like [garmin].
 train = ["pyyaml>=6.0,<7.0"]

@@ -633,7 +633,7 @@ def train_sync(
 
 @train_app.command(name="clear")
 def train_clear() -> None:
-    """Remove the plan's future sessions from the Garmin calendar."""
+    """Remove the plan's future sessions from the Garmin calendar and library."""
     stored = _stored_plan()
     today = date_cls.today()
     sessions = _expand(stored, _load_activities())["sessions"]
@@ -645,16 +645,27 @@ def train_clear() -> None:
     client = _login_or_exit()
     cleared, failed = 0, []
     for entry in pending:
+        label = f"{entry['date']} {entry.get('workout_name', '')}"
         try:
             if entry.get("schedule_id") is not None:
                 garmin.unschedule_workout(client, entry["schedule_id"])
-            # Dropped from the ledger, so it re-derives as an ordinary planned
-            # session again — there is no per-session state to reset.
-            stored["pushed"].remove(entry)
-            cleared += 1
         except Exception as exc:
-            failed.append(f"{entry['date']} {entry.get('workout_name', '')}: {exc}")
+            failed.append(f"{label}: {exc}")
+            continue
+        # Dropped from the ledger, so it re-derives as an ordinary planned
+        # session again — there is no per-session state to reset.
+        stored["pushed"].remove(entry)
         storage.write_training_plan(stored)
+        cleared += 1
+        # Unscheduled first, deleted second: whether a library delete also
+        # clears the calendar is undocumented, and a calendar entry nothing
+        # tracks is worse than a workout left in the library.
+        try:
+            garmin.delete_workout(client, entry["workout_id"])
+        except Exception as exc:
+            failed.append(
+                f"{label}: off the calendar, but still in the library ({exc})"
+            )
 
     display.render_training_cleared({"cleared": cleared, "failed": failed})
 
