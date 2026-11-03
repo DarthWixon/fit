@@ -86,7 +86,7 @@ def dashboard(
         None,
         "--sport",
         help="Only show this sport for this run: run, cycle, walk, hike, swim, "
-        "squash, canoe (overrides the sports config)",
+        "squash, canoe, strength (overrides the sports config)",
     ),
     timerange: str = typer.Option(
         None,
@@ -131,7 +131,7 @@ def dash(
         None,
         "--sport",
         help="Only show this sport for this run: run, cycle, walk, hike, swim, "
-        "squash, canoe (overrides the sports config)",
+        "squash, canoe, strength (overrides the sports config)",
     ),
     timerange: str = typer.Option(
         None,
@@ -353,8 +353,8 @@ def plan(
         ...,
         "--type",
         help=(
-            "intervals | tempo | baseline | straight_sets "
-            "(availability varies by sport)"
+            "intervals | tempo | baseline | easy | long | endurance | "
+            "continuous | straight_sets (availability varies by sport)"
         ),
     ),
     push: bool = typer.Option(
@@ -503,8 +503,8 @@ def _exit_if_unreadable(stored: dict) -> None:
 def _expand(stored: dict, activities: list[dict]) -> dict:
     """Re-derive the schedule from the stored description, overlay the Garmin
     ledger, and mark what has been completed. Every `fit train` command starts
-    here — the plan is never read back off disk, so its targets always reflect
-    current fitness (see training.expand_plan)."""
+    here — the plan is never read back off disk, so its loads always reflect
+    what was actually lifted (see training.expand_plan)."""
     plan = training.expand_plan(
         stored["spec"],
         activities,

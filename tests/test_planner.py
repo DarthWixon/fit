@@ -485,8 +485,8 @@ def test_ftp_prefers_a_real_twenty_minute_window_over_a_ride_average():
 @pytest.mark.parametrize("seconds,counts", [(1139, False), (1140, True), (1199, True)])
 def test_a_bare_twenty_minute_test_is_not_disqualified_by_a_second(seconds, counts):
     """A watch stopped on the beep records 1199s, and rejecting a test that was
-    actually done is the worst failure available — retarget would report no
-    change and never say why."""
+    actually done is the worst failure available — the default would ignore it
+    and never say why."""
     ride = [
         {
             "type": "cycle",
@@ -563,8 +563,8 @@ def _steps(sport, workout_type, params):
 
 
 def test_straight_sets_payload_matches_the_live_schema():
-    """Field-for-field against the workout dumped from Connect on 2026-09-05
-    (docs/STRENGTH_PLAN.md Findings): one repeat group per exercise, reps as
+    """Field-for-field against a workout dumped from Connect on 2026-09-05
+    (scripts/dump_workout.py): one repeat group per exercise, reps as
     the end condition, load on the step with targetType left no.target."""
     steps = _steps("strength", "straight_sets", _straight_sets_params())
 
@@ -671,7 +671,7 @@ def test_strength_estimate_counts_reps_and_rests():
     # 3 x (10 reps x 4s + 60s rest)
     assert planner.estimate_seconds("strength", "straight_sets", params) == 300
     # A press-lap rest has no duration to read, so it falls back rather than
-    # counting as free — otherwise training.py would size the week too small.
+    # counting as free — otherwise the payload would understate the session.
     assert planner.estimate_seconds(
         "strength", "straight_sets", {**params, "rest": 0}
     ) == 3 * (40 + planner._FALLBACK_REST_SECONDS)

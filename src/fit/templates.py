@@ -7,9 +7,9 @@ the engine that expands it. training.py says what the engine does with it.
 
 TITLE = "StrongLifts 5x5 with easy riding"
 
-# Ride sizes grow by this much a week, compounding. There is no event to peak
-# for, so no recovery weeks or taper either: the bar moves only by StrongLifts'
-# own rule, and the rides climb steadily from the opening week.
+# Ride sizes grow by this much a week, compounding. The plan has no event to
+# peak for, so the rides climb steadily from the opening week and the bar moves
+# only by StrongLifts' own rule.
 WEEKLY_RAMP_PCT = 4
 
 # Training days when the description does not say; Tuesday is the one day off.

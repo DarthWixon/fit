@@ -9,4 +9,3 @@ test-data/
 # examples/data/ is a demo FIT_DATA_DIR; running fit against it generates these
 examples/data/config
 examples/data/pbs.json
-examples/data/gpx/

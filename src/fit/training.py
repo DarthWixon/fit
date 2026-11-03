@@ -3,7 +3,7 @@ dated schedule, with lifting loads derived from the user's history. No I/O —
 cli.py reads the text and hands it in.
 
 **Nothing derived is stored.** expand_plan re-runs on every command, so loads
-always reflect what was actually lifted and there is no retarget step. The one
+always reflect what was actually lifted and nothing has to be re-run. The one
 thing that cannot be derived — what was pushed to Garmin — lives in a small
 ledger (see "the Garmin ledger" below), and a pushed session renders from what
 was actually sent.
@@ -591,7 +591,7 @@ def expand_plan(
     a flat list of dated sessions, oldest first). reference is today.
 
     Nothing here is persisted — `fit train` re-runs this on every command, so
-    loads track what you have lifted with no retarget step (see
+    loads track what you have lifted with nothing to re-run (see
     storage.write_training_plan). `volume`, when given, is the
     derive_volume_scale result pinned at import: the *starting* volume is a
     decision made once about where you were then, and re-measuring it weekly

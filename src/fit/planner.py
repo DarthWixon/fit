@@ -18,12 +18,13 @@ Verified by live round-trip (scripts/diff_workout.py):
   cycle/long (easy)      2026-10-13  untargeted one-step ride, as now sent
   strength warmup ramp   2026-10-13  lift category + weightValue together on
                                      a warmup step; dated 63-char name kept
+  cycle/endurance        2026-11-03  untargeted one-step timed ride
+  strength 5x5 + pull-up 2026-11-03  a strength step's exerciseName
+                                     (JUMPING_PULL_UPS); dated 94-char name
 Still unverified: run easy/long and swim continuous, which pair a
 nested-proven pace.zone with a power-proven top-level position.
-Also unverified (2026-10-21): cycle/intervals with `sets` (sibling repeat
-groups), a strength step's exerciseName, and dated strength names of ~71
-chars. From 2026-10-29: the ROW and PLANK categories, and the plank's
-STRAIGHT_ARM_PLANK_WITH_SHOULDER_TOUCH exerciseName, in a 78-char dated name.
+Also unverified: cycle/intervals with `sets` (sibling repeat groups), the ROW
+category, and dated strength names past 94 chars (workout B reaches 98).
 Re-run the diff after first pushing any unverified combo, and update this.
 """
 
@@ -36,9 +37,9 @@ SPORT_TYPES = {
     "run": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
     "cycle": {"sportTypeId": 2, "sportTypeKey": "cycling", "displayOrder": 2},
     "swim": {"sportTypeId": 4, "sportTypeKey": "swimming", "displayOrder": 3},
-    # Copied from a live strength workout's dump (see docs/STRENGTH_PLAN.md
-    # Findings), except displayOrder: that dump said 4, but every push has
-    # come back stored as 3 (seen 2026-10-13), so send what Garmin keeps.
+    # Copied from a live strength workout's dump, except displayOrder: that
+    # dump said 4, but every push comes back stored as 3 (seen 2026-10-13),
+    # so send what Garmin keeps.
     "strength": {
         "sportTypeId": 5,
         "sportTypeKey": "strength_training",
@@ -71,7 +72,7 @@ STRENGTH_CATEGORIES = (
 
 # Core work is prescribed but not progressed, so a workout name says only that
 # it is there: listing three accessories would push a dated name well past the
-# 63 characters Garmin has been seen to keep.
+# 94 characters Garmin has been seen to keep.
 _CORE_CATEGORIES = ("hip_stability", "core", "hyperextension", "plank")
 
 # Quality workouts (intervals/tempo/baseline) are warmup -> main ->
@@ -126,8 +127,8 @@ RIDE_POWER_MIN_SECONDS = 1140
 # Assumed for estimatedDurationInSecs when a distance step has no pace target.
 _FALLBACK_SPEED_MPS = {"run": 1000 / 360, "swim": 100 / 120, "cycle": 25 / 3.6}
 
-# Strength equivalents: reps and lap-button rests carry no duration, and
-# training.py sums estimate_seconds, so a gym session would otherwise be free.
+# Strength equivalents: reps and lap-button rests carry no duration, so a gym
+# session's estimatedDurationInSecs would otherwise be zero.
 _FALLBACK_SECONDS_PER_REP = 4
 _FALLBACK_REST_SECONDS = 90
 
@@ -156,9 +157,8 @@ _WEIGHT_UNIT_KG = {"unitId": 8, "unitKey": "kilogram", "factor": 1000.0}
 _LAP_BUTTON_END_VALUE = 10.0
 
 # A lifting warmup is a ramp to the working weight, not cardio: the empty bar,
-# then percentages of the work set at descending reps. Rounded to 2.5kg rather
-# than training's whole-kg-or-2.5kg rule — a warmup set does not need 1kg
-# precision, and planner may not import training.
+# then percentages of the work set at descending reps. Rounded to a fixed
+# 2.5kg rather than each lift's own increment: planner may not import training.
 _BAR_WEIGHT_KG = 20.0
 # A lift whose ramp starts above the empty bar: the bar alone is too light to
 # deadlift with proper form.
@@ -566,7 +566,7 @@ _PARAM_SPECS = {
             "parse": _optional_rest,
         },
     ],
-    # The e1RM re-test. No load, so no ramp can be derived: the lighter sets
+    # The e1RM test. No load, so no ramp can be derived: the lighter sets
     # are the athlete's own, and _strength_pbs reads only the best set.
     ("strength", "baseline"): [
         {
@@ -1473,8 +1473,8 @@ def derive_target(sport: str, recent: list[dict]) -> dict:
 
 def _rejection_note(derived: dict) -> dict | None:
     """A why-only rec for a measurement the guard threw out, else None. Without
-    it `fit plan` fell back to the static default in silence while `fit train`
-    reported the same rejection."""
+    it `fit plan` would fall back to the static default in silence, and a
+    reading that was measured and thrown out would look like no data at all."""
     if not derived.get("rejected"):
         return None
     return {"why": derived["why"]}

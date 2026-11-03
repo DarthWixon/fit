@@ -36,7 +36,7 @@ def test_parse_plan_spec_defaults():
         "end_date: 2026-11-15\n",  # no start_date
         "start_date: 2026-08-24\n",  # no end_date
         "start_date: 2026-11-15\nend_date: 2026-08-24\n",  # backwards
-        PLAN + "goal: cycle_strength\n",  # the old description's keys are gone
+        PLAN + "goal: cycle_strength\n",  # not a description key
         PLAN + "days_per_week: 9\n",
         PLAN + "days_per_week: [6, 5]\n",  # frequency only builds
         PLAN + "days_per_week: true\n",

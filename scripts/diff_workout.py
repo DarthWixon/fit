@@ -113,7 +113,7 @@ def _load_session(session_date: str, sport: str | None) -> dict:
     it, then overlaid with the ledger. That overlay matters: for a session
     already pushed it restores the `params` that were *actually sent*, so the
     payload rebuilt below is the one Garmin was given rather than one built
-    from today's fitness.
+    from today's loads.
     """
     from datetime import date as date_cls
 

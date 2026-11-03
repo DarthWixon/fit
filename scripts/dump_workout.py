@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
 """Dump a Garmin Connect workout as fit's `garmin.get_workout` returns it.
 
-Written for one job: strength. planner.py's cardio payloads were replicated
-from the reference models in garminconnect's workout.py, but that module
-carries nothing strength-specific — it knows the sport id
-(SportType.STRENGTH_TRAINING = 5) and that a reps end condition exists
-(ConditionType.REPS = 10), and models no exercise field and no weight target
-at all. Its silence is not evidence the API has none: ExecutableStep is
-`extra="allow"`, so it passes through whatever Garmin sends.
+For reading Garmin's workout schema off the account when planner.py needs a
+shape it does not build yet. garminconnect's workout.py models are no guide
+here: they model no exercise field and no weight target, yet ExecutableStep is
+`extra="allow"`, so the API passes through whatever Garmin sends. Strength's
+whole payload shape was learned this way.
 
-So the schema has to be read off the account:
-
-  1. In Connect (web), build a small strength workout by hand — two different
-     exercises, three sets each, a target weight on at least one of them.
-     Two exercises matters: it is the only way to see how they compose inside
-     one workout's step list.
+  1. In Connect (web), build a small workout by hand with the shape you need —
+     for strength, two different exercises with a target weight on one, since
+     that is the only way to see how exercises compose in one step list.
   2. Find its id. `--list` prints your recent workouts with ids, or take it
      from the URL: connect.garmin.com/modern/workout/<id>.
-  3. scripts/dump_workout.py <id> --out strength-workout.json
+  3. scripts/dump_workout.py <id> --out workout.json
 
-Then record what came back in docs/STRENGTH_PLAN.md's Findings section —
-specifically what carries the exercise identity, whether a weight target
-exists and under what key, and how multiple exercises sit in the step list.
+Record what it shows in CLAUDE.md's "Payload schema" section and planner.py's
+docstring, then confirm what planner.py builds with scripts/diff_workout.py.
 
 This only ever reads. It does not create, schedule or modify anything on the
 account. Its sibling scripts/diff_workout.py is the other direction: it
@@ -30,7 +24,7 @@ compares a payload fit built against what Garmin stored.
 Usage:
     scripts/dump_workout.py --list
     scripts/dump_workout.py 123456789
-    scripts/dump_workout.py 123456789 --out strength-workout.json
+    scripts/dump_workout.py 123456789 --out workout.json
 """
 
 import argparse
