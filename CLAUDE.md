@@ -60,7 +60,7 @@ for itself; the code holds its own API — don't look for function signatures he
 `~/.fit`. Everything else builds on it.
 
 One file per activity (not a JSONL) so edit/delete need no read-modify-write,
-`ls`/`cat`/`rm` work, corruption is isolated, and rsync only moves what changed.
+`ls`/`cat`/`rm` work, and corruption is isolated.
 
 **Original files are not kept.** An import parses what it needs and discards the
 source. Consequences below.
@@ -764,3 +764,11 @@ rescaled to a baseline of 100 — training *load*, not fitness — and at this
 volume one busy week moved it 15%, reading as "12% fitter" in a fortnight. A
 flat 6.0 MET for strength supplied the whole rise that time. Don't bring back a
 single fitness number; the volume sparkline already shows load honestly.
+
+**Cross-machine sync was retired on 2026-11-03.** The data dir had been shared
+between machines by a script outside the repo that union-merged files by name
+through Proton Drive. A merge like that cannot carry an edit or a delete, and
+the training-plan ledger had to be pinned to one owner machine, or a `train
+sync` elsewhere put workouts on the calendar with nothing tracking them. fit
+runs on one machine; backup is zipping the data dir. Don't design modules
+around sync, machine identity or merging.
