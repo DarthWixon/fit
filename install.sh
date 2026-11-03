@@ -4,6 +4,9 @@
 #   - a `uv tool install` of fit itself, so plain `fit` works on PATH
 # Mirrors the steps in README.md.
 #
+# Both get the train extra (PyYAML): `fit train import` needs it, and without
+# it the training tests skip themselves.
+#
 # Usage:
 #   ./install.sh            # install fit + dev deps (pytest)
 #   ./install.sh --garmin   # also install the garminconnect extra
@@ -12,11 +15,11 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-tool_extras=""
-venv_extras="dev"
+tool_extras="train"
+venv_extras="dev,train"
 if [[ "${1:-}" == "--garmin" ]]; then
-    tool_extras="[garmin]"
-    venv_extras="dev,garmin"
+    tool_extras="garmin,train"
+    venv_extras="dev,garmin,train"
 fi
 
 if ! command -v uv >/dev/null 2>&1; then
@@ -36,7 +39,7 @@ echo "==> Installing fit[$venv_extras] into .venv (for running tests)"
 uv pip install -e ".[$venv_extras]"
 
 echo "==> Installing fit as a uv tool (puts plain \`fit\` on your PATH)"
-uv tool install --editable ".${tool_extras}" --force
+uv tool install --editable ".[$tool_extras]" --force
 
 echo "==> Smoke test"
 fit usage

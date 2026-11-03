@@ -24,6 +24,10 @@ git config core.hooksPath hooks  # enable the pre-commit format check
 The `core.hooksPath` line is needed once per clone — git does not pick up
 `hooks/` on its own (see [Formatting](#formatting) below).
 
+`./install.sh` does the `.venv` steps above with the `train` extra too, and
+puts `fit` on your PATH as an editable `uv tool install`, so source changes
+apply immediately. `./install.sh --garmin` adds the Garmin extra to both.
+
 Without uv, any Python ≥3.11 works:
 
 ```bash
