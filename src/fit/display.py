@@ -436,24 +436,28 @@ def render_new_pb_messages(new_pbs: list[dict]) -> None:
         parsed = _parse_pb_key(pb["key"])
         value = pb["value"]
         if parsed["category"] == "longest_distance":
-            console.print(f"New longest distance: {value:.1f}km")
+            console.print(f"New longest distance: {value:.1f}km", highlight=False)
         elif parsed["category"] == "milestone":
             console.print(
-                f"New fastest {parsed['label']}: {_format_seconds_colon(value)}"
+                f"New fastest {parsed['label']}: {_format_seconds_colon(value)}",
+                highlight=False,
             )
         elif parsed["category"] == "split":
             console.print(
-                f"New fastest {parsed['label']} split: {_format_seconds_colon(value)}"
+                f"New fastest {parsed['label']} split: {_format_seconds_colon(value)}",
+                highlight=False,
             )
         elif parsed["category"] == "elevation":
-            console.print(f"New most elevation gain: {value:.0f}m")
+            console.print(f"New most elevation gain: {value:.0f}m", highlight=False)
         elif parsed["category"] == "strength_heaviest":
             console.print(
-                f"New heaviest {parsed['label'].replace('_', ' ')}: {value:g}kg"
+                f"New heaviest {parsed['label'].replace('_', ' ')}: {value:g}kg",
+                highlight=False,
             )
         elif parsed["category"] == "strength_e1rm":
             console.print(
-                f"New estimated 1RM {parsed['label'].replace('_', ' ')}: {value:g}kg"
+                f"New estimated 1RM {parsed['label'].replace('_', ' ')}: {value:g}kg",
+                highlight=False,
             )
 
 
