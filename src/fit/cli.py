@@ -700,7 +700,7 @@ def train_refresh(
     # Confirm before the clear, not between the two steps: `sync` asks for
     # itself, and answering no there would leave the calendar already emptied.
     if not yes and not typer.confirm(
-        f"Unschedule {len(pending)} future session(s) and re-push at current " "loads?",
+        f"Unschedule {len(pending)} future session(s) and re-push at current loads?",
         default=False,
     ):
         typer.echo("Nothing changed.")

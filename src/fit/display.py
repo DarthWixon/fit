@@ -649,5 +649,5 @@ def render_training_cleared(summary: dict) -> None:
 
 def render_training_missing() -> None:
     console.print(
-        "No active training plan. Create one with:\n" "  fit train import <plan.yaml>"
+        "No active training plan. Create one with:\n  fit train import <plan.yaml>"
     )

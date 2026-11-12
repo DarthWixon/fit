@@ -20,8 +20,12 @@ garmin = ["garminconnect>=0.3,<1.0"]  # 0.3 added delete_workout
 train = ["pyyaml>=6.0,<7.0"]
 dev = [
     "pytest>=8.0,<9.0",
-    "black>=25.0,<26.0",
-    "isort>=6.0,<7.0",
+    # Formats and lints in one tool, replacing black + isort.
+    "ruff>=0.17,<0.18",
+    # Type checks the annotations, which nothing else verifies. The [nodejs]
+    # extra ships Node as a wheel, so pyright needs no system Node and does
+    # not download one on first run.
+    "pyright[nodejs]>=1.1.414,<1.2",
 ]
 
 [project.scripts]
@@ -30,10 +34,20 @@ fit = "fit.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/fit"]
 
-# black needs no [tool.black] section — its defaults (88-column lines, target
-# versions inferred from requires-python) are exactly what the codebase uses.
-[tool.isort]
-profile = "black"
+# ruff format's defaults (88 columns, target inferred from requires-python)
+# match the black style the codebase was written in.
+[tool.ruff.lint]
+# E4/E7/E9 + F are ruff's defaults; I sorts imports (was isort); B catches
+# likely bugs; UP keeps syntax current for 3.11. No E501: the formatter owns
+# line length, and long strings it cannot split are left alone.
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+
+[tool.pyright]
+include = ["src", "tests", "scripts"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
 
 [tool.pytest.ini_options]
 # fitparse (pinned <2.0) uses deprecated datetime APIs internally; not ours to fix.

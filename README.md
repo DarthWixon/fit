@@ -16,8 +16,8 @@ no cloud, no sync. See `CLAUDE.md` for the full design notes.
 ```bash
 git clone <repo-url> fit && cd fit
 uv venv                        # creates .venv with the pinned Python version
-uv pip install -e '.[dev]'     # the app plus pytest, black, isort
-git config core.hooksPath hooks  # enable the pre-commit format check
+uv pip install -e '.[dev]'     # the app plus pytest, ruff, pyright
+git config core.hooksPath hooks  # enable the pre-commit checks
 .venv/bin/fit usage            # smoke test
 ```
 
@@ -214,12 +214,13 @@ git restore examples/data && git clean -fdq examples/data
 .venv/bin/pytest
 ```
 
-## Formatting
+## Formatting, linting and types
 
-Code is formatted with black (default settings) and isort (black profile).
-`hooks/pre-commit` checks staged `.py` files and aborts the commit if either
-would change them — it never reformats behind your back, so a commit contains
-exactly what you staged. Enable it once per clone:
+Code is formatted and linted with ruff (rules in `pyproject.toml`) and type
+checked with pyright in standard mode. `hooks/pre-commit` checks staged `.py`
+files with ruff, runs pyright over the whole project, and aborts the commit on
+any failure — it never reformats behind your back, so a commit contains exactly
+what you staged. Enable it once per clone:
 
 ```bash
 git config core.hooksPath hooks
@@ -228,7 +229,8 @@ git config core.hooksPath hooks
 To fix what it flags:
 
 ```bash
-.venv/bin/isort src tests && .venv/bin/black src tests
+.venv/bin/ruff check --fix src tests scripts && .venv/bin/ruff format src tests scripts
+.venv/bin/pyright
 ```
 
 Without the `dev` extra installed the hook skips itself with a hint rather than
