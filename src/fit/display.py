@@ -2,6 +2,7 @@
 delegated to compute.py.
 """
 
+from collections.abc import Callable
 from datetime import date
 
 from rich.console import Console
@@ -415,50 +416,58 @@ def _date_key_for(key: str) -> str | None:
     return _parse_pb_key(key)["date_key"]
 
 
-def _format_pb_metric(key: str, value) -> tuple[str, str]:
+def _pb_label(parsed: dict) -> str | None:
+    """The PB's name in lower case, shared by the PB table and the "New ..."
+    messages; None for a key neither knows."""
+    category, label = parsed["category"], parsed["label"]
+    if category == "milestone":
+        return f"fastest {label}"
+    if category == "split":
+        return f"fastest {label} split"
+    if category == "longest_distance":
+        return "longest distance"
+    if category == "elevation":
+        return "most elevation gain"
+    if category == "strength_heaviest":
+        return f"heaviest {label.replace('_', ' ')}"
+    if category == "strength_e1rm":
+        return f"best {label.replace('_', ' ')} e1RM"
+    return None
+
+
+def _format_pb_value(
+    category: str, value: float, format_time: Callable[[float], str]
+) -> str:
+    """format_time differs by caller: the table's 21m40s, the messages' 21:40."""
+    if category in ("milestone", "split"):
+        return format_time(value)
+    if category == "longest_distance":
+        return f"{value:.1f}km"
+    if category == "elevation":
+        return f"{value:.0f}m"
+    return f"{value:g}kg"
+
+
+def _format_pb_metric(key: str, value: float) -> tuple[str, str]:
     parsed = _parse_pb_key(key)
-    if parsed["category"] == "milestone":
-        return f"Fastest {parsed['label']}", _format_duration(value)
-    if parsed["category"] == "longest_distance":
-        return "Longest distance", f"{value:.1f}km"
-    if parsed["category"] == "elevation":
-        return "Most elevation gain", f"{value:.0f}m"
-    if parsed["category"] == "strength_heaviest":
-        return f"Heaviest {parsed['label'].replace('_', ' ')}", f"{value:g}kg"
-    if parsed["category"] == "strength_e1rm":
-        return f"Best {parsed['label'].replace('_', ' ')} e1RM", f"{value:g}kg"
-    return key, str(value)
+    label = _pb_label(parsed)
+    if label is None:
+        return key, str(value)
+    return (
+        label[0].upper() + label[1:],
+        _format_pb_value(parsed["category"], value, _format_duration),
+    )
 
 
 def render_new_pb_messages(new_pbs: list[dict]) -> None:
     """detect_new_pbs' entries as "New fastest 5k: 21:40"-style lines."""
     for pb in new_pbs:
         parsed = _parse_pb_key(pb["key"])
-        value = pb["value"]
-        if parsed["category"] == "longest_distance":
-            console.print(f"New longest distance: {value:.1f}km", highlight=False)
-        elif parsed["category"] == "milestone":
-            console.print(
-                f"New fastest {parsed['label']}: {_format_seconds_colon(value)}",
-                highlight=False,
-            )
-        elif parsed["category"] == "split":
-            console.print(
-                f"New fastest {parsed['label']} split: {_format_seconds_colon(value)}",
-                highlight=False,
-            )
-        elif parsed["category"] == "elevation":
-            console.print(f"New most elevation gain: {value:.0f}m", highlight=False)
-        elif parsed["category"] == "strength_heaviest":
-            console.print(
-                f"New heaviest {parsed['label'].replace('_', ' ')}: {value:g}kg",
-                highlight=False,
-            )
-        elif parsed["category"] == "strength_e1rm":
-            console.print(
-                f"New estimated 1RM {parsed['label'].replace('_', ' ')}: {value:g}kg",
-                highlight=False,
-            )
+        label = _pb_label(parsed)
+        if label is None:
+            continue
+        value = _format_pb_value(parsed["category"], pb["value"], _format_seconds_colon)
+        console.print(f"New {label}: {value}", highlight=False)
 
 
 def render_plan_recommendations(recs: dict) -> None:
