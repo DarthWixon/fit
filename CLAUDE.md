@@ -36,8 +36,10 @@ for itself; the code holds its own API — don't look for function signatures he
 - Keep the dependency footprint minimal. Check stdlib and existing deps first.
 - Everything in `examples/` and `tests/data/` is synthetic. Real personal data
   never enters the repo — keep it outside and point `FIT_DATA_DIR` at it.
-- **Delete a branch once it is merged to `main`**, locally and on `origin`,
-  straight after pushing `main`.
+- **Commit and push straight to `main`.** This is a single-user repo, so no
+  branch is needed; this overrides the global rule to branch first. If a branch
+  is used anyway, delete it once it is merged to `main`, locally and on
+  `origin`, straight after pushing `main`.
 
 **Dependencies**: Python 3.11+, `typer`, `rich`, `fitparse`, stdlib
 `xml.etree.ElementTree` for TCX (no lxml). Two optional extras:
