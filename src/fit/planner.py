@@ -1368,12 +1368,7 @@ def _two_point_css(
 
     if not short_date or not long_date:
         return None
-    try:
-        apart = abs(
-            (date.fromisoformat(long_date) - date.fromisoformat(short_date)).days
-        )
-    except ValueError:
-        return None
+    apart = abs((date.fromisoformat(long_date) - date.fromisoformat(short_date)).days)
     if apart > CSS_PAIR_MAX_DAYS:
         return None
 
