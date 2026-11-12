@@ -399,17 +399,9 @@ def plan(
     recs = planner.recommend_defaults(
         sport, type, activities, storage.read_plans(), date_cls.today()
     )
-    for spec in specs:
-        # A rec may carry "derive", "default", or neither — a why-only rec
-        # reports a rejected measurement and leaves the spec's default alone.
-        rec = recs.get(spec["key"]) or {}
-        if "derive" in rec:
-            spec["derive"] = rec["derive"]
-        elif "default" in rec:
-            spec["default"] = rec["default"]
     display.render_plan_recommendations(recs)
 
-    params = _prompt_params(specs)
+    params = _prompt_params(planner.apply_recommendations(specs, recs))
     repeated_key, repeated_specs = planner.repeated_param_specs(sport, type)
     if repeated_key:
         params[repeated_key] = _prompt_repeated_params(repeated_specs)

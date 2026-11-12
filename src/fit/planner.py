@@ -627,6 +627,22 @@ def workout_params(sport: str, workout_type: str) -> list[dict]:
     return [dict(spec) for spec in _PARAM_SPECS[(sport, workout_type)]]
 
 
+def apply_recommendations(specs: list[dict], recs: dict) -> list[dict]:
+    """New specs with recommend_defaults' values in place of the fixed
+    defaults. A rec may carry "derive", "default", or neither — a why-only
+    rec reports a rejected measurement and leaves the spec's default alone."""
+    applied = []
+    for spec in specs:
+        rec = recs.get(spec["key"]) or {}
+        if "derive" in rec:
+            applied.append({**spec, "derive": rec["derive"]})
+        elif "default" in rec:
+            applied.append({**spec, "default": rec["default"]})
+        else:
+            applied.append(spec)
+    return applied
+
+
 # --- payload building -----------------------------------------------------
 
 
