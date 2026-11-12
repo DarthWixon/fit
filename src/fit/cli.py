@@ -120,7 +120,7 @@ def dashboard(
         )
     except ValueError as exc:
         typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     sports = [sport] if sport is not None else (config["sports"] or None)
     display.render_dashboard(
@@ -248,7 +248,7 @@ def garmin_sync(
         client = garmin.login()
     except garmin.GarminAuthError as exc:
         typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     end = date_cls.today()
     start = end - timedelta(days=days)
@@ -371,7 +371,7 @@ def plan(
         specs = planner.workout_params(sport, type)
     except ValueError as exc:
         typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     # Up front, so a typo fails fast and offline. --schedule needs a pushed
     # workout to attach to, so with --no-push it is a contradiction.
@@ -384,7 +384,7 @@ def plan(
             schedule_date = planner.parse_schedule_date(schedule)
         except ValueError as exc:
             typer.echo(str(exc), err=True)
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from None
 
     activities = _load_activities()
     recs = planner.recommend_defaults(
@@ -410,7 +410,7 @@ def plan(
             f"{exc}\nThe plan is saved locally — re-run with --no-push to skip Garmin.",
             err=True,
         )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
     response = garmin.push_workout(client, plan_dict["payload"])
     plan_dict["garmin_workout_id"] = response.get("workoutId")
     storage.write_plan(plan_dict)
@@ -492,7 +492,7 @@ def _login_or_exit():
         return garmin.login()
     except garmin.GarminAuthError as exc:
         typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
 
 @train_app.command(name="import")
@@ -526,7 +526,7 @@ def train_import(
         plan = training.expand_plan(spec, activities, today)
     except (ValueError, OSError) as exc:
         typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     stored = {
         "spec": spec,

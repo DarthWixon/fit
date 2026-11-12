@@ -149,7 +149,7 @@ def parse_timerange(text: str, reference: date) -> tuple[str, str]:
         else:
             start = date.fromisoformat(months_ago(reference, n * 12))
     except OverflowError:
-        raise ValueError(f"invalid --timerange '{text}': window is too large")
+        raise ValueError(f"invalid --timerange '{text}': window is too large") from None
 
     return start.isoformat(), reference.isoformat()
 
@@ -488,7 +488,7 @@ def _milestone_pbs(activities: list[dict], activity_type: str) -> dict:
 
 def _split_pbs(activities: list[dict], activity_type: str) -> dict:
     result = {}
-    for target_km, label in SPLIT_DISTANCES_KM.get(activity_type, []):
+    for _target_km, label in SPLIT_DISTANCES_KM.get(activity_type, []):
         key = f"{label}_seconds"
         candidates = [a for a in activities if a.get("splits", {}).get(key) is not None]
         if candidates:

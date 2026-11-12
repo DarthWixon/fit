@@ -209,7 +209,7 @@ def apply_garmin_exercise_sets(activity: dict, exercise_sets: list[dict]) -> dic
         return activity
 
     merged: list[dict] = []
-    for (fit_name, fit_set), entry in zip(flat, active):
+    for (fit_name, fit_set), entry in zip(flat, active, strict=True):
         reps = entry.get("repetitionCount")
         if (
             reps is not None

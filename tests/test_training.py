@@ -4,6 +4,7 @@ completion matching. Deliberately narrow — the engine's arithmetic, not the
 CLI around it."""
 
 from datetime import date, timedelta
+from itertools import pairwise
 
 import pytest
 
@@ -171,7 +172,7 @@ def test_days_per_week_builds_frequency_in_priority_order():
         {date.fromisoformat(s["date"]).weekday() for s in w["sessions"]} for w in weeks
     ]
     assert 5 not in days[0] and 5 in days[-1]
-    assert all(a <= b for a, b in zip(days, days[1:]))
+    assert all(a <= b for a, b in pairwise(days))
     assert plan["days_per_week"] == {"start": 5, "end": 6}
 
 
@@ -364,7 +365,7 @@ def test_a_goal_further_off_than_the_plan_is_long_is_capped_and_warned():
         for e in s["params"]["exercises"]
         if e["exercise"] == "deadlift"
     ]
-    steps = [b - a for a, b in zip(loads, loads[1:])]
+    steps = [b - a for a, b in pairwise(loads)]
     assert max(steps) <= training.lift_increment("deadlift")
     assert loads[-1] < training.working_weight_from_1rm(300, 5, 2.5)
     assert any("deadlift" in w for w in plan["warnings"])
@@ -516,7 +517,7 @@ def test_a_pushed_session_keeps_what_was_actually_sent():
 
     pushed = [s for s in overlaid if s["pushed"]]
     assert len(pushed) == len(ledger)
-    for session, entry in zip(pushed, ledger):
+    for session, entry in zip(pushed, ledger, strict=True):
         assert session["params"] == entry["params"]
         assert session["workout_name"] == entry["workout_name"]
         assert session["garmin_workout_id"] == entry["workout_id"]

@@ -431,10 +431,12 @@ def test_swim_css_rejects_two_incomparable_efforts():
 
 
 def test_swim_css_pair_must_be_close_in_time():
-    same_pair = lambda d1, d2: [
-        {"type": "swim", "date": d1, "distance_km": 0.5, "duration_seconds": 480},
-        {"type": "swim", "date": d2, "distance_km": 1.0, "duration_seconds": 1000},
-    ]
+    def same_pair(d1: str, d2: str) -> list[dict]:
+        return [
+            {"type": "swim", "date": d1, "distance_km": 0.5, "duration_seconds": 480},
+            {"type": "swim", "date": d2, "distance_km": 1.0, "duration_seconds": 1000},
+        ]
+
     near = planner.derive_swim_css(same_pair("2026-08-01", "2026-08-08"))
     far = planner.derive_swim_css(same_pair("2026-01-01", "2026-08-08"))
     assert "CSS from" in near[1]

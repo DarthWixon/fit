@@ -422,10 +422,6 @@ def _progress_barbell(
             entry["current_e1rm_kg"], max(reps, STRENGTH_START_REPS), increment
         )
 
-        def level_at(before: str) -> float:
-            done = [h for h in history if h["date"] < before]
-            return next_working_weight(done, sets, reps, increment, start)
-
         now = next_working_weight(history, sets, reps, increment, start)
         future = sum(1 for s, _ in planned if s["date"] > today)
         reached = now + increment * max(future - 1, 0)
@@ -452,7 +448,8 @@ def _progress_barbell(
         ahead = 0
         for session, exercise in planned:
             if session["date"] <= today:
-                level = level_at(session["date"])
+                done = [h for h in history if h["date"] < session["date"]]
+                level = next_working_weight(done, sets, reps, increment, start)
             else:
                 level = min(now + increment * ahead, cap)
                 ahead += 1
