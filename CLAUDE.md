@@ -522,9 +522,13 @@ malformed plan file fails loudly instead.
 watch already holds. It confirms **before** the clear rather than letting `sync`
 ask for itself: answering no between the two steps would leave the calendar
 emptied and nothing re-pushed, which is worse than either end state. It calls
-both as plain functions, so it **passes every option explicitly** — an omitted
-one is typer's `OptionInfo` default, which is truthy: a missing `dry_run` would
-clear the calendar, push nothing and exit 0.
+`cli._clear` and `cli._sync`, not the commands: a command called as a plain
+function takes typer's `OptionInfo` for an omitted option, which is truthy — a
+missing `dry_run` once cleared the calendar, pushed nothing and exited 0.
+
+All three **exit 1 when any session fails**, after finishing the rest: one bad
+session must not lose the others, but a batch that partly failed is not a
+success. `refresh` runs `sync` even when `clear` partly failed.
 
 **A session already done is neither cleared nor re-pushed.** "Future" includes
 today, so a `refresh` after the day's workout would otherwise unschedule it and

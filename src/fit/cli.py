@@ -569,6 +569,14 @@ def train_sync(
     ),
 ) -> None:
     """Push and schedule the plan's next sessions onto the Garmin calendar."""
+    if _sync(days, yes, dry_run):
+        raise typer.Exit(code=1)
+
+
+def _sync(days: int, yes: bool, dry_run: bool) -> list[str]:
+    """train_sync's work; returns the sessions that failed to push. A plain
+    function with no defaults, so `refresh` cannot call it with typer's
+    OptionInfo standing in for an omitted option (which is truthy)."""
     stored = _stored_plan()
     plan = _expand(stored, _load_activities())
     window_days = days or storage.read_config()["train_sync_window_days"]
@@ -584,17 +592,17 @@ def train_sync(
                 "failed": [],
             }
         )
-        return
+        return []
 
     # Confirm before touching the account: login() resumes silently and this
     # creates a workout *and* a calendar entry per session, so a whole batch
     # could otherwise go out with no visible step in between.
     display.render_training_sync_preview(due)
     if dry_run:
-        return
+        return []
     if not yes and not typer.confirm("Push and schedule these?", default=False):
         typer.echo("Nothing pushed.")
-        return
+        return []
 
     client = _login_or_exit()
     scheduled, failed = 0, []
@@ -629,18 +637,25 @@ def train_sync(
             "failed": failed,
         }
     )
+    return failed
 
 
 @train_app.command(name="clear")
 def train_clear() -> None:
     """Remove the plan's future sessions from the Garmin calendar and library."""
+    if _clear():
+        raise typer.Exit(code=1)
+
+
+def _clear() -> list[str]:
+    """train_clear's work; returns the sessions that failed to clear."""
     stored = _stored_plan()
     today = date_cls.today()
     sessions = _expand(stored, _load_activities())["sessions"]
     pending = training.future_pushed(stored["pushed"], today, sessions)
     if not pending:
         display.render_training_cleared({"cleared": 0, "failed": []})
-        return
+        return []
 
     client = _login_or_exit()
     cleared, failed = 0, []
@@ -668,6 +683,7 @@ def train_clear() -> None:
             )
 
     display.render_training_cleared({"cleared": cleared, "failed": failed})
+    return failed
 
 
 @train_app.command(name="refresh")
@@ -697,8 +713,9 @@ def train_refresh(
     ):
         typer.echo("Nothing changed.")
         return
-    train_clear()
-    # Every argument explicitly: called as a plain function, an omitted option
-    # is typer's OptionInfo default, which is truthy — dry_run left out made
-    # this unschedule everything and then push nothing.
-    train_sync(days=days, yes=True, dry_run=False)
+    # Both run before any exit: a session that failed to clear must not stop
+    # the rest being re-pushed.
+    failed = _clear()
+    failed += _sync(days, yes=True, dry_run=False)
+    if failed:
+        raise typer.Exit(code=1)
