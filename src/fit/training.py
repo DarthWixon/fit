@@ -39,10 +39,11 @@ RECENT_VOLUME_WEEKS = 8
 # The ramp is StrongLifts': every set done at the weight earns one increment
 # next session, a miss holds it, and the third miss running at one weight
 # resets it 10% lower. The increment is StrongLifts' default 2.5kg on every
-# lift. Each lift's loads round to its own increment, so every weight is a
+# lift but the deadlift, which takes 5kg: it is the heaviest lift and moves
+# fastest. Each lift's loads round to its own increment, so every weight is a
 # whole kg or a multiple of 2.5kg — keep new increments to those.
 LIFT_INCREMENT_KG = {
-    "deadlift": 2.5,
+    "deadlift": 5.0,
     "squat": 2.5,
     "bench_press": 2.5,
     "shoulder_press": 2.5,

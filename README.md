@@ -151,7 +151,7 @@ the same sport lands in the same week.
 Workouts A (squat, bench, row) and B (squat, overhead press, deadlift 1x5, then
 jumping pull-ups) alternate every time you lift: A/B/A one week, B/A/B the next.
 Loads follow what you actually lifted. Hit every rep of every set and the next
-session adds 2.5kg; miss reps and the weight stays; miss three sessions running
+session adds 2.5kg (5kg for the deadlift); miss reps and the weight stays; miss three sessions running
 at one weight and it drops 10%. Each lift starts at the weight your history says
 you could lift ten times — StrongLifts' start for anyone who has lifted before.
 There are no deload weeks and no tests. Pull-ups add a rep instead of weight, up

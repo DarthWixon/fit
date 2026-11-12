@@ -199,8 +199,9 @@ that. Only the five barbell lifts get e1RM targets (`PLAN_LIFTS`) or identify a
 session for completion matching (`_lifts`).
 
 **Every prescribed load is a whole kg or a multiple of 2.5kg.** Each lift rounds
-to its own increment, and every increment in `LIFT_INCREMENT_KG` is StrongLifts'
-default 2.5kg. An increment must keep loads loadable: 1.25kg would prescribe
+to its own increment in `LIFT_INCREMENT_KG`: StrongLifts' default 2.5kg, except
+the deadlift's 5kg, so 5 reps at an off-step 87.5kg step to 95kg (halves
+round up), not 92.5kg. An increment must keep loads loadable: 1.25kg would prescribe
 23.75kg, which the watch shows as 23.8 and no bar can hold. Rounding to the
 nearest loadable weight instead would make the ramp uneven — 67 + 2.5 lands on
 69 and 70 by turns. The e1RMs in `train show` are estimates, not bar weights,
