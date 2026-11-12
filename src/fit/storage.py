@@ -7,6 +7,9 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from typing import TypeVar
+
+T = TypeVar("T")
 
 DEFAULTS = {
     "sports": [],  # empty = all types shown
@@ -90,7 +93,7 @@ def _write_json_atomic(path: Path, data: dict) -> None:
     _write_atomic(path, json.dumps(data, indent=2))
 
 
-def _read_json(path: Path, default=None):
+def _read_json(path: Path, default: T) -> dict | T:
     if not path.exists():
         return default
     with open(path) as f:

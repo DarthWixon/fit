@@ -1346,17 +1346,13 @@ def derive_run_5k(recent: list[dict]) -> tuple[int, str] | None:
     )
 
 
-def _two_point_css(
-    short: tuple | None, long: tuple | None, short_m: int, long_m: int
-) -> int | None:
+def _two_point_css(short: tuple, long: tuple, short_m: int, long_m: int) -> int | None:
     """Seconds/100m from two efforts, or None when the pair is not comparable.
 
     The model assumes both are maximal efforts from the same fitness, so the
     pair is rejected unless the shorter is genuinely faster per 100m, by a
     believable margin, within CSS_PAIR_MAX_DAYS. A missing date counts as not
     comparable."""
-    if not short or not long:
-        return None
     short_seconds, short_date = short
     long_seconds, long_date = long
 
@@ -1381,12 +1377,14 @@ def derive_swim_css(recent: list[dict]) -> tuple[int, str] | None:
     pbs = compute.all_personal_bests(recent).get("swim", {})
     t500 = _best_of_keys(pbs, ["fastest_500m_seconds", "fastest_500m_split_seconds"])
     t1k = _best_of_keys(pbs, ["fastest_1k_seconds", "fastest_1k_split_seconds"])
-    css = _two_point_css(t500, t1k, 500, 1000)
-    if css is not None:
-        return (
-            css,
-            f"CSS from best recent 500m ({_format_mmss(t500[0])}) and 1k ({_format_mmss(t1k[0])})",
-        )
+    if t500 and t1k:
+        css = _two_point_css(t500, t1k, 500, 1000)
+        if css is not None:
+            return (
+                css,
+                f"CSS from best recent 500m ({_format_mmss(t500[0])}) and 1k "
+                f"({_format_mmss(t1k[0])})",
+            )
     if t1k:
         return (
             round(t1k[0] / 10),

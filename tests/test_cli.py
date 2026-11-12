@@ -71,7 +71,9 @@ def test_refresh_re_pushes_what_it_unschedules(tmp_path, monkeypatch):
     assert unscheduled == [200, 201]
     # The cleared workouts leave the library too, not just the calendar.
     assert deleted == [100, 101]
-    after = {training.ledger_key(e): e for e in storage.read_training_plan()["pushed"]}
+    stored = storage.read_training_plan()
+    assert stored is not None
+    after = {training.ledger_key(e): e for e in stored["pushed"]}
     for entry in ledger:
         back = after.get((entry["date"], entry["sport"]))
         assert back is not None and back["workout_id"] > 1000

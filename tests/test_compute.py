@@ -166,6 +166,7 @@ def test_hr_zone_percentages_sum_to_100_or_are_absent():
             "zone5_seconds": 60.0,
         }
     )
+    assert percentages is not None
     assert sum(percentages.values()) == pytest.approx(100.0)
     assert percentages["zone1"] == pytest.approx(100 / 3)
     assert compute.hr_zone_percentages(None) is None
@@ -322,6 +323,7 @@ def test_shorter_windows_are_never_lower_than_longer_ones():
     one = compute.best_power_window(ride, 60)
     five = compute.best_power_window(ride, 300)
     twenty = compute.best_power_window(ride, 1200)
+    assert one is not None and five is not None and twenty is not None
     assert one >= five >= twenty
     assert one == 400  # the one-minute spike
 

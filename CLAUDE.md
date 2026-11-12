@@ -624,6 +624,11 @@ not business logic, so it stays inline.
 `.venv/bin/pytest` after any change to `compute`, `storage`, `importers`,
 `planner`, `training`, or how `cli`'s `train` commands compose.
 
+`ruff check`, `ruff format --check` and `pyright` (standard mode, config in
+`pyproject.toml`) must all pass; `hooks/pre-commit` runs them. fitparse and
+garminconnect are unannotated, so narrow or `cast` at that boundary (see
+`importers._fit_messages`) rather than reaching for `# type: ignore`.
+
 **The suite is small on purpose.** `test_cli.py` is the only CLI test and stays
 that narrow — command composition that writes to Garmin, with every `garmin`
 call stubbed. `test_display.py` only checks the plan view renders. Three things

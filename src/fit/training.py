@@ -15,6 +15,7 @@ templates.WEEKLY_SESSIONS, so changing the week never touches this file.
 import copy
 import math
 import statistics
+from collections.abc import Sequence
 from datetime import date, timedelta
 
 from fit import compute, planner
@@ -858,7 +859,7 @@ def followed_other_session(rides: list[dict], pushed: list[dict]) -> list[dict]:
 
 
 def future_pushed(
-    pushed: list[dict], today: date, sessions: list[dict] = ()
+    pushed: list[dict], today: date, sessions: Sequence[dict] = ()
 ) -> list[dict]:
     """Ledger rows still ahead of today — what `train clear` unschedules —
     less any whose session in `sessions` is already done. "Ahead" includes

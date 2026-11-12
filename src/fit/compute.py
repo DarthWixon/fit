@@ -460,7 +460,7 @@ def _longest_distance_pb(activities: list[dict]) -> dict:
     with_distance = [a for a in activities if a.get("distance_km") is not None]
     if not with_distance:
         return {}
-    longest = max(with_distance, key=lambda a: a.get("distance_km"))
+    longest = max(with_distance, key=lambda a: a["distance_km"])
     return {
         "longest_distance_km": longest.get("distance_km"),
         "longest_distance_date": longest.get("date"),
@@ -480,7 +480,7 @@ def _milestone_pbs(activities: list[dict], activity_type: str) -> dict:
             <= milestone_km * MILESTONE_TOLERANCE
         ]
         if matching:
-            fastest = min(matching, key=lambda a: a.get("duration_seconds"))
+            fastest = min(matching, key=lambda a: a["duration_seconds"])
             result[f"fastest_{label}_seconds"] = fastest.get("duration_seconds")
             result[f"fastest_{label}_date"] = fastest.get("date")
     return result
@@ -492,7 +492,7 @@ def _split_pbs(activities: list[dict], activity_type: str) -> dict:
         key = f"{label}_seconds"
         candidates = [a for a in activities if a.get("splits", {}).get(key) is not None]
         if candidates:
-            best = min(candidates, key=lambda a: a.get("splits", {}).get(key))
+            best = min(candidates, key=lambda a: a["splits"][key])
             result[f"fastest_{label}_split_seconds"] = best.get("splits", {}).get(key)
             result[f"fastest_{label}_split_date"] = best.get("date")
     return result
@@ -502,7 +502,7 @@ def _elevation_pb(activities: list[dict]) -> dict:
     with_elevation = [a for a in activities if a.get("elevation_gain_m") is not None]
     if not with_elevation:
         return {}
-    most_climb = max(with_elevation, key=lambda a: a.get("elevation_gain_m"))
+    most_climb = max(with_elevation, key=lambda a: a["elevation_gain_m"])
     return {
         "most_elevation_gain_m": most_climb.get("elevation_gain_m"),
         "most_elevation_gain_date": most_climb.get("date"),

@@ -425,7 +425,9 @@ def test_swim_css_rejects_two_incomparable_efforts():
             "duration_seconds": 1355,
         },
     ]
-    css, why = planner.derive_swim_css(swims)
+    derived = planner.derive_swim_css(swims)
+    assert derived is not None
+    css, why = derived
     assert css == 136  # falls through to 1k pace
     assert "1k pace" in why
 
@@ -439,8 +441,8 @@ def test_swim_css_pair_must_be_close_in_time():
 
     near = planner.derive_swim_css(same_pair("2026-08-01", "2026-08-08"))
     far = planner.derive_swim_css(same_pair("2026-01-01", "2026-08-08"))
-    assert "CSS from" in near[1]
-    assert "CSS from" not in far[1]
+    assert near is not None and "CSS from" in near[1]
+    assert far is not None and "CSS from" not in far[1]
 
 
 def test_derive_target_guards_a_measurement_before_returning_it():
@@ -473,13 +475,15 @@ def test_ftp_prefers_a_real_twenty_minute_window_over_a_ride_average():
     already sub-threshold, and would stack two conservative estimates. The
     window wins even when another ride posted a higher average."""
     windowed = _ride(avg_power=150, best_power={"20min": 200})
-    watts, why = planner.derive_ride_watts([_ride(avg_power=260), windowed])
+    derived = planner.derive_ride_watts([_ride(avg_power=260), windowed])
+    assert derived is not None
+    watts, why = derived
     assert watts == 190  # 200 * 0.95, not 260
     assert "20min power" in why
 
-    watts, why = planner.derive_ride_watts(
-        [_ride(avg_power=200, duration_seconds=1200)]
-    )
+    derived = planner.derive_ride_watts([_ride(avg_power=200, duration_seconds=1200)])
+    assert derived is not None
+    watts, why = derived
     assert watts == 200  # unadjusted
     assert "no 20min power recorded" in why
 

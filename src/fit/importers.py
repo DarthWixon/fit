@@ -5,9 +5,15 @@ a file. Never dedupes and never imports storage — cli._import_and_report owns
 on-disk state.
 """
 
+from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from fit import compute
+
+if TYPE_CHECKING:
+    from fitparse import FitFile
+    from fitparse.records import DataMessage
 
 FIT_SPORT_MAP = {
     "running": "run",
@@ -159,15 +165,21 @@ def _append_set(exercises: list[dict], name: str, one_set: dict) -> None:
         exercises.append({"name": name, "sets": [one_set]})
 
 
-def _parse_fit_sets(fit_file) -> list[dict]:
+def _fit_messages(fit_file: "FitFile", name: str) -> Iterator[dict]:
+    """Each `name` message as {field name: value}. get_messages(name) yields
+    only data messages, but fitparse is unannotated and pyright infers
+    definition messages too, hence the cast."""
+    for message in fit_file.get_messages(name):
+        yield {field.name: field.value for field in cast("DataMessage", message)}
+
+
+def _parse_fit_sets(fit_file: "FitFile") -> list[dict]:
     """The `exercises` list, from the FIT `set` messages.
 
     Rest sets are dropped; consecutive sets of one exercise group together.
     A set with neither reps nor weight is skipped. fitparse scales weight to kg."""
     exercises: list[dict] = []
-    for message in fit_file.get_messages("set"):
-        fields = {field.name: field.value for field in message}
-
+    for fields in _fit_messages(fit_file, "set"):
         set_type = fields.get("set_type")
         if set_type not in ("active", 1):
             continue
@@ -241,11 +253,9 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
 
     fit_file = FitFile(path)
 
-    session = next(fit_file.get_messages("session"), None)
-    if session is None:
+    fields = next(_fit_messages(fit_file, "session"), None)
+    if fields is None:
         raise ValueError(f"no session summary message found in {path}")
-
-    fields = {field.name: field.value for field in session}
 
     start_time = fields.get("start_time")
     if start_time is None:
@@ -258,9 +268,11 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
         activity_type = "strength"
     elif isinstance(raw_sport, str):
         activity_type = FIT_SPORT_MAP.get(raw_sport.lower(), "run")
-    else:
-        # An undecoded enum arrives as a raw int (or None if absent).
+    elif isinstance(raw_sport, int):
+        # An undecoded enum arrives as a raw int.
         activity_type = FIT_SPORT_CODE_MAP.get(raw_sport, "run")
+    else:
+        activity_type = "run"  # no sport field at all
 
     distance_m = fields.get("total_distance") or 0.0
     duration_s = (
@@ -278,8 +290,7 @@ def import_fit(path: str, max_heart_rate: int = 0) -> dict:
         activity["avg_power"] = round(fields["avg_power"])
 
     points = []
-    for record in fit_file.get_messages("record"):
-        record_fields = {field.name: field.value for field in record}
+    for record_fields in _fit_messages(fit_file, "record"):
         record_distance_m = record_fields.get("distance")
         record_timestamp = record_fields.get("timestamp")
         record_power = record_fields.get("power")

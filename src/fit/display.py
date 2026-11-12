@@ -358,7 +358,7 @@ def render_dashboard(
         render_sports_summary(activities)
 
 
-def _format_duration(total_seconds: int) -> str:
+def _format_duration(total_seconds: float) -> str:
     minutes, seconds = divmod(round(total_seconds), 60)
     hours, minutes = divmod(minutes, 60)
     if hours:
@@ -366,7 +366,7 @@ def _format_duration(total_seconds: int) -> str:
     return f"{minutes}m{seconds:02d}s"
 
 
-def _format_seconds_colon(total_seconds) -> str:
+def _format_seconds_colon(total_seconds: float) -> str:
     """mm:ss for "New PB" messages, distinct from the tables' _format_duration."""
     minutes, seconds = divmod(round(total_seconds), 60)
     hours, minutes = divmod(minutes, 60)
