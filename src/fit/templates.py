@@ -91,7 +91,8 @@ _STRONGLIFTS_A = {
 }
 # Pull-ups are B's assistance work, where the programme suggests them: A
 # already pulls with the row. Jump to the top, lower over 3-5s; reps rise to the
-# cap, which is the point to move on to strict ones.
+# cap of five, where the usual negatives progression stops adding reps: slow the
+# drop to 7-10s instead, and try a strict rep every few weeks.
 _STRONGLIFTS_B = {
     "name": "SL B - Press + DL",
     "exercises": [
@@ -104,7 +105,7 @@ _STRONGLIFTS_B = {
             "rest": 90,
             "sets": 3,
             "reps": 3,
-            "rep_cap": 8,
+            "rep_cap": 5,
         },
     ],
 }

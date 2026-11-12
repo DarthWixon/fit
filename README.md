@@ -155,7 +155,7 @@ session adds 2.5kg (5kg for the deadlift); miss reps and the weight stays; miss 
 at one weight and it drops 10%. Each lift starts at the weight your history says
 you could lift ten times — StrongLifts' start for anyone who has lifted before.
 There are no deload weeks and no tests. Pull-ups add a rep instead of weight, up
-to three sets of eight.
+to three sets of five; past that, slow the drop rather than adding reps.
 
 A lift with a goal stops at it; without one, `fit train show` says where the
 plan will get to.
