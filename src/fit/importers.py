@@ -208,9 +208,7 @@ def _base_activity(
 def _attach_splits(activity: dict, points: list[dict]) -> dict:
     """Attach splits; the key is omitted entirely, never left empty."""
     splits = _compute_splits(activity["type"], points)
-    if splits:
-        activity["splits"] = splits
-    return activity
+    return {**activity, "splits": splits} if splits else activity
 
 
 def _attach_best_power(activity: dict, points: list[dict]) -> dict:
@@ -221,18 +219,14 @@ def _attach_best_power(activity: dict, points: list[dict]) -> dict:
         watts = compute.best_power_window(points, window_seconds)
         if watts is not None:
             best[label] = watts
-    if best:
-        activity["best_power"] = best
-    return activity
+    return {**activity, "best_power": best} if best else activity
 
 
 def _attach_hr_zones(activity: dict, points: list[dict], max_heart_rate: int) -> dict:
     """Attach HR zone-seconds; key omitted when max_heart_rate is unset or the
     file carries no per-point hr."""
     hr_zones = compute.hr_zone_seconds(points, max_heart_rate)
-    if hr_zones:
-        activity["hr_zones"] = hr_zones
-    return activity
+    return {**activity, "hr_zones": hr_zones} if hr_zones else activity
 
 
 def _tcx_start_time(activity_elem, laps, ns_uri):
@@ -517,8 +511,7 @@ def apply_garmin_exercise_sets(activity: dict, exercise_sets: list[dict]) -> dic
             one_set["weight_kg"] = round(float(grams) / 1000, 2)
         _append_set(merged, _garmin_exercise_name(entry) or fit_name, one_set)
 
-    activity["exercises"] = merged
-    return activity
+    return {**activity, "exercises": merged}
 
 
 def _garmin_exercise_name(entry: dict) -> str:
