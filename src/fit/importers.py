@@ -737,10 +737,14 @@ def import_strava_export(
                     activity = _import_strava_linked_file(
                         export_path / filename, max_heart_rate
                     )
-                except Exception as exc:
+                except (ValueError, OSError, EOFError, ET.ParseError) as exc:
                     # Fall back to the CSV row: it already has date, type,
                     # distance and duration, so an unreadable file costs only
-                    # the track-derived extras, not the whole session.
+                    # the track-derived extras, not the whole session. Only
+                    # what a bad file raises: an unsupported format (GPX) or
+                    # fitparse's errors are ValueError, bad gzip is OSError,
+                    # truncated gzip EOFError, malformed TCX ParseError. Any
+                    # other exception is a bug in fit and must surface.
                     warnings.append(
                         f"{filename} could not be read ({exc}) — imported from the "
                         "CSV row instead, without splits or HR zones"
