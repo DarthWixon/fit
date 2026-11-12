@@ -31,7 +31,7 @@ def render_usage() -> None:
         "fit dash [--sport S] [--timerange 3m]       = dashboard --minimal (no PBs)\n"
         "fit pbs [--months N]                        personal bests table\n"
         "fit stats [--week|--month|--year]           totals + breakdown by type\n"
-        "fit import <path>                           TCX/FIT file or Strava export\n"
+        "fit import <path>                           FIT file, or a folder of them\n"
         "fit garmin-sync [--days N]                  pull recent Garmin activities\n"
         "fit gs                                      = garmin-sync --days 7\n"
         "fit plan --sport S --type T [--no-push]     build a workout, push to Garmin\n"
@@ -91,7 +91,8 @@ def _format_distance(activity: dict) -> str:
 
 def _format_hr_zones(activity: dict) -> Text | str:
     """Segmented colour bar, width proportional to each zone's share. "—" when
-    the activity has no hr_zones (pre-feature, CSV-only, or max HR unset)."""
+    the activity has no hr_zones (pre-feature, CSV-only Strava import, or max HR
+    unset)."""
     percentages = compute.hr_zone_percentages(activity.get("hr_zones"))
     if percentages is None:
         return "—"

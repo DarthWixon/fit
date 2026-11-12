@@ -20,7 +20,7 @@ for itself; the code holds its own API — don't look for function signatures he
   | `storage.py` | all filesystem access | any conditional or arithmetic — that belongs in `compute.py` |
   | `compute.py` | pure functions over dicts | I/O, side effects |
   | `display.py` | Rich rendering | I/O, arithmetic (delegate to `compute`) |
-  | `importers.py` | parse TCX/FIT/Strava | import `storage`, dedupe, read config |
+  | `importers.py` | parse FIT | import `storage`, dedupe, read config |
   | `planner.py` | build Garmin payloads | I/O, network, import `garminconnect` or `training` |
   | `training.py` | expand the plan description | I/O, network (may import `compute`/`planner`/`templates`) |
   | `templates.py` | the plan's weekly sessions only | import anything from `fit` |
@@ -41,8 +41,7 @@ for itself; the code holds its own API — don't look for function signatures he
   is used anyway, delete it once it is merged to `main`, locally and on
   `origin`, straight after pushing `main`.
 
-**Dependencies**: Python 3.11+, `typer`, `rich`, `fitparse`, stdlib
-`xml.etree.ElementTree` for TCX (no lxml). Two optional extras:
+**Dependencies**: Python 3.11+, `typer`, `rich`, `fitparse`. Two optional extras:
 `garmin` (`garminconnect`) and `train` (`pyyaml`, lazily imported inside
 `training.parse_plan_spec`). No database, no ORM.
 
@@ -79,12 +78,12 @@ activity = {
     "date": "2024-01-15",
     "distance_km": 10.2,
     "duration_seconds": 3120,
-    "source": "garmin",             # garmin (TCX/FIT) | strava (CSV row)
+    "source": "garmin",             # always garmin now; older files may say strava
     # all optional, all absent unless the import could derive them:
     "elevation_gain_m": 45,
     "avg_heart_rate": 152, "max_heart_rate": 171,
-    "avg_power": 187,                                        # TCX lap / FIT session
-    "best_power": {"1min": 304, "5min": 227, "20min": 141},  # FIT only
+    "avg_power": 187,                                        # FIT session
+    "best_power": {"1min": 304, "5min": 227, "20min": 141},
     "splits": {"5k_seconds": 1423},
     "hr_zones": {"zone1_seconds": 120.0, ...},
     "exercises": [{"name": "deadlift",                       # strength only
@@ -342,7 +341,16 @@ exercise vocabulary is shared with the import side by construction:
 A warmup set is the same step with `stepTypeKey` `warmup` — `_lift_step` takes
 the kind, because a ramp set differs from a working set in nothing else.
 
-### FIT / TCX quirks
+### FIT import
+
+**FIT is the only import format.** Everything arrives from Garmin, by
+`garmin-sync` or as a `.fit` file (or a folder of them) given to `fit import`.
+TCX and Strava (CSV and bulk export) support was removed on 2026-11-12 as
+unused. Activities already imported that way stay as they are — some carry
+`"source": "strava"` and lack the track-derived fields — and every reader still
+`.get()`s, so nothing needs migrating. Do not re-add another format without a
+source that actually feeds it.
+
 
 - **fitparse doesn't decode every sport enum** (it jumps 48 → 254), so codes
   Garmin added between arrive as bare ints — `FIT_SPORT_CODE_MAP` handles
@@ -355,26 +363,10 @@ the kind, because a ramp set differs from a working set in nothing else.
   `FIT_EXERCISE_CATEGORY_MAP`. 65534 ("not classified") is left out on purpose.
   The synthetic fixtures write scalars, so `test_importers` covers the array
   form directly.
-- **TCX has no Swimming value** (Running/Biking/Other only), so walk/hike/swim/
-  canoe all default to `"run"`. Known mislabelling, not yet fixed.
 - **Canoe**: Garmin records paddling as 19 or 41 (kayaking); both fold to
   `"canoe"` for this canoe-only setup. Revisit if kayaking is split out.
 - **Records without distance are kept** — an indoor ride carries power and HR
   with none, a gym session carries only HR. Each consumer filters for itself.
-- **`best_power` is FIT-only and stays that way.** TCX would need a
-  namespace-tolerant `Watts` extractor plus a change to how its stream handles
-  position-less trackpoints, for a format nothing in practice feeds —
-  `garmin-sync` pulls FIT and Strava supplies CSV.
-
-### Strava import
-
-Rows that can't be imported (unmapped type, no date) are dropped but **never
-silently**: tallied per type and returned as a warning line — the reason both
-Strava importers return `(activities, warnings)`.
-
-A linked activity file that fails to *parse* (including the GPX files Strava
-exports, which fit doesn't read) is different: it falls back to the CSV row and
-warns, costing only the track-derived extras rather than the whole session.
 
 ### Garmin's server-side strength record
 
@@ -586,7 +578,7 @@ marked missed.
 ```
 fit dashboard [--sport S] [--timerange 3m] [--minimal]   fit dash = --minimal
 fit pbs [--months N]          fit stats [--week|--month|--year]
-fit import <path>             TCX/FIT file, folder, or Strava export
+fit import <path>             FIT file, or a folder of them
 fit garmin-sync [--days N]    fit gs = --days 7
 fit plan --sport S --type T [--no-push] [--schedule DATE]
 fit train import <plan.yaml> [--weeks N]   fit train show [--weeks N]

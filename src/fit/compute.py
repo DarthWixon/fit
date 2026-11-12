@@ -25,7 +25,7 @@ MILESTONE_TOLERANCE = 1.06
 POWER_WINDOWS_S = [(60, "1min"), (300, "5min"), (1200, "20min")]
 
 # Fastest continuous segment of this length anywhere in a track (the 5k inside
-# a 10k). Needs a point stream, so TCX/FIT only — never bare Strava CSV.
+# a 10k). Needs a point stream, which only a FIT file at import carries.
 SPLIT_DISTANCES_KM = {
     "run": [(5.0, "5k"), (10.0, "10k")],
     "cycle": [

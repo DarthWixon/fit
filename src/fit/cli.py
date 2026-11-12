@@ -214,27 +214,18 @@ def import_activity(path: str) -> None:
     max_hr = _read_config()["max_heart_rate"]
     source = Path(path)
 
-    import_warnings: list[str] = []
     if source.is_dir():
-        if (source / "activities.csv").exists():
-            new_activities, import_warnings = importers.import_strava_export(
-                str(source), max_hr
-            )
-        else:
-            new_activities = importers.import_directory(str(source), max_hr)
+        new_activities = importers.import_directory(str(source), max_hr)
+    elif source.suffix.lower() == ".fit":
+        new_activities = [importers.import_fit(str(source), max_hr)]
     else:
-        suffix = source.suffix.lower()
-        if suffix == ".csv":
-            new_activities, import_warnings = importers.import_strava_csv(str(source))
-        elif suffix in (".tcx", ".fit"):
-            new_activities = [
-                importers.import_by_extension(str(source), suffix, max_hr)
-            ]
-        else:
-            typer.echo(f"Unsupported file type: {suffix}", err=True)
-            raise typer.Exit(code=1)
+        typer.echo(
+            f"Unsupported file type: {source.suffix or path} — fit imports Garmin "
+            ".fit files, or a folder of them",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
-    display.render_warnings(import_warnings)
     _import_and_report(new_activities)
 
 

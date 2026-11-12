@@ -1,124 +1,13 @@
 """Characterization tests for the importers.
 
-TCX uses a small inline fixture string; FIT uses the synthetic capture in
-tests/data/test_run.fit (a constant-pace fake run — like everything under
-examples/, generated data, not a real recording). Latitude steps of 0.009
-degrees are ~1.0008km apart by haversine, which keeps expected distances easy
-to reason about.
+FIT uses the synthetic captures in tests/data/ (a constant-pace fake run and
+a gym session — like everything under examples/, generated data, not real
+recordings).
 """
 
 from pathlib import Path
 
-import pytest
-
 from fit import importers
-
-# Leading whitespace before the declaration is deliberate: Strava pads its TCX
-# exports this way and _parse_xml_root must tolerate it. Lap 2 starts at a
-# higher altitude (25m) than lap 1 ends (20m): per-lap elevation reset gives
-# gain 10 + 5 = 15, whereas carrying altitude across laps would give 20.
-TCX_FIXTURE = """   <?xml version="1.0" encoding="UTF-8"?>
-<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
-  <Activities>
-    <Activity Sport="Running">
-      <Id>2024-01-15T08:30:00Z</Id>
-      <Lap StartTime="2024-01-15T08:30:00Z">
-        <TotalTimeSeconds>300</TotalTimeSeconds>
-        <DistanceMeters>1000</DistanceMeters>
-        <AverageHeartRateBpm><Value>140</Value></AverageHeartRateBpm>
-        <MaximumHeartRateBpm><Value>155</Value></MaximumHeartRateBpm>
-        <Track>
-          <Trackpoint>
-            <Time>2024-01-15T08:30:00Z</Time>
-            <Position><LatitudeDegrees>0.000</LatitudeDegrees><LongitudeDegrees>0.0</LongitudeDegrees></Position>
-            <AltitudeMeters>10</AltitudeMeters>
-            <HeartRateBpm><Value>100</Value></HeartRateBpm>
-          </Trackpoint>
-          <Trackpoint>
-            <Time>2024-01-15T08:35:00Z</Time>
-            <Position><LatitudeDegrees>0.009</LatitudeDegrees><LongitudeDegrees>0.0</LongitudeDegrees></Position>
-            <AltitudeMeters>20</AltitudeMeters>
-            <HeartRateBpm><Value>140</Value></HeartRateBpm>
-          </Trackpoint>
-        </Track>
-        <Extensions>
-          <ns3:LX xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2">
-            <ns3:AvgWatts>190</ns3:AvgWatts>
-          </ns3:LX>
-        </Extensions>
-      </Lap>
-      <Lap StartTime="2024-01-15T08:35:00Z">
-        <TotalTimeSeconds>300</TotalTimeSeconds>
-        <DistanceMeters>1000</DistanceMeters>
-        <AverageHeartRateBpm><Value>150</Value></AverageHeartRateBpm>
-        <MaximumHeartRateBpm><Value>165</Value></MaximumHeartRateBpm>
-        <Track>
-          <Trackpoint>
-            <Time>2024-01-15T08:35:10Z</Time>
-            <Position><LatitudeDegrees>0.009</LatitudeDegrees><LongitudeDegrees>0.0</LongitudeDegrees></Position>
-            <AltitudeMeters>25</AltitudeMeters>
-            <HeartRateBpm><Value>150</Value></HeartRateBpm>
-          </Trackpoint>
-          <Trackpoint>
-            <Time>2024-01-15T08:40:00Z</Time>
-            <Position><LatitudeDegrees>0.018</LatitudeDegrees><LongitudeDegrees>0.0</LongitudeDegrees></Position>
-            <AltitudeMeters>30</AltitudeMeters>
-            <HeartRateBpm><Value>170</Value></HeartRateBpm>
-          </Trackpoint>
-        </Track>
-        <Extensions>
-          <ns3:LX xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2">
-            <ns3:AvgWatts>210</ns3:AvgWatts>
-          </ns3:LX>
-        </Extensions>
-      </Lap>
-    </Activity>
-  </Activities>
-</TrainingCenterDatabase>
-"""
-
-STRAVA_CSV_FIXTURE = (
-    "Activity Date,Activity Type,Distance,Elapsed Time,Filename\n"
-    '"Jan 15, 2024, 8:30:00 AM",Run,10200,3120,\n'
-    '"Jan 16, 2024, 7:00:00 AM",Workout,0,1800,\n'
-    '"Jan 17, 2024, 9:00:00 AM",Canoeing,8400,3600,\n'
-    '"Jan 18, 2024, 9:00:00 AM",Kayaking,5000,2400,\n'
-)
-
-
-def test_import_tcx(tmp_path):
-    path = tmp_path / "run.tcx"
-    path.write_text(TCX_FIXTURE)
-    activity = importers.import_tcx(str(path))
-
-    assert activity["id"] == "2024-01-15T08:30:00"
-    assert activity["type"] == "run"
-    assert activity["date"] == "2024-01-15"
-    assert activity["distance_km"] == 2.0  # lap DistanceMeters summed
-    assert activity["duration_seconds"] == 600  # lap TotalTimeSeconds summed
-    assert activity["elevation_gain_m"] == 15  # per-lap altitude reset
-    assert activity["avg_heart_rate"] == 145  # mean of lap averages
-    assert activity["max_heart_rate"] == 165
-    assert activity["avg_power"] == 200  # mean of lap AvgWatts
-    assert activity["source"] == "garmin"
-    assert "splits" not in activity
-    assert "hr_zones" not in activity  # max_heart_rate not passed, defaults to 0
-
-
-def test_import_tcx_with_max_heart_rate(tmp_path):
-    path = tmp_path / "run.tcx"
-    path.write_text(TCX_FIXTURE)
-    activity = importers.import_tcx(str(path), max_heart_rate=200)
-
-    # Per-trackpoint HR: 100 (0->300s, zone1), 140 (300->310s, zone3),
-    # 150 (310->600s, zone3), 170 (no following gap to attribute).
-    assert activity["hr_zones"] == {
-        "zone1_seconds": 300.0,
-        "zone2_seconds": 0.0,
-        "zone3_seconds": 300.0,
-        "zone4_seconds": 0.0,
-        "zone5_seconds": 0.0,
-    }
 
 
 def test_import_fit_generated_fixture():
@@ -257,30 +146,6 @@ def test_garmin_exercise_sets_abandon_a_merge_they_cannot_align():
     )
 
     assert importers.apply_garmin_exercise_sets(activity, [])["exercises"] == original
-
-
-def test_import_strava_csv_maps_and_drops_types(tmp_path):
-    path = tmp_path / "activities.csv"
-    path.write_text(STRAVA_CSV_FIXTURE)
-    activities, warnings = importers.import_strava_csv(str(path))
-
-    assert len(activities) == 2  # Workout and Kayaking rows dropped
-    assert activities[0] == {
-        "id": "2024-01-15T08:30:00",
-        "type": "run",
-        "date": "2024-01-15",
-        "distance_km": 10.2,
-        "duration_seconds": 3120,
-        "source": "strava",
-    }
-    # Canoeing maps to canoe; Kayaking deliberately does not (canoe-only scope).
-    assert activities[1]["type"] == "canoe"
-    assert activities[1]["distance_km"] == pytest.approx(8.4)
-
-    # The dropped Workout and Kayaking rows are reported, not silent.
-    assert len(warnings) == 1
-    assert "Workout" in warnings[0]
-    assert "Kayaking" in warnings[0]
 
 
 # --- power windows -------------------------------------------------------------

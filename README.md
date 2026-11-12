@@ -192,19 +192,17 @@ refresh` re-pushes them at current loads.
 Everything under `examples/` and `tests/data/` is synthetic — generated fake
 activities, not recordings of a real person. `examples/data/` is a ready-made
 data directory with six months of fake training history, and
-`examples/strava-export/` is a miniature Strava bulk export:
+`tests/data/test_run.fit` is a fake run to import:
 
 ```bash
 FIT_DATA_DIR=./examples/data fit dashboard
 FIT_DATA_DIR=./examples/data fit pbs
-FIT_DATA_DIR=./examples/data fit import examples/strava-export
+FIT_DATA_DIR=./examples/data fit import tests/data/test_run.fit
 ```
 
 Running commands against `examples/data` generates a config file and caches
-there (`config`, `pbs.json`); those are gitignored. The import demo adds five
-activities to `examples/data/activities/` — two of them from the CSV row, since
-fit reads TCX and FIT but not the GPX files Strava exports — and skips one
-`Workout` row it has no type for. Put the example dir back with:
+there (`config`, `pbs.json`); those are gitignored. The import demo adds one
+activity to `examples/data/activities/`. Put the example dir back with:
 
 ```bash
 git restore examples/data && git clean -fdq examples/data
