@@ -54,7 +54,7 @@ def _session(
     }
 
 
-def _alternating(day: int, priority: int, first: list, second: list) -> list[dict]:
+def _alternating(day: int, priority: int, first: dict, second: dict) -> list[dict]:
     """One lifting day that swaps workouts week by week: `first` in week 1,
     `second` in week 2, and so on."""
     return [
@@ -65,9 +65,10 @@ def _alternating(day: int, priority: int, first: list, second: list) -> list[dic
             priority=priority,
             week_parity=parity,
             rest=180,
-            exercises=exercises,
+            name=workout["name"],
+            exercises=workout["exercises"],
         )
-        for parity, exercises in ((0, first), (1, second))
+        for parity, workout in ((0, first), (1, second))
     ]
 
 
@@ -77,27 +78,36 @@ def _alternating(day: int, priority: int, first: list, second: list) -> list[dic
 # programme has it: the heaviest lift, straight after five sets of squats. One
 # rep scheme per lift across both workouts, which
 # training.next_working_weight depends on.
-_STRONGLIFTS_A = [
-    {"exercise": "squat", "sets": 5, "reps": 5},
-    {"exercise": "bench_press", "sets": 5, "reps": 5},
-    {"exercise": "row", "sets": 5, "reps": 5},
-]
+#
+# Each is named by what sets it apart (both open with squats), short enough to
+# read at a glance on the watch; the loads are in the steps.
+_STRONGLIFTS_A = {
+    "name": "SL A - Bench + Row",
+    "exercises": [
+        {"exercise": "squat", "sets": 5, "reps": 5},
+        {"exercise": "bench_press", "sets": 5, "reps": 5},
+        {"exercise": "row", "sets": 5, "reps": 5},
+    ],
+}
 # Pull-ups are B's assistance work, where the programme suggests them: A
 # already pulls with the row. Jump to the top, lower over 3-5s; reps rise to the
 # cap, which is the point to move on to strict ones.
-_STRONGLIFTS_B = [
-    {"exercise": "squat", "sets": 5, "reps": 5},
-    {"exercise": "shoulder_press", "sets": 5, "reps": 5},
-    {"exercise": "deadlift", "sets": 1, "reps": 5},
-    {
-        "exercise": "pull_up",
-        "variant": "jumping_pull_ups",
-        "rest": 90,
-        "sets": 3,
-        "reps": 3,
-        "rep_cap": 8,
-    },
-]
+_STRONGLIFTS_B = {
+    "name": "SL B - Press + DL",
+    "exercises": [
+        {"exercise": "squat", "sets": 5, "reps": 5},
+        {"exercise": "shoulder_press", "sets": 5, "reps": 5},
+        {"exercise": "deadlift", "sets": 1, "reps": 5},
+        {
+            "exercise": "pull_up",
+            "variant": "jumping_pull_ups",
+            "rest": 90,
+            "sets": 3,
+            "reps": 3,
+            "rep_cap": 8,
+        },
+    ],
+}
 
 # Every ride is easy and untargeted. Saturday ranks last, so a description
 # building days_per_week from 5 to 6 adds it later.

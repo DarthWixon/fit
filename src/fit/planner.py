@@ -24,7 +24,8 @@ Verified by live round-trip (scripts/diff_workout.py):
 Still unverified: run easy/long and swim continuous, which pair a
 nested-proven pace.zone with a power-proven top-level position.
 Also unverified: cycle/intervals with `sets` (sibling repeat groups), the ROW
-category, and dated strength names past 94 chars (workout B reaches 98).
+category, and dated strength names past 94 chars (a `fit plan` lift listing
+many exercises; the training plan's own sessions are named short).
 Re-run the diff after first pushing any unverified combo, and update this.
 """
 
@@ -1057,6 +1058,10 @@ def _strength_straight_sets(params: dict) -> tuple[str, list[dict]]:
         )
         order += 3
 
+    # The training plan names its sessions (templates.py); a one-off `fit plan`
+    # workout has no name to give, so it lists what it holds.
+    if params.get("name"):
+        return params["name"], steps
     listed = [e for e in exercises if e["exercise"] not in _CORE_CATEGORIES]
     name = "Strength " + ", ".join(
         f"{_describe_exercise(e['exercise'])} {e['sets']}x{e['reps']}"

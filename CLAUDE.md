@@ -313,8 +313,10 @@ planner.py's docstring — keep both current):
 Diff one when one is next pushed, then update both tables.
 
 **Also unverified:** the `ROW` category, which only workout A carries — diff
-one after its first push. Workout B's dated name reaches **98 characters** at
-its heaviest; 94 is proven. `cycle`/`intervals` with `sets` (sibling
+one after its first push. The plan's lifting sessions carry a short `name`
+param (`SL A - Bench + Row`, `SL B - Press + DL`) that the builder uses over its
+generated list; a `fit plan` lift still lists its exercises and loads, and a
+dated one past 94 characters is unproven. `cycle`/`intervals` with `sets` (sibling
 `RepeatGroupDTO`s with a timed `recovery` between) has not been sent either.
 The barbell row has no Garmin variant: the only barbell one in the FIT profile
 is reverse-grip. So, like the other four lifts, it goes as the bare category.
