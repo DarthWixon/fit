@@ -479,7 +479,8 @@ are rejected where a number is expected (`isinstance(True, int)` is `True`).
    per-week increment *on top* would compound into nonsense over 12 weeks.
    There is no event to peak for, so there are no recovery weeks, taper or
    tests: the rides only climb and lifting is never deloaded by the calendar.
-4. **Loads** — `_progress_lifts` (see "Strength progresses on what you lifted").
+4. **Loads** — `_progress_barbell`, then `_progress_bodyweight` (see "Strength
+   progresses on what you lifted").
 
 **Each ride scales along exactly one axis** — `scale["param"]`: distance for the
 long rides, duration for Thursday's.

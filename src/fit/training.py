@@ -347,7 +347,7 @@ def derive_targets(spec: dict, activities: list[dict], reference: date) -> dict:
 
     `current` is measured from recent history, else FALLBACK_LIFT_E1RM_KG.
     `goal` cannot be measured — it is a decision about the future — so the
-    description wins, else _progress_lifts fills in where the progression gets
+    description wins, else _progress_barbell fills in where the progression gets
     to."""
     recent = planner.recent_activities(activities, reference)
     goals = spec.get("targets", {})
@@ -388,24 +388,23 @@ def _lift_history(
     ]
 
 
-def _progress_lifts(
+def _progress_barbell(
     sessions: list[dict],
     targets: dict,
-    activities: list[dict],
+    lifting: list[dict],
     start_date: str,
-    reference: date,
-) -> list[str]:
-    """Set every straight-sets load in place from next_working_weight;
-    returns warnings. A past session shows what its history prescribed then;
-    a future one assumes each session before it goes to plan, capped at the
-    goal."""
-    today = reference.isoformat()
-    lifting = sorted(
-        (a for a in activities if a.get("type") == "strength" and a.get("date")),
-        key=lambda a: a["date"],
-    )
+    today: str,
+) -> tuple[dict, list[str]]:
+    """Set every barbell load from next_working_weight, in place on the
+    sessions expand_plan has just built; returns (targets with every goal
+    filled in, warnings). `targets` itself is left alone. A past session shows
+    what its history prescribed then; a future one assumes each session before
+    it goes to plan, capped at the goal."""
+    filled = {}
     warnings = []
-    for lift, entry in targets.items():
+    for lift, given in targets.items():
+        entry = dict(given)
+        filled[lift] = entry
         planned = [
             (s, exercise)
             for s in sessions
@@ -458,8 +457,16 @@ def _progress_lifts(
                 level = min(now + increment * ahead, cap)
                 ahead += 1
             exercise["target_weight_kg"] = _round_to_plates(level, increment)
+    return filled, warnings
 
-    # Bodyweight work progresses on reps, by the same rules.
+
+def _progress_bodyweight(
+    sessions: list[dict], lifting: list[dict], start_date: str, today: str
+) -> list[str]:
+    """Bodyweight work progresses on reps by the same rules: set each
+    rep_cap exercise's reps in place, as _progress_barbell sets loads; returns
+    warnings."""
+    warnings = []
     by_rep_exercise: dict[str, list] = {}
     for session in sessions:
         if session["sport"] != "strength":
@@ -487,12 +494,6 @@ def _progress_lifts(
                 continue
             exercise["reps"] = min(now + ahead, cap)
             ahead += 1
-
-    for session in sessions:
-        if session["sport"] == "strength":
-            session["workout_name"] = planner.workout_name(
-                "strength", "straight_sets", session["params"]
-            )
     return warnings
 
 
@@ -638,10 +639,24 @@ def expand_plan(
         s for s in sessions if spec["start_date"] <= s["date"] <= spec["end_date"]
     ]
     sessions.sort(key=lambda s: (s["date"], s["sport"]))
-    targets = derive_targets(spec, activities, reference)
-    warnings = _progress_lifts(
-        sessions, targets, activities, spec["start_date"], reference
+    today = reference.isoformat()
+    lifting = sorted(
+        (a for a in activities if a.get("type") == "strength" and a.get("date")),
+        key=lambda a: a["date"],
     )
+    targets, warnings = _progress_barbell(
+        sessions,
+        derive_targets(spec, activities, reference),
+        lifting,
+        spec["start_date"],
+        today,
+    )
+    warnings += _progress_bodyweight(sessions, lifting, spec["start_date"], today)
+    for session in sessions:
+        if session["sport"] == "strength":
+            session["workout_name"] = planner.workout_name(
+                "strength", "straight_sets", session["params"]
+            )
 
     return {
         "start_date": spec["start_date"],
