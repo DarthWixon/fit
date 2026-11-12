@@ -1,45 +1,47 @@
 """Tests for storage.py's config text format and the data-dir plumbing."""
 
-from fit import storage
+from fit import compute, storage
 
 
-def test_parse_config_text_types_and_tolerance():
+def test_parse_config_types_and_tolerance():
     text = (
         "# a comment\n"
         "sports = run, cycle  # inline comment\n"
         "pbs_window_months = 3\n"
         "show_pbs = false\n"
-        "history_count = notanumber\n"
+        "show_calendar = ture\n"
+        "max_heart_rate = 18O\n"
         "unknown_key = whatever\n"
         "malformed line with no equals\n"
     )
-    parsed = storage._parse_config_text(text)
-    assert parsed["sports"] == ["run", "cycle"]
-    assert parsed["pbs_window_months"] == 3
-    assert parsed["show_pbs"] is False
-    assert "history_count" not in parsed  # bad int silently skipped
-    assert "unknown_key" not in parsed
+    config, warnings = compute.parse_config(text, storage.DEFAULTS)
+    assert config["sports"] == ["run", "cycle"]
+    assert config["pbs_window_months"] == 3
+    assert config["show_pbs"] is False
+    # A bad value keeps its default and says so, rather than vanishing.
+    assert config["show_calendar"] is True
+    assert config["max_heart_rate"] == 0
+    assert len(warnings) == 2
+    assert "show_calendar" in warnings[0] and "max_heart_rate" in warnings[1]
+    assert "unknown_key" not in config
 
 
-def test_config_serialize_parse_round_trip():
+def test_config_serialize_parse_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIT_DATA_DIR", str(tmp_path))
+    storage.ensure_data_dir()  # writes the default file
+    assert compute.parse_config(storage.read_config_text(), storage.DEFAULTS) == (
+        storage.DEFAULTS,
+        [],
+    )
+
     config = {
         **storage.DEFAULTS,
         "sports": ["run"],
         "show_sparkline": False,
         "max_heart_rate": 190,
     }
-    assert storage._parse_config_text(storage._serialize_config_text(config)) == config
-
-
-def test_read_config_merges_over_defaults(tmp_path, monkeypatch):
-    monkeypatch.setenv("FIT_DATA_DIR", str(tmp_path))
-    storage.ensure_data_dir()
-    assert storage.read_config() == storage.DEFAULTS  # default file round-trips
-
-    storage.config_path().write_text("pbs_window_months = 6\n")
-    config = storage.read_config()
-    assert config["pbs_window_months"] == 6
-    assert config["show_pbs"] is True  # untouched keys fall back
+    text = storage._serialize_config_text(config)
+    assert compute.parse_config(text, storage.DEFAULTS) == (config, [])
 
 
 def test_activity_and_pbs_write_read_round_trip(tmp_path, monkeypatch):

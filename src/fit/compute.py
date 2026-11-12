@@ -154,6 +154,54 @@ def parse_timerange(text: str, reference: date) -> tuple[str, str]:
     return start.isoformat(), reference.isoformat()
 
 
+_CONFIG_TRUE = ("true", "1", "yes")
+_CONFIG_FALSE = ("false", "0", "no")
+
+
+def _config_value(raw_value: str, default: object) -> object:
+    """One config value, typed like its default; ValueError when it doesn't
+    parse. A blank int keeps its default."""
+    if isinstance(default, bool):
+        lowered = raw_value.lower()
+        if lowered in _CONFIG_TRUE:
+            return True
+        if lowered in _CONFIG_FALSE:
+            return False
+        raise ValueError(raw_value)
+    if isinstance(default, list):
+        return [v.strip() for v in raw_value.split(",") if v.strip()]
+    if isinstance(default, int):
+        return int(raw_value) if raw_value else default
+    return raw_value
+
+
+def parse_config(text: str, defaults: dict) -> tuple[dict, list[str]]:
+    """Config text -> (defaults overlaid with what the file sets, warnings).
+
+    Comments, blank lines, unknown keys and lines with no "=" are ignored. A
+    value that does not parse keeps its default and warns: a mistyped
+    max_heart_rate would otherwise stop HR zones being recorded, and that
+    cannot be backfilled."""
+    config = dict(defaults)
+    warnings = []
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or "=" not in line:
+            continue
+        key, _, raw_value = line.partition("=")
+        key, raw_value = key.strip(), raw_value.strip()
+        if key not in defaults:
+            continue
+        try:
+            config[key] = _config_value(raw_value, defaults[key])
+        except ValueError:
+            warnings.append(
+                f"config: {key} = {raw_value!r} is not valid, using "
+                f"{defaults[key]!r} — fix it in the config file"
+            )
+    return config, warnings
+
+
 def _iso_week_key(date_iso: str) -> str:
     """'2026-W24' bucket key."""
     year, week, _ = date.fromisoformat(date_iso).isocalendar()

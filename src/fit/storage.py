@@ -156,32 +156,6 @@ def read_training_plan() -> dict | None:
     return _read_json(training_plan_path(), default=None)
 
 
-def _parse_config_text(text: str) -> dict:
-    parsed = {}
-    for line in text.splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line or "=" not in line:
-            continue
-        key, _, raw_value = line.partition("=")
-        key, raw_value = key.strip(), raw_value.strip()
-        if key not in DEFAULTS:
-            continue
-
-        default = DEFAULTS[key]
-        try:
-            if isinstance(default, bool):
-                parsed[key] = raw_value.lower() in ("true", "1", "yes")
-            elif isinstance(default, list):
-                parsed[key] = [v.strip() for v in raw_value.split(",") if v.strip()]
-            elif isinstance(default, int):
-                parsed[key] = int(raw_value) if raw_value else default
-            else:
-                parsed[key] = raw_value
-        except ValueError:
-            continue
-    return parsed
-
-
 def _serialize_config_text(config: dict) -> str:
     lines = ["# ~/.fit/config — edit and save; changes apply next run.", ""]
     for key, default in DEFAULTS.items():
@@ -196,11 +170,10 @@ def _serialize_config_text(config: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def read_config() -> dict:
-    stored = (
-        _parse_config_text(config_path().read_text()) if config_path().exists() else {}
-    )
-    return {**DEFAULTS, **stored}
+def read_config_text() -> str:
+    """The raw config file, "" when there is none; compute.parse_config reads
+    it."""
+    return config_path().read_text() if config_path().exists() else ""
 
 
 def read_pbs() -> dict:

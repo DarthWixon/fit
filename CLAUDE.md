@@ -405,8 +405,12 @@ absent.
 ## Config
 
 `~/.fit/config` is plain text, `key = value`, `#` comments, unknown keys and
-malformed lines ignored. `ensure_data_dir()` writes a fully-commented default on
-first run. Edits apply next invocation; nothing is cached.
+lines without `=` ignored. A value that doesn't parse (`max_heart_rate = 18O`,
+`show_pbs = ture`) keeps its default **and warns** on every command: silently
+defaulting `max_heart_rate` would stop HR zones being recorded, unrecoverably.
+`compute.parse_config` does the parsing, so `storage` only reads the text.
+`ensure_data_dir()` writes a fully-commented default on first run. Edits apply
+next invocation; nothing is cached.
 
 ```python
 DEFAULTS = {

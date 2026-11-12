@@ -28,6 +28,15 @@ def _load_activities() -> list[dict]:
     return activities
 
 
+def _read_config() -> dict:
+    """read -> parse -> surface values that did not parse."""
+    config, warnings = compute.parse_config(
+        storage.read_config_text(), storage.DEFAULTS
+    )
+    display.render_warnings(warnings)
+    return config
+
+
 def _recompute_and_write_pbs(activities: list[dict]) -> dict:
     pbs = compute.all_personal_bests(activities)
     pbs["computed_from"] = len(activities)
@@ -100,7 +109,7 @@ def dashboard(
     ),
 ) -> None:
     all_activities = _load_activities()
-    config = storage.read_config()
+    config = _read_config()
     if minimal:
         config = {**config, "show_pbs": False, "show_sports_summary": False}
 
@@ -152,7 +161,7 @@ def pbs(
     ),
 ) -> None:
     activities = _load_activities()
-    config = storage.read_config()
+    config = _read_config()
     window = months if months is not None else config["pbs_window_months"]
     current_pbs = _pbs_for_window(activities, window, date_cls.today())
     display.render_pbs_table(
@@ -202,7 +211,7 @@ def _import_and_report(new_activities: list[dict]) -> list[dict]:
 @app.command(name="import")
 def import_activity(path: str) -> None:
     storage.ensure_data_dir()
-    max_hr = storage.read_config()["max_heart_rate"]
+    max_hr = _read_config()["max_heart_rate"]
     source = Path(path)
 
     import_warnings: list[str] = []
@@ -242,7 +251,7 @@ def garmin_sync(
     ),
 ) -> None:
     storage.ensure_data_dir()
-    max_hr = storage.read_config()["max_heart_rate"]
+    max_hr = _read_config()["max_heart_rate"]
 
     try:
         client = garmin.login()
@@ -579,7 +588,7 @@ def _sync(days: int, yes: bool, dry_run: bool) -> list[str]:
     OptionInfo standing in for an omitted option (which is truthy)."""
     stored = _stored_plan()
     plan = _expand(stored, _load_activities())
-    window_days = days or storage.read_config()["train_sync_window_days"]
+    window_days = days or _read_config()["train_sync_window_days"]
     today = date_cls.today()
     due = training.sync_window(plan["sessions"], today, window_days)
     already = len(stored["pushed"])
